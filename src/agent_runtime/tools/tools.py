@@ -175,31 +175,48 @@ def _edit_file_spec(workspace: Workspace) -> ToolSpec:
 
 def _apply_patch_spec(workspace: Workspace) -> ToolSpec:
     return ToolSpec("apply_patch",
-                    "Apply precise edits in one all-or-nothing patch. "
-                    "The `patch` parameter is a SINGLE string. Each edit "
-                    "block inside it has this exact structure (line by line):\n"
+                    "Edit files using SEARCH/REPLACE blocks, not unified diff.\n"
                     "\n"
-                    "  <file_path>\n"
-                    "  <<<<<<< SEARCH\n"
-                    "  <exact original text from the file>\n"
-                    "  =======\n"
-                    "  <replacement text>\n"
-                    "  >>>>>>> REPLACE\n"
+                    "This tool accepts exactly one argument: \"patch\", a string.\n"
+                    "Put all file paths, SEARCH text, and replacement text inside\n"
+                    "that single string. Do not send them as separate arguments.\n"
                     "\n"
-                    "Multiple blocks for the same file apply in order. "
-                    "Multiple files are allowed in one patch. An empty "
-                    "SEARCH section (just <<<<<<< SEARCH followed by "
-                    "======= immediately) creates a new file. Every SEARCH "
-                    "text must match the file exactly once or nothing is "
-                    "written. SEARCH/REPLACE text cannot contain conflict "
-                    "marker lines ('<<<<<<<', '=======', '>>>>>>>') - use "
-                    "edit_file for those edits.",
+                    "Example tool arguments:\n"
+                    '{"patch":"src/example.py\\n<<<<<<< SEARCH\\nvalue = 1'
+                    '\\n=======\\nvalue = 2\\n>>>>>>> REPLACE\\n"}\n'
+                    "\n"
+                    "Rules:\n"
+                    "- Start each block with the actual file path on its own line.\n"
+                    "  Use a bare path, without XML tags, quotes, or backticks.\n"
+                    "- Copy SEARCH text from the file, preserving indentation.\n"
+                    "  Include enough context to match exactly one location.\n"
+                    "  Do not include line numbers added by file-reading tools.\n"
+                    "- Put each delimiter on its own line, exactly as shown.\n"
+                    "- End EVERY block with >>>>>>> REPLACE, including the final\n"
+                    "  block. Never omit this marker.\n"
+                    "- Repeat the file path for every block, even consecutive\n"
+                    "  blocks editing the same file.\n"
+                    "- Do not wrap the patch string in Markdown fences or add\n"
+                    "  commentary.\n"
+                    "\n"
+                    "Keep edits small and complete. Multiple complete blocks may\n"
+                    "be concatenated in the same string; they are applied in order.\n"
+                    "\n"
+                    "An empty SEARCH creates a new file (must not already exist).\n"
+                    "An empty replacement deletes the matched text.\n"
+                    "All blocks are validated before any file is written.\n"
+                    "SEARCH/REPLACE text must not contain conflict-marker lines.",
                     {"type": "object", "properties": {
                         "patch": {"type": "string",
-                                  "description": "The full patch string "
-                                                 "containing one or more "
-                                                 "SEARCH/REPLACE blocks"}},
-                     "required": ["patch"]},
+                                  "description": "The entire patch as one "
+                                                 "string, including all file "
+                                                 "paths and SEARCH/REPLACE "
+                                                 "blocks. Every block must "
+                                                 "end with >>>>>>> REPLACE. "
+                                                 "Do not split this into "
+                                                 "multiple arguments."}},
+                     "required": ["patch"],
+                     "additionalProperties": False},
                     partial(apply_patch, workspace=workspace))
 
 

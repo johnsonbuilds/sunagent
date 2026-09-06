@@ -100,6 +100,14 @@ def validate_tool_call(tool_call: Any, schemas: list[dict[str, Any]]) -> Validat
     for field, value in arguments.items():
         definition = properties.get(field)
         if not isinstance(definition, Mapping):
+            if not parameters.get("additionalProperties", True):
+                allowed = ", ".join(sorted(properties.keys()))
+                raise ValueError(
+                    f"unexpected argument '{field}'; "
+                    f"allowed arguments: {allowed}. "
+                    f"Move '{field}' into the existing argument(s) "
+                    "and resend the complete call."
+                )
             continue
         expected = definition.get("type")
         if isinstance(expected, str) and not _matches_type(value, expected):

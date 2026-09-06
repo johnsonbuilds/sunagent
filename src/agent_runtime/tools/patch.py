@@ -101,7 +101,11 @@ def parse_patch(patch: str) -> _Patch:
                            f"got stray text")
             path = line.strip()
     if section is not None:
-        raise fail(len(lines) + 1, f"unterminated block (missing {END})")
+        raise fail(len(lines) + 1,
+                   f"unterminated block (missing {END}). "
+                   f"Resend the complete patch with every block "
+                   f"closed by {END} on its own final line. "
+                   f"Do not send only the missing marker.")
     if path is not None:
         raise fail(len(lines) + 1, f"file path {path!r} has no edit block")
     if not parsed.blocks:
