@@ -1,0 +1,62 @@
+# Harness genome: describes HOW this agent works, as versioned data.
+# The runtime engine stays stable; mutating this file (one gene at a
+# time, with id/parent/mutation/reason recorded) is how harnesses evolve.
+#
+# NOTE: numbered code-v3 on purpose: that id belongs to a deleted
+# manifest still referenced as meta-v1's parent; reusing it would close
+# a lineage cycle through the whole meta family.
+
+id: code-v4
+parent: code-v2
+mutation: tools.enabled+=edit_file
+reason: >
+  give the model a single-edit fallback next to apply_patch: smaller
+  argument payload (path/old_str/new_str instead of one patch blob),
+  matching the split-argument shape the model already tries to emit
+  ('replace_text'/'replace' unexpected-argument errors), and the only
+  tool that can express conflict-marker content; rerun smoke-10 to see
+  if the pass rate moves
+prompt:
+  system: ''
+  iteration_limit_notice: Iteration limit reached. Summarize the progress and give
+    the best possible final answer. Do not call tools.
+tools:
+  enabled:
+  - run_command
+  - read_file
+  - apply_patch
+  - edit_file
+control:
+  max_iterations: 100
+  max_observation_chars: 16000
+  spill_preview_chars: 4000
+memory:
+  strategy: llm_summary
+  head_chars: 200
+  context_budget: 60000
+  window_rounds: 12
+  keep_recent_rounds: 2
+  summary_tail_rounds: 2
+recovery:
+  tool_error: feed_error_and_continue
+  tool_error_max_retries: 3
+  llm_errors:
+    provider_error:
+      max_retries: 0
+      backoff: exponential
+      base_delay: 0.5
+    stream_empty:
+      max_retries: 2
+      backoff: exponential
+      base_delay: 0.5
+    stream_idle_timeout:
+      max_retries: 2
+      backoff: exponential
+      base_delay: 0.5
+    stream_truncated:
+      max_retries: 2
+      backoff: exponential
+      base_delay: 0.5
+verification:
+  enabled: false
+skills: []
