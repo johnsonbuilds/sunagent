@@ -161,6 +161,10 @@ class MemoryGenome:
 @dataclass(frozen=True)
 class RecoveryGenome:
     tool_error: str = "feed_error_and_continue"
+    # Consecutive identical tool failures tolerated before the turn stops
+    # early with a manual-handling message. 0 disables the guard (legacy
+    # behavior: retry until control.max_iterations is exhausted).
+    tool_error_max_retries: int = 0
     llm_errors: dict[str, LLMRetryPolicy] = field(
         default_factory=_default_llm_errors)
 
@@ -345,13 +349,19 @@ def _recovery_genome(data: Mapping[str, Any]) -> RecoveryGenome:
     section = data.get("recovery") or {}
     if not isinstance(section, Mapping):
         raise HarnessError("recovery must be a mapping")
-    _check_keys(section, {"tool_error", "llm_errors"}, "recovery")
+    _check_keys(section, {"tool_error", "tool_error_max_retries",
+                          "llm_errors"}, "recovery")
     tool_error = _required_text(section, "tool_error", "recovery",
                                 "feed_error_and_continue")
     if tool_error not in TOOL_ERROR_STRATEGIES:
         raise HarnessError(
             f"recovery.tool_error must be one of "
             f"{sorted(TOOL_ERROR_STRATEGIES)}, got {tool_error!r}")
+    max_consecutive = section.get("tool_error_max_retries", 0)
+    if (not isinstance(max_consecutive, int) or isinstance(max_consecutive, bool)
+            or max_consecutive < 0):
+        raise HarnessError(
+            "recovery.tool_error_max_retries must be an integer >= 0")
     llm_section = section.get("llm_errors") or {}
     if not isinstance(llm_section, Mapping):
         raise HarnessError("recovery.llm_errors must be a mapping")
@@ -384,7 +394,9 @@ def _recovery_genome(data: Mapping[str, Any]) -> RecoveryGenome:
         llm_errors[category] = LLMRetryPolicy(max_retries=max_retries,
                                               backoff=backoff,
                                               base_delay=float(base_delay))
-    return RecoveryGenome(tool_error=tool_error, llm_errors=llm_errors)
+    return RecoveryGenome(tool_error=tool_error,
+                            tool_error_max_retries=max_consecutive,
+                            llm_errors=llm_errors)
 
 
 def _verification_genome(data: Mapping[str, Any]) -> VerificationGenome:

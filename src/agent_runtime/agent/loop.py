@@ -32,6 +32,10 @@ from agent_runtime.agent.tool_dispatch import (
     _tool_trace_metadata,
     _trace_tool_rejection,
 )
+from agent_runtime.agent.tool_error_budget import (
+    SameToolErrorBudget,
+    resolve_max_retries,
+)
 from agent_runtime.agent.observations import ObservationFormatter
 from agent_runtime.agent.turn_history import (
     Conversation,
@@ -113,6 +117,8 @@ class AgentTurn:
         _ensure_system_prompt(self.conversation, harness.prompt.system)
         self.conversation.append({"role": "user", "content": self.user_message})
         history = TurnHistory(self.conversation.messages)
+        error_budget = SameToolErrorBudget(
+            resolve_max_retries(harness.recovery.tool_error_max_retries))
 
         for iteration in range(1, self.max_iterations + 1):
             try:
@@ -200,6 +206,11 @@ class AgentTurn:
                 if outcome.rejection is not None:
                     observation = self._reject_tool_call(outcome, iteration)
                     history.append(observation)
+                    stop = self._check_error_budget(
+                        error_budget, iteration,
+                        payload["tool"], outcome.rejection)
+                    if stop is not None:
+                        return stop
                     continue
                 validated = outcome.validated
                 assert validated is not None
@@ -223,12 +234,17 @@ class AgentTurn:
                     observation = harness.tool_error_observation(
                         exc, tool=payload["tool"])
                     history.append(_tool_observation_message(tool_call, observation))
+                    stop = self._check_error_budget(
+                        error_budget, iteration, validated.name, exc)
+                    if stop is not None:
+                        return stop
                     continue
                 rendered = await self.observations.render(result, validated.id)
                 metadata = ({"spill_path": rendered.spill_path}
                             if rendered.spill_path else None)
                 history.append(_tool_observation_message(
                     tool_call, rendered.text, metadata))
+                error_budget.note_success()
 
         history.append({"role": "user", "content":
                         harness.prompt.iteration_limit_notice})
@@ -268,6 +284,33 @@ class AgentTurn:
         answer = response.get("content", "")
         logger.debug("agent.final iteration=%d answer_chars=%d", iteration, len(answer))
         events.emit("agent.completed", iteration, iterations=iteration, answer=answer)
+        return answer
+
+    def _check_error_budget(self, budget: SameToolErrorBudget,
+                              iteration: int, tool: Any,
+                              error: Exception) -> str | None:
+        """Stop the turn when one tool repeats one failure too often.
+
+        Returns the manual-handling message when the budget trips,
+        else ``None`` to let the loop continue.
+        """
+        count, tripped = budget.note_failure(
+            tool if isinstance(tool, str) else None, error)
+        if not tripped:
+            return None
+        detail = str(error).strip().split("\n")[0][:500] or "unknown error"
+        answer = (
+            f"STOPPED_SAME_TOOL_ERROR: tool {tool!r} failed {count} "
+            f"times in a row with the same error: {detail} "
+            f"Stopped early to save iterations; "
+            f"please handle it manually and resume."
+        )
+        logger.error("loop.guard iteration=%d tool=%r consecutive=%d error=%s",
+                     iteration, tool, count, detail)
+        self.trace.emit("loop.guard", iteration, tool=tool,
+                        error=str(error)[:500], consecutive=count)
+        self.events.emit("agent.completed", iteration,
+                         iterations=iteration, answer=answer)
         return answer
 
     def _reject_tool_call(self, outcome: ToolCallOutcome, iteration: int

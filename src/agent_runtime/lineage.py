@@ -256,6 +256,7 @@ def manifest_text(spec: HarnessSpec) -> str:
         "memory": {"strategy": spec.memory.strategy},
         "recovery": {
             "tool_error": spec.recovery.tool_error,
+            "tool_error_max_retries": spec.recovery.tool_error_max_retries,
             "llm_errors": {
                 category: {"max_retries": policy.max_retries,
                            "backoff": policy.backoff,
