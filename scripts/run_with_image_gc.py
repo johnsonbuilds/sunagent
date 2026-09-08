@@ -75,7 +75,8 @@ def image_in_use(image: str) -> bool:
     return bool(containers_referencing(image, only_running=True))
 
 
-def remove_image(image: str) -> bool:
+def remove_image(image: str) -> str:
+    """Remove an image; return 'removed', 'gone', or 'failed'."""
     # Drop stopped leftovers referencing the image (e.g. leaked envs from
     # deleted jobs); never touch running containers.
     if not image_in_use(image):
@@ -84,11 +85,14 @@ def remove_image(image: str) -> bool:
                            capture_output=True, text=True)
     proc = subprocess.run(["docker", "rmi", image],
                           capture_output=True, text=True)
-    if proc.returncode != 0:
-        print(f"[gc] rmi failed for {image}: "
-              f"{(proc.stderr or proc.stdout).strip()[:200]}", flush=True)
-        return False
-    return True
+    if proc.returncode == 0:
+        return "removed"
+    err = (proc.stderr or proc.stdout).strip()[:200]
+    if "No such image" in err:
+        # Already collected by an earlier sweep of the same job dir.
+        return "gone"
+    print(f"[gc] rmi failed for {image}: {err}", flush=True)
+    return "failed"
 
 
 def main() -> int:
@@ -174,8 +178,8 @@ def main() -> int:
                       flush=True)
                 collected.discard(trial.name)
                 continue
-            ok = remove_image(image)
-            print(f"[gc] {'removed' if ok else 'FAILED'}: {image} "
+            status = remove_image(image)
+            print(f"[gc] {status}: {image} "
                   f"({trial.name}) free={disk_free_gb(Path('.')):.1f}GB",
                   flush=True)
 
@@ -189,8 +193,8 @@ def main() -> int:
         iid = instance_id_of(trial)
         image = image_of(dataset, iid) if iid else None
         if image and not image_in_use(image):
-            ok = remove_image(image)
-            print(f"[gc] final sweep {'removed' if ok else 'FAILED'}: "
+            status = remove_image(image)
+            print(f"[gc] final sweep {status}: "
                   f"{image}", flush=True)
     print(f"[gc] harbor exit={proc.returncode} "
           f"trials_collected={len(collected)} "

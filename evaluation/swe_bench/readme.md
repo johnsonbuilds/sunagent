@@ -50,6 +50,38 @@ uv run harbor run -p evaluation/swe_bench/dataset-smoke10 \
   --config harnesses/code-v1.yaml -l 3
 ```
 
+### 5. 推荐跑法：先单题验证，再全量（100 题）
+
+大跑之前永远先跑 1 个 trial，确认 verifier 能正常打分（曾出现过全员 0 分：
+`test.sh` 与老 pytest 不兼容、评分解析静默失败）。单题用 `-i` 过滤：
+
+```bash
+# 单题验证（job-name 每次用新的；复用旧名 + 改了参数会报 lock.json FileExistsError）
+uv run python scripts/run_with_image_gc.py \
+  --dataset evaluation/swe_bench/dataset-eval100 \
+  --harness code-v6 --job-name verify-fix2 -n 1 \
+  -i astropy__astropy-7336
+
+# 确认 rewards.json 里测试真正执行了（fail_to_pass_total > 0 且有 pass），再全量
+uv run python scripts/run_with_image_gc.py \
+  --dataset evaluation/swe_bench/dataset-eval100 \
+  --harness code-v6 --job-name eval100-code-v6 -n 4 \
+  --environment-build-timeout-multiplier 3
+```
+
+说明：
+
+* `scripts/run_with_image_gc.py` 是 `harbor run` 的超集（`-p/--agent/-n/--job-name`
+  及 harbor 透传参数原样转发，`--harness` 注入 `AGENT_RUNTIME_HARNESS`）。
+  它在每个 trial 的 `result.json` 出现 `finished_at` 后 `docker rmi` 其专属镜像——
+  SWE 镜像按 instance 打包（平均 ~5GB），Harbor 只删容器不删镜像，
+  100 题不清理会堆 ~500GB 撑爆磁盘。
+* `--environment-build-timeout-multiplier 3`：大镜像在多并行下 pull 可能超过默认
+  600s 的环境构建超时，曾导致 `EnvironmentStartTimeoutError`。
+* `--job-name` 决定 `jobs/<job-name>/` 目录；`result.json` 看总分，
+  `<trial>/verifier/rewards.json` 看单题，`<trial>/agent/agent-runtime.jsonl`
+  看完整轨迹（含 `loop.guard` 熔断事件）。
+
 ## 任务列表（smoke-10）
 
 | Instance ID | Repo | 
