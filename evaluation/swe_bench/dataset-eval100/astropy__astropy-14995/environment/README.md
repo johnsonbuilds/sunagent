@@ -1,0 +1,3 @@
+Prebuilt SWE-bench eval image: swebench/sweb.eval.x86_64.astropy_1776_astropy-14995:latest
+repo=astropy/astropy base_commit=b16c7d12ccbc7b2d20364b89fb44285bcbfede54
+env_setup_commit=362f6df12abf9bd769d4915fabf955c993ea22cf

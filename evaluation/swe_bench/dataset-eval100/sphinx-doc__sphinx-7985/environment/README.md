@@ -1,0 +1,3 @@
+Prebuilt SWE-bench eval image: swebench/sweb.eval.x86_64.sphinx-doc_1776_sphinx-7985:latest
+repo=sphinx-doc/sphinx base_commit=f30284ef926ebaf04b176f21b421e2dffc679792
+env_setup_commit=f92fa6443fe6f457ab0c26d41eb229e825fda5e1

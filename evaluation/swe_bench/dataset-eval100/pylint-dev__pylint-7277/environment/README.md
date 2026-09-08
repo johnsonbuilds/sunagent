@@ -1,0 +1,3 @@
+Prebuilt SWE-bench eval image: swebench/sweb.eval.x86_64.pylint-dev_1776_pylint-7277:latest
+repo=pylint-dev/pylint base_commit=684a1d6aa0a6791e20078bc524f97c8906332390
+env_setup_commit=e90702074e68e20dc8e5df5013ee3ecf22139c3e

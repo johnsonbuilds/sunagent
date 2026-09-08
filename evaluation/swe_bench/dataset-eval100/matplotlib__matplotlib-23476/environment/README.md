@@ -1,0 +1,3 @@
+Prebuilt SWE-bench eval image: swebench/sweb.eval.x86_64.matplotlib_1776_matplotlib-23476:latest
+repo=matplotlib/matplotlib base_commit=33a0599711d26dc2b79f851c6daed4947df7c167
+env_setup_commit=de98877e3dc45de8dd441d008f23d88738dc015d

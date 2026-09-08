@@ -1,0 +1,3 @@
+Prebuilt SWE-bench eval image: swebench/sweb.eval.x86_64.pytest-dev_1776_pytest-7236:latest
+repo=pytest-dev/pytest base_commit=c98bc4cd3d687fe9b392d8eecd905627191d4f06
+env_setup_commit=678c1a0745f1cf175c442c719906a1f13e496910

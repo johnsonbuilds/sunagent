@@ -1,0 +1,3 @@
+Prebuilt SWE-bench eval image: swebench/sweb.eval.x86_64.pallets_1776_flask-5014:latest
+repo=pallets/flask base_commit=7ee9ceb71e868944a46e1ff00b506772a53a4f1d
+env_setup_commit=182ce3dd15dfa3537391c3efaf9c3ff407d134d4

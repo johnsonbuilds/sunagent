@@ -1,0 +1,3 @@
+Prebuilt SWE-bench eval image: swebench/sweb.eval.x86_64.pydata_1776_xarray-6721:latest
+repo=pydata/xarray base_commit=cc183652bf6e1273e985e1c4b3cba79c896c1193
+env_setup_commit=50ea159bfd0872635ebf4281e741f3c87f0bef6b

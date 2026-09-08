@@ -1,0 +1,3 @@
+Prebuilt SWE-bench eval image: swebench/sweb.eval.x86_64.sympy_1776_sympy-14711:latest
+repo=sympy/sympy base_commit=c6753448b5c34f95e250105d76709fe4d349ca1f
+env_setup_commit=ec9e3c0436fbff934fa84e22bf07f1b3ef5bfac3

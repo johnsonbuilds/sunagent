@@ -1,0 +1,25 @@
+diff --git a/xarray/tests/test_dataset.py b/xarray/tests/test_dataset.py
+--- a/xarray/tests/test_dataset.py
++++ b/xarray/tests/test_dataset.py
+@@ -6603,6 +6603,9 @@ def test_integrate(dask):
+     with pytest.raises(ValueError):
+         da.integrate("x2d")
+ 
++    with pytest.warns(FutureWarning):
++        da.integrate(dim="x")
++
+ 
+ @pytest.mark.parametrize("dask", [True, False])
+ @pytest.mark.parametrize("which_datetime", ["np", "cftime"])
+diff --git a/xarray/tests/test_units.py b/xarray/tests/test_units.py
+--- a/xarray/tests/test_units.py
++++ b/xarray/tests/test_units.py
+@@ -3681,7 +3681,7 @@ def test_stacking_reordering(self, func, dtype):
+         (
+             method("diff", dim="x"),
+             method("differentiate", coord="x"),
+-            method("integrate", dim="x"),
++            method("integrate", coord="x"),
+             method("quantile", q=[0.25, 0.75]),
+             method("reduce", func=np.sum, dim="x"),
+             pytest.param(lambda x: x.dot(x), id="method_dot"),

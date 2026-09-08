@@ -1,0 +1,3 @@
+Prebuilt SWE-bench eval image: swebench/sweb.eval.x86_64.django_1776_django-14007:latest
+repo=django/django base_commit=619f26d2895d121854b1bed1b535d42b722e2eba
+env_setup_commit=475cffd1d64c690cdad16ede4d5e81985738ceb4

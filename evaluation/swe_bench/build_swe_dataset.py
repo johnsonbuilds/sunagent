@@ -70,6 +70,8 @@ import json, os, re, sys
 log = open("/tests/eval_output.log", encoding="utf-8", errors="replace").read()
 f2p = {f2p_json!r}
 p2p = {p2p_json!r}
+f2p = json.loads(f2p)
+p2p = json.loads(p2p)
 runner = {runner!r}
 exit_code = int(os.environ.get("RUNNER_EXIT", "1"))
 
@@ -78,7 +80,10 @@ ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 clean_log = ansi_escape.sub('', log)
 
 def pytest_ok(tid: str) -> bool:
-    return re.search(rf"^PASSED {{re.escape(tid)}}$", clean_log, re.M) is not None
+    # Modern pytest (-rA) prints "PASSED <id>"; verbose mode (needed for
+    # ancient pytest that has no PASSED summary lines) prints "<id> PASSED".
+    return (re.search(rf"^PASSED {{re.escape(tid)}}$", clean_log, re.M) is not None
+            or re.search(rf"^{{re.escape(tid)}} PASSED\b", clean_log, re.M) is not None)
 
 def django_ok(tid: str) -> bool:
     return re.search(rf"^{{re.escape(tid)}}\s+\.\.\. ok$", clean_log, re.M) is not None
@@ -181,7 +186,7 @@ def plan_for(row: dict) -> dict:
         pytest_files = sorted({
             tid.split("::")[0] for tid in f2p + p2p
         })
-        cmd = ("python -m pytest --no-header -rA --tb=no "
+        cmd = ("python -m pytest -v -rA --tb=no "
                f"-p no:cacheprovider {' '.join(pytest_files)}")
     return {"runner": runner, "command": cmd, "files": files,
             "f2p": f2p, "p2p": p2p}
@@ -247,6 +252,13 @@ runner_exit=$?
 set +x
 RUNNER_EXIT=$runner_exit
 """ + footer
+    # Tripwire: these exact regressions zeroed a whole 100-task run once
+    # (silent grading bugs). Fail the build loudly instead of shipping
+    # broken verifiers.
+    assert "json.loads(f2p)" in test_sh and "json.loads(p2p)" in test_sh, \
+        "test.sh must decode the embedded id lists (else totals grade 0)"
+    assert "--no-header" not in test_sh, \
+        "test.sh must not pass --no-header (ancient pytest aborts)"
     (tdir / "tests" / "test.sh").write_text(test_sh, encoding="utf-8")
 
 

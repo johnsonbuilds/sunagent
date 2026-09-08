@@ -1,0 +1,3 @@
+Prebuilt SWE-bench eval image: swebench/sweb.eval.x86_64.scikit-learn_1776_scikit-learn-25973:latest
+repo=scikit-learn/scikit-learn base_commit=10dbc142bd17ccf7bd38eec2ac04b52ce0d1009e
+env_setup_commit=1e8a5b833d1b58f3ab84099c4582239af854b23a

@@ -1,0 +1,3 @@
+Prebuilt SWE-bench eval image: swebench/sweb.eval.x86_64.psf_1776_requests-1766:latest
+repo=psf/requests base_commit=847735553aeda6e6633f2b32e14ba14ba86887a4
+env_setup_commit=4bceb312f1b99d36a25f2985b5606e98b6f0d8cd

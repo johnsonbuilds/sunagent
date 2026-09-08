@@ -1,0 +1,13 @@
+schema_version = "1.4"
+
+[metadata]
+
+[verifier]
+timeout_sec = 1800.0
+
+[agent]
+timeout_sec = 3600.0
+
+[environment]
+build_timeout_sec = 600.0
+docker_image = "swebench/sweb.eval.x86_64.pydata_1776_xarray-6992:latest"

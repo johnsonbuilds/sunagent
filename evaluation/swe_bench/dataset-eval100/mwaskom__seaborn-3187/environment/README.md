@@ -1,0 +1,3 @@
+Prebuilt SWE-bench eval image: swebench/sweb.eval.x86_64.mwaskom_1776_seaborn-3187:latest
+repo=mwaskom/seaborn base_commit=22cdfb0c93f8ec78492d87edb810f10cb7f57a31
+env_setup_commit=d25872b0fc99dbf7e666a91f59bd4ed125186aa1
