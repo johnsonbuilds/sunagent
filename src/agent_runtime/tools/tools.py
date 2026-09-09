@@ -95,7 +95,9 @@ def _run_command_spec(executor: ShellExecutor,
 def _write_file_spec(workspace: Workspace) -> ToolSpec:
     return ToolSpec("write_file",
                     "Create or overwrite a file with the given full content. "
-                    "Parent directories are created automatically.",
+                    "Parent directories are created automatically. "
+                    "Best suited for large rewrites, creating new files, "
+                    "or deliberately broken intermediate states.",
                     {"type": "object", "properties": {
                         "path": {"type": "string",
                                  "description": "File path inside the workspace"},
@@ -161,7 +163,9 @@ def _edit_file_spec(workspace: Workspace) -> ToolSpec:
                     "Replace exactly one occurrence of old_str with new_str in a file."
                     "old_str must match uniquely (exact first, tolerant fallbacks; "
                     "the applied mode is reported back as match_mode). "
-                    "Zero or ambiguous matches raise with a rendered diagnosis.",
+                    "Zero or ambiguous matches raise with a rendered diagnosis. "
+                    "Best suited for single-point edits and iterative small "
+                    "changes, including text containing conflict markers.",
                     {"type": "object", "properties": {
                         "path": {"type": "string",
                                  "description": "File path inside the workspace"},
@@ -205,7 +209,10 @@ def _apply_patch_spec(workspace: Workspace) -> ToolSpec:
                     "An empty SEARCH creates a new file (must not already exist).\n"
                     "An empty replacement deletes the matched text.\n"
                     "All blocks are validated before any file is written.\n"
-                    "SEARCH/REPLACE text must not contain conflict-marker lines.",
+                    "SEARCH/REPLACE text must not contain conflict-marker lines.\n"
+                    "\n"
+                    "Best suited when a fix spans several edits in one call "
+                    "or across multiple files.",
                     {"type": "object", "properties": {
                         "patch": {"type": "string",
                                   "description": "The entire patch as one "

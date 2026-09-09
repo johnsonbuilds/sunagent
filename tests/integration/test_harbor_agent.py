@@ -94,7 +94,11 @@ class HarborAgentSmokeTests(unittest.IsolatedAsyncioTestCase):
             runtime_logger.setLevel(logging.NOTSET)
 
         self.assertIn("task.start", output.getvalue())
-        self.assertIn("llm.chunk", output.getvalue())
+        # Per-chunk llm.chunk logging is intentionally disabled (blank
+        # deltas used to flood stderr); the streaming lifecycle lines
+        # below still prove the streaming path is observed.
+        self.assertIn("llm.stream.start", output.getvalue())
+        self.assertIn("llm.stream.end", output.getvalue())
 
     async def test_run_reuses_runtime_and_populates_context(self) -> None:
         with TemporaryDirectory() as directory:

@@ -44,6 +44,43 @@ class DefaultRegistryTests(unittest.TestCase):
             create_default_registry(enabled=["definitely_not_a_tool"])
 
 
+class ToolRoutingGuidanceTests(unittest.TestCase):
+    """Each file tool states its own fit without naming siblings.
+
+    Functional sentences (what the tool does) stay untouched; exactly one
+    suitability sentence says what it is best suited for. Tools stay
+    independent: no description references another tool by name.
+    """
+
+    def descriptions(self) -> dict[str, str]:
+        registry = create_default_registry()
+        return {schema["function"]["name"]: schema["function"]["description"]
+                for schema in registry.schemas}
+
+    def test_each_file_tool_names_no_sibling(self) -> None:
+        descs = self.descriptions()
+        tools = ["write_file", "edit_file", "apply_patch"]
+        for name in tools:
+            others = [t for t in tools if t != name]
+            for other in others:
+                self.assertNotIn(other, descs[name])
+
+    def test_write_file_suits_rewrites_new_and_broken_states(self) -> None:
+        desc = self.descriptions()["write_file"]
+        self.assertIn("Create or overwrite", desc)
+        self.assertIn("Best suited", desc)
+
+    def test_edit_file_suits_single_point_edits(self) -> None:
+        desc = self.descriptions()["edit_file"]
+        self.assertIn("exactly one occurrence", desc)
+        self.assertIn("Best suited", desc)
+
+    def test_apply_patch_suits_batched_multi_file_edits(self) -> None:
+        desc = self.descriptions()["apply_patch"]
+        self.assertIn("SEARCH/REPLACE blocks", desc)
+        self.assertIn("Best suited", desc)
+
+
 class WorkspaceInjectionTests(unittest.IsolatedAsyncioTestCase):
     async def test_file_tools_use_injected_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

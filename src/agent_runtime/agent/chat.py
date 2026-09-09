@@ -180,10 +180,10 @@ async def _consume_stream(llm: ChatModel, messages: list[dict[str, Any]],
             if events is not None:
                 events.emit("assistant.delta", iteration,
                             content=text, reasoning=reasoning_text)
-        # NOTE: per-chunk logger line intentionally disabled: a long
-        # run can stream tens of thousands of chunks (often blank filler)
-        # and each one printed a log line. Full content stays available
-        # in trace llm.chunk records and the assembled llm.end message.
+        # NOTE: per-chunk logging intentionally disabled: a stuck run can
+        # stream tens of thousands of whitespace-only chunks and each one
+        # printed a log line. Full content stays available in trace
+        # llm.chunk records and the assembled llm.end message.
         # logger.debug("llm.chunk iteration=%d content=%r reasoning=%r tool_calls=%r",
         #              iteration, text, reasoning_text, chunk.get("tool_calls") or [])
         if trace is not None:
