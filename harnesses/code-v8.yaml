@@ -1,0 +1,60 @@
+# Harness genome: describes HOW this agent works, as versioned data.
+# The runtime engine stays stable; mutating this file (one gene at a
+# time, with id/parent/mutation/reason recorded) is how harnesses evolve.
+
+id: code-v8
+parent: code-v7
+mutation: tools.enabled+=grep_search,glob_files
+reason: >
+  add native search: grep_search replaces rg/grep via run_command with
+  structured matches whose line numbers feed read_file, glob_files replaces
+  find/ls with basename-aware globs; expect run_command share to drop and
+  localization to shorten; rerun eval100 against code-v7 to check pass and
+  token cost
+prompt:
+  system: ''
+  iteration_limit_notice: Iteration limit reached. Summarize the progress and give
+    the best possible final answer. Do not call tools.
+tools:
+  enabled:
+  - run_command
+  - read_file
+  - apply_patch
+  - edit_file
+  - write_file
+  - grep_search
+  - glob_files
+control:
+  max_iterations: 50
+  max_observation_chars: 16000
+  spill_preview_chars: 4000
+memory:
+  strategy: llm_summary
+  head_chars: 200
+  context_budget: 60000
+  window_rounds: 12
+  keep_recent_rounds: 2
+  summary_tail_rounds: 2
+recovery:
+  tool_error: feed_error_and_continue
+  tool_error_max_retries: 3
+  llm_errors:
+    provider_error:
+      max_retries: 0
+      backoff: exponential
+      base_delay: 0.5
+    stream_empty:
+      max_retries: 2
+      backoff: exponential
+      base_delay: 0.5
+    stream_idle_timeout:
+      max_retries: 2
+      backoff: exponential
+      base_delay: 0.5
+    stream_truncated:
+      max_retries: 2
+      backoff: exponential
+      base_delay: 0.5
+verification:
+  enabled: false
+skills: []
