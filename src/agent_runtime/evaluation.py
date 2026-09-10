@@ -89,9 +89,9 @@ def extract_record(job_dir: str | Path, *, model: str | None = None,
     rewards = _reward_by_trial(top_result)
 
     datasets = config.get("datasets") or []
-    benchmark_name = benchmark or (
-        datasets[0].get("name") if datasets and isinstance(datasets[0], dict)
-        else "unknown-benchmark")
+    first = datasets[0] if datasets and isinstance(datasets[0], dict) else {}
+    benchmark_name = (benchmark or first.get("name") or first.get("path")
+                      or "unknown-benchmark")
 
     tasks: list[dict[str, Any]] = []
     harness_ids: set[str] = set()
