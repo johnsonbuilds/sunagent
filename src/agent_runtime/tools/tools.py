@@ -94,10 +94,12 @@ def _run_command_spec(executor: ShellExecutor,
 
 def _write_file_spec(workspace: Workspace) -> ToolSpec:
     return ToolSpec("write_file",
-                    "Create or overwrite a file with the given full content. "
-                    "Parent directories are created automatically. "
-                    "Best suited for large rewrites, creating new files, "
-                    "or deliberately broken intermediate states.",
+                    "Create a new file or replace the entire content of an "
+                    "existing file. Provide the complete intended file content "
+                    "in one call; parent directories are created automatically. "
+                    "This tool is for scenarios where the whole file content "
+                    "is being defined at once: new-file creation and full-file "
+                    "rewrites.",
                     {"type": "object", "properties": {
                         "path": {"type": "string",
                                  "description": "File path inside the workspace"},
@@ -179,41 +181,29 @@ def _edit_file_spec(workspace: Workspace) -> ToolSpec:
 
 def _apply_patch_spec(workspace: Workspace) -> ToolSpec:
     return ToolSpec("apply_patch",
-                    "Edit files using SEARCH/REPLACE blocks, not unified diff.\n"
+                    "Make batched text replacements using SEARCH/REPLACE blocks.\n"
                     "\n"
                     "This tool accepts exactly one argument: \"patch\", a string.\n"
                     "Put all file paths, SEARCH text, and replacement text inside\n"
                     "that single string. Do not send them as separate arguments.\n"
                     "\n"
-                    "Example tool arguments:\n"
-                    '{"patch":"src/example.py\\n<<<<<<< SEARCH\\n'
-                    '# old_context copied from the file\\n'
-                    'delay = 1\\n'
-                    '# surrounding lines for unique match\\n'
-                    '\\n=======\\n# new_context replacement text\\n'
-                    'delay = backoff\\n'
-                    '# surrounding lines for unique match\\n'
-                    '>>>>>>> REPLACE\\n"}\n'
+                    "This tool is for scenarios where multiple replacements are\n"
+                    "applied together as one atomic unit with all-or-nothing "
+                    "validation.\n"
                     "\n"
-                    "Rules:\n"
-                    "- Start each block with the bare file path on its own line,\n"
-                    "  without XML tags, quotes, or backticks.\n"
-                    "- Copy SEARCH text with indentation and enough surrounding\n"
-                    "  lines to match exactly one location; no line numbers.\n"
-                    "- Put each delimiter on its own line; end every block with\n"
-                    "  >>>>>>> REPLACE and repeat the path for every block.\n"
-                    "  Do not wrap the patch in Markdown fences or add commentary.\n"
+                    "Format per block:\n"
+                    "path/to/file.py\n"
+                    "<<<<<<< SEARCH\n"
+                    "old_context copied from the file, with indentation,\n"
+                    "including enough surrounding lines to match one location\n"
+                    "=======\n"
+                    "new_context to replace it with\n"
+                    ">>>>>>> REPLACE\n"
                     "\n"
-                    "Keep edits small and complete. Multiple complete blocks may\n"
-                    "be concatenated in the same string; they are applied in order.\n"
-                    "\n"
-                    "An empty SEARCH creates a new file (must not already exist).\n"
-                    "An empty replacement deletes the matched text.\n"
-                    "All blocks are validated before any file is written.\n"
-                    "SEARCH/REPLACE text must not contain conflict-marker lines.\n"
-                    "\n"
-                    "Best suited when a fix spans several edits in one call "
-                    "or across multiple files.",
+                    "Put each path and each delimiter on its own line, using a bare\n"
+                    "path without tags or quotes. End every block with >>>>>>> REPLACE.\n"
+                    "Empty SEARCH creates a new file; empty replacement deletes "
+                    "the match.",
                     {"type": "object", "properties": {
                         "patch": {"type": "string",
                                   "description": "The entire patch as one "
