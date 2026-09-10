@@ -1,69 +1,68 @@
-# eval100-code-v6 分析报告
+# eval100-code-v6 Analysis Report
 
-* Job: `jobs/eval100-code-v6-1/`（100 题，4 并行，`code-v6` = code-v4 + max_iterations 50）
-* Wall: 2026-09-08 13:27 → 18:03（4.6h）
-* 数据集：`evaluation/swe_bench/eval-100.json`（smoke-10 + dev-50 + 40 道新题），
-  难度按 manifest 人类预估修复时长：低 `<15min` / 中 `15min-1h` / 高 `1-4h+`
-* Trial 中位 7.5min，均值 10.6min，最长 62.8min
+* Job: `jobs/eval100-code-v6-1/` (100 tasks, 4 parallel, `code-v6` = code-v4 + max_iterations 50)
+* Wall time: 2026-09-08 13:27 → 18:03 (4.6h)
+* Dataset: `evaluation/swe_bench/eval-100.json` (smoke-10 + dev-50 + 40 new tasks),
+  difficulty based on manifest human-estimated fix duration: Low `<15min` / Medium `15min-1h` / High `1-4h+`
+* Trial median 7.5min, mean 10.6min, max 62.8min
 
-## 1. 总分：43/99 = 0.43（3 errored 另计）
+## 1. Total Score: 43/99 = 0.43 (3 errored, counted separately)
 
-3 个 errored 与模型无关：2×`AgentTimeoutError`（pylint-4661/4970，
-agent 3600s 超时）、1×`VerifierTimeoutError`（sphinx-7590，测试套件超 1800s）。
+3 errors unrelated to model: 2×`AgentTimeoutError` (pylint-4661/4970,
+agent 3600s timeout), 1×`VerifierTimeoutError` (sphinx-7590, test suite exceeded 1800s).
 
-## 2. 难度分层（单调，proxy 被实测验证）
+## 2. Difficulty Stratification (monotonic, proxy empirically validated)
 
-| 档 | 通过 | 通过率 |
-|----|------|--------|
-| 低（37 题） | 22 | 0.59 |
-| 中（43 题） | 19 | 0.44 |
-| 高（19 题） | 2 | 0.11 |
+| Tier | Passed | Pass Rate |
+|------|--------|-----------|
+| Low (37 tasks) | 22 | 0.59 |
+| Medium (43 tasks) | 19 | 0.44 |
+| High (19 tasks) | 2 | 0.11 |
 
-高档通过的 2 题都是 django（13449 smoke + 14007）。该分层以后可当正式难度标签用。
+The 2 high-tier passes were both django (13449 smoke + 14007). This stratification can serve as an official difficulty label going forward.
 
-## 3. smoke-10 子集：7/10，与历史最佳完全一致
+## 3. smoke-10 Subset: 7/10, identical to historical best
 
-通过：astropy/django/pylint/psf/pytest/sklearn/sympy；
-挂：sphinx（f2p 0/2）、matplotlib（f2p 1/1 + p2p 71/81，修对目标但坏回归）、
-xarray（f2p 0/1）。失败签名与前 5 轮 smoke 一致，可复现。
+Passed: astropy/django/pylint/psf/pytest/sklearn/sympy;
+Failed: sphinx (f2p 0/2), matplotlib (f2p 1/1 + p2p 71/81, fixed target but broke regression),
+xarray (f2p 0/1). Failure signatures consistent with the previous 5 smoke rounds, reproducible.
 
-## 4. Verifier 健康：干净
+## 4. Verifier Health: Clean
 
-* 无 insane totals（81/25470 类 bug 零复发）。
-* exit 分布：`0:40 / 1:55 / 2:3 / 4:1`，均为正常语义。
+* No insane totals (81/25470 class-bug zero recurrence).
+* Exit distribution: `0:40 / 1:55 / 2:3 / 4:1`, all semantically normal.
 
-## 5. 工具与熔断
+## 5. Tool Usage & Circuit Breaker
 
-* 调用量：`run_command 3109 / read_file 859 / edit_file 193 / apply_patch 23`
-  （edit:patch ≈ 8:1，模型用脚投票选 edit_file）。
-* 全 run 4184 次工具调用仅 20 次错误（0.5%）：
-  `unexpected_arg 8 / unterminated 3 / bad_header 3 / 匹配歧义 2 / edit mismatch 4`。
-* `loop.guard` 触发 3 次（matplotlib-26113、xarray-4094、sphinx-8595），
-  全是 apply_patch 连错、`consecutive=3` 精确触发。
+* Call counts: `run_command 3109 / read_file 859 / edit_file 193 / apply_patch 23`
+  (edit:patch ≈ 8:1, model votes with its feet for edit_file).
+* Total 4184 tool calls across all runs, only 20 errors (0.5%):
+  `unexpected_arg 8 / unterminated 3 / bad_header 3 / match ambiguity 2 / edit mismatch 4`.
+* `loop.guard` triggered 3 times (matplotlib-26113, xarray-4094, sphinx-8595),
+  all from consecutive apply_patch failures, `consecutive=3` exact trigger.
 
-## 6. 失败分类（56 fail，下阶段金矿）
+## 6. Failure Classification (56 fail, next-phase goldmine)
 
-| 类别 | 数量 | 含义 |
-|------|------|------|
-| 没打中目标、无回归 | 24 | 纯能力不够（含 sphinx 类 0 编辑） |
-| 没打中 + 带回归 | 18 | — |
-| **目标修对、回归挂了** | **10** | 如 xarray-3993（f2p 2/2，p2p 2374/2398 仅坏 24 个） |
-| **多测目标部分拿下** | **4** | 如 astropy-13977（12/20）、django-13212（3/5） |
+| Category | Count | Meaning |
+|----------|-------|---------|
+| Missed target, no regression | 24 | Pure capability gap (includes sphinx class with 0 edits) |
+| Missed target + regression | 18 | — |
+| **Target fixed, regression failed** | **10** | e.g. xarray-3993 (f2p 2/2, p2p 2374/2398, only 24 broken) |
+| **Multi-test target partially achieved** | **4** | e.g. astropy-13977 (12/20), django-13212 (3/5) |
 
-后两类 14 个 near-miss 是离 0.43→0.55 最近的路。
+The latter 2 categories (14 near-misses) are the shortest path from 0.43→0.55.
 
-## 7. max_iterations=50 裁决：零误伤
+## 7. max_iterations=50 Verdict: Zero False Positives
 
-* 43 个通过里首个成功编辑最晚第 38 轮（中位 14）；9 个通过跑到 51 轮是验证尾巴。
-* 46/100 烧到天花板（51 = 50 轮 + 总结轮），其中 36 是 fail；fail 里 12 个全程
-  0 次成功编辑——加轮数也救不了，cap 省的是纯浪费。
+* Among 43 passes, the latest successful edit was at iteration 38 (median 14); 9 passes ran to iteration 51 which is verification tail.
+* 46/100 hit the cap (51 = 50 iterations + summary round), of which 36 were fails; among fails, 12 had zero successful edits throughout — more iterations wouldn't help, the cap saves pure waste.
 
-## 8. 镜像 GC：满分
+## 8. Image GC: Perfect Score
 
-100 个镜像拉过，最终只剩 1 个；磁盘 55GB → 80GB 可用；无误报。
+100 images pulled, only 1 remaining; disk 55GB → 80GB available; no false positives.
 
-## 9. 后续（按 ROI）
+## 9. Next Steps (by ROI)
 
-1. 14 个 near-miss → edit→test→fix 小循环（见下节 q&a 展开）。
-2. 高档 2/19 → 换模型或放掉；别在 smoke 上继续调参（过拟合风险）。
-3. sphinx 全灭 → 单独立项（连 patch 都不写，与编辑器无关）。
+1. 14 near-misses → edit→test→fix micro-loop (see Q&A section below for details).
+2. High-tier 2/19 → switch model or drop; stop tuning on smoke (overfitting risk).
+3. sphinx total wipeout → standalone project (won't even write patches, unrelated to editor).
