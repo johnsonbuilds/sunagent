@@ -186,22 +186,23 @@ def _apply_patch_spec(workspace: Workspace) -> ToolSpec:
                     "that single string. Do not send them as separate arguments.\n"
                     "\n"
                     "Example tool arguments:\n"
-                    '{"patch":"src/example.py\\n<<<<<<< SEARCH\\nvalue = 1'
-                    '\\n=======\\nvalue = 2\\n>>>>>>> REPLACE\\n"}\n'
+                    '{"patch":"src/example.py\\n<<<<<<< SEARCH\\n'
+                    '# old_context copied from the file\\n'
+                    'delay = 1\\n'
+                    '# surrounding lines for unique match\\n'
+                    '\\n=======\\n# new_context replacement text\\n'
+                    'delay = backoff\\n'
+                    '# surrounding lines for unique match\\n'
+                    '>>>>>>> REPLACE\\n"}\n'
                     "\n"
                     "Rules:\n"
-                    "- Start each block with the actual file path on its own line.\n"
-                    "  Use a bare path, without XML tags, quotes, or backticks.\n"
-                    "- Copy SEARCH text from the file, preserving indentation.\n"
-                    "  Include enough context to match exactly one location.\n"
-                    "  Do not include line numbers added by file-reading tools.\n"
-                    "- Put each delimiter on its own line, exactly as shown.\n"
-                    "- End EVERY block with >>>>>>> REPLACE, including the final\n"
-                    "  block. Never omit this marker.\n"
-                    "- Repeat the file path for every block, even consecutive\n"
-                    "  blocks editing the same file.\n"
-                    "- Do not wrap the patch string in Markdown fences or add\n"
-                    "  commentary.\n"
+                    "- Start each block with the bare file path on its own line,\n"
+                    "  without XML tags, quotes, or backticks.\n"
+                    "- Copy SEARCH text with indentation and enough surrounding\n"
+                    "  lines to match exactly one location; no line numbers.\n"
+                    "- Put each delimiter on its own line; end every block with\n"
+                    "  >>>>>>> REPLACE and repeat the path for every block.\n"
+                    "  Do not wrap the patch in Markdown fences or add commentary.\n"
                     "\n"
                     "Keep edits small and complete. Multiple complete blocks may\n"
                     "be concatenated in the same string; they are applied in order.\n"
