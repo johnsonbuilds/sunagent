@@ -8,19 +8,10 @@
 ## 1. 目标
 
 1. 把 `skills` 从 dormant gene（一直是 `[]`，`harness.py:196` 只做名字校验）变成可加载机制：harness 声明 `skills: [coder]`，运行时解析为文本并注入上下文。
-2. 首个 skill 为 `coder`：针对当前工具集（`run_command/read_file/edit_file/apply_patch/write_file/grep_search/glob_files/read_output`）明确最佳 tool 使用策略，解决“模型知道有专用工具但仍用 `run_command` 仿真”的问题。
+2. 首个 skill 为 `coder`：针对当前工具集（`run_command/read_file/edit_file/apply_patch/write_file/grep_search/glob_files/read_output`）明确最佳 tool 使用策略，让模型能更高效使用tool,以提高任务成功率。
 3. 可 A/B：`code-v9 = code-v8 + skills+=coder`，只变一个基因，重跑 `eval100` 对比。
 
-## 2. 与 002 的分歧说明
-
-002-D 主张“tool-selection 是 universal behavior，应进 `prompt.system` 而非 `skills`”。本方案不推翻该判断，而是基于成本做切分：
-
-- `prompt.system`：放一句话宪法（`prefer dedicated tools over shell emulation`），常驻、极短。
-- `skills/coder`：放可操作细则（什么时候 `grep` vs `rg`、什么情况 `edit_file` vs `apply_patch`、失败后怎么改），只在 coder 类任务加载、可版本化、可下线。
-
-理由：细则太长不适合进常驻 prompt（每轮都烧 token）；skill 可按任务类型开关，`code-*` 与 `meta-*` 可复用不同 skill。
-
-## 3. Skill 加载机制（最小实现）
+## 2. Skill 加载机制（最小实现）
 
 - 目录：`skills/<name>/SKILL.md`（首个为 `skills/coder/SKILL.md`），纯 markdown，前置 `name/version` 头。
 - 解析：`resolve_harness` 后加 `resolve_skills(spec) -> list[Skill]`；名字不在目录中则 `HarnessError`（与 `tools.enabled` 未知工具同级处理，见 `tools.py:370-371`）。
