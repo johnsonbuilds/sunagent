@@ -48,8 +48,9 @@ class ToolRoutingGuidanceTests(unittest.TestCase):
     """Each file tool states its own fit without naming siblings.
 
     Functional sentences (what the tool does) stay untouched; exactly one
-    suitability sentence says what it is best suited for. Tools stay
-    independent: no description references another tool by name.
+    suitability sentence says when to reach for it ("Best suited ..." or
+    "This tool is for scenarios where ..."). Tools stay independent: no
+    description references another tool by name.
     """
 
     def descriptions(self) -> dict[str, str]:
@@ -65,10 +66,10 @@ class ToolRoutingGuidanceTests(unittest.TestCase):
             for other in others:
                 self.assertNotIn(other, descs[name])
 
-    def test_write_file_suits_rewrites_new_and_broken_states(self) -> None:
+    def test_write_file_suits_new_and_full_rewrites(self) -> None:
         desc = self.descriptions()["write_file"]
-        self.assertIn("Create or overwrite", desc)
-        self.assertIn("Best suited", desc)
+        self.assertIn("replace the entire content", desc)
+        self.assertIn("new-file creation and full-file rewrites", desc)
 
     def test_edit_file_suits_single_point_edits(self) -> None:
         desc = self.descriptions()["edit_file"]
@@ -78,7 +79,7 @@ class ToolRoutingGuidanceTests(unittest.TestCase):
     def test_apply_patch_suits_batched_multi_file_edits(self) -> None:
         desc = self.descriptions()["apply_patch"]
         self.assertIn("SEARCH/REPLACE blocks", desc)
-        self.assertIn("Best suited", desc)
+        self.assertIn("all-or-nothing", desc)
 
 
 class WorkspaceInjectionTests(unittest.IsolatedAsyncioTestCase):
