@@ -80,7 +80,10 @@ def _run_command_spec(executor: ShellExecutor,
                    and workspace.root is not None else None)
     return ToolSpec("run_command",
                     "Run a shell command and return its output and exit code. "
-                    "Commands run in the workspace root unless cwd is given.",
+                    "Commands run in the workspace root unless cwd is given. "
+                    "A non-zero exit code is a normal result, not an exception; "
+                    "blocked commands and timeouts are reported via the "
+                    "error field.",
                     {"type": "object", "properties": {
                         "command": {"type": "string", "description": "Shell command to run"},
                         "cwd": {"type": "string",
@@ -137,7 +140,9 @@ def _read_output_spec(workspace: Workspace) -> ToolSpec:
                     "output again — page the saved file instead.",
                     {"type": "object", "properties": {
                         "path": {"type": "string",
-                                 "description": "Path under .outputs/"},
+                                 "description": "Path under .outputs/, e.g. "
+                                                "'.outputs/<name>.txt' as named "
+                                                "by the observation"},
                         "offset": {"type": "integer",
                                    "description": "First line to return (1-based)",
                                    "default": 1},
@@ -163,16 +168,23 @@ def _list_dir_spec(workspace: Workspace) -> ToolSpec:
 def _edit_file_spec(workspace: Workspace) -> ToolSpec:
     return ToolSpec("edit_file",
                     "Replace exactly one occurrence of old_str with new_str in a file."
-                    "old_str must match uniquely (exact first, tolerant fallbacks; "
+                    "old_str must match uniquely (exact first, tolerant fallbacks "
+                    "for line-number prefixes and indentation; "
                     "the applied mode is reported back as match_mode). "
                     "Zero or ambiguous matches raise with a rendered diagnosis. "
+                    "Edited content that no longer parses (Python, JSON, YAML, "
+                    "shell) is rejected and nothing is written. "
                     "Best suited for single-point edits and iterative small "
                     "changes, including text containing conflict markers.",
                     {"type": "object", "properties": {
                         "path": {"type": "string",
                                  "description": "File path inside the workspace"},
                         "old_str": {"type": "string",
-                                    "description": "Exact text to replace"},
+                                    "description": "Text to replace, must match "
+                                                   "uniquely (exact preferred; "
+                                                   "line-number-prefix-stripped "
+                                                   "and indent-insensitive "
+                                                   "fallbacks allowed)"},
                         "new_str": {"type": "string",
                                     "description": "Replacement text (empty to delete)"}},
                      "required": ["path", "old_str", "new_str"]},
@@ -190,6 +202,10 @@ def _apply_patch_spec(workspace: Workspace) -> ToolSpec:
                     "This tool is for scenarios where multiple replacements are\n"
                     "applied together as one atomic unit with all-or-nothing "
                     "validation.\n"
+                    "Every SEARCH section must match its file exactly once; "
+                    "zero or ambiguous matches fail the whole patch and "
+                    "nothing is written. Edited content that no longer parses "
+                    "(Python, JSON, YAML, shell) is rejected the same way.\n"
                     "\n"
                     "Format per block:\n"
                     "path/to/file.py\n"
@@ -202,8 +218,12 @@ def _apply_patch_spec(workspace: Workspace) -> ToolSpec:
                     "\n"
                     "Put each path and each delimiter on its own line, using a bare\n"
                     "path without tags or quotes. End every block with >>>>>>> REPLACE.\n"
-                    "Empty SEARCH creates a new file; empty replacement deletes "
-                    "the match.",
+                    "Empty SEARCH creates a new file (fails when the file already "
+                    "exists; use a non-empty SEARCH section to edit it); "
+                    "empty replacement deletes "
+                    "the match. Text containing conflict-marker lines cannot be "
+                    "expressed here — use the single-point edit path for such "
+                    "edits instead.",
                     {"type": "object", "properties": {
                         "patch": {"type": "string",
                                   "description": "The entire patch as one "
@@ -231,14 +251,20 @@ def _grep_search_spec(workspace: Workspace) -> ToolSpec:
                                     "description": "Regular expression "
                                                    "(Python re syntax)"},
                         "path": {"type": "string",
-                                 "description": "Directory to search",
+                                 "description": "Directory inside the workspace "
+                                                "to search",
                                  "default": "."},
                         "include": {"type": "string",
-                                    "description": "Wildcard for file names, "
-                                                   "e.g. '*.py'"},
-                        "ignore_case": {"type": "boolean", "default": False},
+                                    "description": "Basename wildcard filter, "
+                                                   "e.g. '*.py' (matched against "
+                                                   "file names only)"},
+                        "ignore_case": {"type": "boolean",
+                                        "description": "Case-insensitive matching "
+                                                       "when true",
+                                        "default": False},
                         "max_results": {"type": "integer",
-                                        "description": "Maximum matches",
+                                        "description": "Maximum matches to return "
+                                                       "(capped server-side)",
                                         "default": DEFAULT_GREP_RESULTS}},
                      "required": ["pattern"]},
                     partial(grep_search, workspace=workspace))
@@ -252,6 +278,7 @@ def _find_files_spec(workspace: Workspace) -> ToolSpec:
                     "separators and patterns without '/' also match "
                     "basenames anywhere under the search directory. "
                     "Skips common generated and dependency directories. "
+                    "Output is capped with a truncated flag. "
                     "One call replaces many list_dir round trips.",
                     {"type": "object", "properties": {
                         "pattern": {"type": "string",
@@ -270,11 +297,13 @@ def _find_files_spec(workspace: Workspace) -> ToolSpec:
 
 def _find_symbol_spec(index: TreeSitterIndex) -> ToolSpec:
     return ToolSpec("find_symbol",
-                    "Find where a class or function is defined, using "
+                    "Find where a Python class or function is defined "
+                    "(.py files only), using "
                     "fault-tolerant tree-sitter parsing (works even in "
-                    "files with syntax errors). Matches name or qualified "
+                    "files with syntax errors). Matches an exact short or "
+                    "qualified "
                     "name like 'ClassName.method' and returns "
-                    "(path, line, end_line) for read_file.",
+                    "(path, name, kind, line, end_line) for read_file.",
                     {"type": "object", "properties": {
                         "name": {"type": "string",
                                  "description": "Symbol name (short or "
@@ -288,13 +317,17 @@ def _find_symbol_spec(index: TreeSitterIndex) -> ToolSpec:
 
 def _find_references_spec(index: TreeSitterIndex) -> ToolSpec:
     return ToolSpec("find_references",
-                    "Find all identifier usages of a name across the "
-                    "workspace (tree-sitter based), excluding its "
-                    "definition sites. Returns (path, line, preview) per "
+                    "Find identifier usages of a simple Python name across "
+                    ".py files (tree-sitter based textual match, up to 200 "
+                    "results with a truncated flag), excluding its "
+                    "definition sites. Dotted or qualified names are not "
+                    "resolved. Returns (path, line, preview) per "
                     "reference.",
                     {"type": "object", "properties": {
                         "name": {"type": "string",
-                                 "description": "Identifier to look for"}},
+                                 "description": "Simple identifier to look for "
+                                                "(Python only; dotted names "
+                                                "are not resolved)"}},
                      "required": ["name"]},
                     partial(find_references, index=index))
 
@@ -303,7 +336,8 @@ def _execute_code_spec(executor: ShellExecutor, workspace: Workspace) -> ToolSpe
     return ToolSpec("execute_code",
                     "Write a complete script to the workspace and execute it "
                     "in one step, returning exit code, stdout, and stderr. "
-                    "Supports python (runs via python3), bash (runs via bash), "
+                    "Supports python (runs via python3 by default, "
+                    "AGENT_RUNTIME_PYTHON override), bash (runs via bash), "
                     "r (runs via Rscript), and node (runs via node); the "
                     "interpreter for the chosen language must already be "
                     "installed. Prefer this over run_command whenever the "
@@ -317,7 +351,9 @@ def _execute_code_spec(executor: ShellExecutor, workspace: Workspace) -> ToolSpe
                                  "description": "Complete script content"},
                         "language": {"type": "string", "enum": ["python", "bash", "r", "node"],
                                      "description": "Script language: python "
-                                                    "(python3), bash, r (Rscript), "
+                                                    "(python3 by default, "
+                                                    "AGENT_RUNTIME_PYTHON override), "
+                                                    "bash, r (Rscript), "
                                                     "or node (node). Defaults to "
                                                     "python — pass language "
                                                     "explicitly for anything else",
