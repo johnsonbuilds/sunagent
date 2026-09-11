@@ -149,8 +149,8 @@ class CLIRenderer:
         if (tool == "grep_search" and isinstance(arguments, dict)):
             pattern = arguments.get("pattern")
             return f"$ grep {pattern}"
-        if (tool == "glob_files" and isinstance(arguments, dict)):
-            return f"$ glob {arguments.get('pattern')}"
+        if (tool == "find_files" and isinstance(arguments, dict)):
+            return f"$ find {arguments.get('pattern')}"
         if (tool == "find_symbol" and isinstance(arguments, dict)):
             return f"$ symbol {arguments.get('name')}"
         if (tool == "find_references" and isinstance(arguments, dict)):

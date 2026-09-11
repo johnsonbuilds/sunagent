@@ -2,14 +2,14 @@
 
 - **Status:** draft
 - **Date:** 2026-09-10
-- **Parent harness:** `code-v8`（`code-v7` + `grep_search,glob_files`）
+- **Parent harness:** `code-v8`（`code-v7` + `grep_search,glob_files`；`glob_files` 已在 `code-v9` 起重命名为 `find_files`）
 - **Trigger:** `eval100-code-v7/v7-2` 分析：`run_command 75% + read_file 20%`，`edit_file/apply_patch` 合计仅 ~4%，`write_file 0`；`apply_patch` 失败模式稳定（`unified-diff path / unterminated block / unexpected arg`），靠改 tool description 无改善（`41% -> 44%`，噪声范围内）。
 
 ## 1. 目标
 
 1. 把 `skills` 从 dormant gene（一直是 `[]`，`harness.py:196` 只做名字校验）变成可加载机制：harness 声明 `skills: [coder]`，运行时解析为文本并注入上下文。
-2. 首个 skill 为 `coder`：针对当前工具集（`run_command/read_file/edit_file/apply_patch/write_file/grep_search/glob_files/read_output`）明确最佳 tool 使用策略，让模型能更高效使用tool,以提高任务成功率。
-3. 可 A/B：`code-v9 = code-v8 + skills+=coder`，只变一个基因，重跑 `eval100` 对比。
+2. 首个 skill 为 `coder`：针对当前工具集（`run_command/read_file/edit_file/apply_patch/write_file/grep_search/find_files/read_output`）明确最佳 tool 使用策略，让模型能更高效使用tool,以提高任务成功率。
+3. 可 A/B：`code-v10 = code-v9 + skills+=coder`，只变一个基因，重跑 `eval100` 对比。（原计划 `code-v9` 名额已让给 `glob_files`→`find_files` 重命名。）
 
 ## 2. Skill 加载机制（最小实现）
 
@@ -21,7 +21,7 @@
 ## 4. `coder` skill 内容草案（v1，只写策略，不写知识）
 
 **Locate（先找再读）：**
-- 找文件用 `glob_files`，不用 `ls/find` via `run_command`；`'*' 跨目录、bare name 全树匹配`，一次顶多次 `list_dir`。
+- 找文件用 `find_files`，不用 `ls/find` via `run_command`；`'*' 跨目录、bare name 全树匹配`，一次顶多次 `list_dir`。
 - 找内容用 `grep_search`，不用 `grep/rg/cat|head` via `run_command`；返回 `(path,line,preview)`，`line` 直接喂 `read_file(offset=...)`；`truncated=true` 时收窄 pattern 或加 `include: '*.py'`，不要翻页 `rg`。
 - `run_command` 只留给：跑测试/复现脚本、真正的 shell 语义（管道/git/build）。
 
@@ -38,8 +38,8 @@
 
 ## 5.  rollout
 
-- `code-v9 ← code-v8`，mutation `skills+=coder`，其余基因不动；`MODEL_ID` 不动。
-- 对比口径沿用 v7/v7-2：`pass` 翻转表 + McNemar、`run_command` 占比是否从 ~75% 下降、`grep/glob` uptake、iteration/token 成本；`±5%` 内判为无效。
+- `code-v10 ← code-v9`，mutation `skills+=coder`，其余基因不动；`MODEL_ID` 不动。
+- 对比口径沿用 v7/v7-2：`pass` 翻转表 + McNemar、`run_command` 占比是否从 ~75% 下降、`grep/find` uptake、iteration/token 成本；`±5%` 内判为无效。
 - 若有效，再做强 LLM 对比（harness 固定在胜者上，只换 `MODEL_ID`，看 `pass/$`）。
 
 ## 6. 风险

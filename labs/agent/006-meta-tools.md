@@ -9,7 +9,7 @@ editing):
 | Tool | Module | One-liner |
 |---|---|---|
 | `grep_search` | `agent_runtime/tools/search.py` | Regex line search with structured `path/line/preview` matches |
-| `glob_files` | `agent_runtime/tools/search.py` | Recursive filename globbing in one call |
+| `find_files` | `agent_runtime/tools/search.py` | Recursive filename matching in one call |
 | `find_symbol` | `agent_runtime/tools/symbols.py` | Tree-sitter symbol lookup (fault-tolerant) |
 | `find_references` | `agent_runtime/tools/symbols.py` | All identifier usages, excluding definitions |
 | `todo_write` | `agent_runtime/tools/todo.py` | Structured task list persisted to `.todo.json` |
@@ -57,7 +57,7 @@ the sandbox without path gymnastics.
 
 `harnesses/meta-v1.yaml` (derived from `code-v3`) enables all twelve
 built-in tools and teaches the model when to reach for each: search
-first (`grep_search` / `glob_files` / `find_symbol`), edit with
+first (`grep_search` / `find_files` / `find_symbol`), edit with
 `apply_patch` for batched changes, plan with `todo_write`, and fall
 back to `execute_code` / `run_command` for execution. Harness genes are
 data, so this behavior profile is diffable and versionable like any
@@ -72,7 +72,7 @@ a plain-text note) and must report file:line:content triples. Verifies
 the model can drive structured search results instead of shelling out
 to `grep`, and that read-only search leaves the workspace untouched.
 
-### CASE 2 — glob_files
+### CASE 2 — find_files
 
 "List all `.py` files" in one call. Compares against `list_dir`, which
 would cost one tool round trip (one LLM turn) per directory level.

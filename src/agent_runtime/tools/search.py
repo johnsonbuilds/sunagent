@@ -1,4 +1,4 @@
-"""Search meta-tools: content search and filename globbing.
+"""Search meta-tools: content search and filename matching.
 
 Both tools walk the workspace once per call through the ``Workspace``
 protocol (so they work locally and in remote environments), skip
@@ -31,8 +31,8 @@ DEFAULT_GREP_RESULTS = 200
 MAX_GREP_RESULTS = 1000
 MATCHES_PER_FILE = 50
 
-DEFAULT_GLOB_RESULTS = 100
-MAX_GLOB_RESULTS = 1000
+DEFAULT_FIND_RESULTS = 100
+MAX_FIND_RESULTS = 1000
 
 
 async def walk_files(workspace: Workspace, path: str = ".",
@@ -62,7 +62,7 @@ async def walk_files(workspace: Workspace, path: str = ".",
 
 
 def _matches_path(path: str, pattern: str) -> bool:
-    """Match a workspace-relative posix path against a glob pattern.
+    """Match a workspace-relative posix path against a wildcard pattern.
 
     ``*`` crosses directory separators (VS Code Ctrl+P behavior), and a
     pattern without a ``/`` also matches against the basename, so both
@@ -90,7 +90,7 @@ async def grep_search(pattern: str, path: str = ".",
     is 1-based and feeds straight into ``read_file(offset=...)``.
     Output is bounded: at most ``max_results`` matches total and
     ``MATCHES_PER_FILE`` per file, with a ``truncated`` flag telling the
-    model to narrow the pattern or set an ``include`` glob.
+    model to narrow the pattern or set an ``include`` wildcard.
     """
     if not pattern:
         raise ValueError("pattern must not be empty")
@@ -155,13 +155,13 @@ async def grep_search(pattern: str, path: str = ".",
     return result
 
 
-async def glob_files(pattern: str, path: str = ".",
-                     max_results: int = DEFAULT_GLOB_RESULTS, *,
+async def find_files(pattern: str, path: str = ".",
+                     max_results: int = DEFAULT_FIND_RESULTS, *,
                      workspace: Workspace | None = None) -> dict[str, Any]:
-    """Find files by glob pattern (e.g. ``**/*.py`` or ``userService*``)."""
+    """Recursively find files whose workspace-relative paths match a wildcard pattern (e.g. ``**/*.py`` or ``userService*``). ``*`` may match across directory separators; patterns without ``/`` also match basenames anywhere under the search directory. Skips common generated and dependency directories."""
     if not pattern:
         raise ValueError("pattern must not be empty")
-    max_results = max(1, min(max_results, MAX_GLOB_RESULTS))
+    max_results = max(1, min(max_results, MAX_FIND_RESULTS))
 
     files = await walk_files(workspace or LocalWorkspace(), path)
     if isinstance(files, dict):
@@ -183,7 +183,7 @@ async def glob_files(pattern: str, path: str = ".",
 
 
 __all__ = [
-    "DEFAULT_GREP_RESULTS", "DEFAULT_GLOB_RESULTS", "MATCHES_PER_FILE",
-    "MAX_FILE_BYTES", "MAX_GREP_RESULTS", "MAX_GLOB_RESULTS", "PREVIEW_CHARS",
-    "SKIP_DIRS", "glob_files", "grep_search", "walk_files",
+    "DEFAULT_GREP_RESULTS", "DEFAULT_FIND_RESULTS", "MATCHES_PER_FILE",
+    "MAX_FILE_BYTES", "MAX_GREP_RESULTS", "MAX_FIND_RESULTS", "PREVIEW_CHARS",
+    "SKIP_DIRS", "find_files", "grep_search", "walk_files",
 ]

@@ -14,7 +14,7 @@ from agent_runtime.execution.local import LocalShellExecutor, LocalWorkspace
 from .code import execute_code
 from .files import DEFAULT_READ_LIMIT, edit_file, list_dir, read_file, read_output, write_file
 from .patch import apply_patch
-from .search import DEFAULT_GREP_RESULTS, DEFAULT_GLOB_RESULTS, glob_files, grep_search
+from .search import DEFAULT_GREP_RESULTS, DEFAULT_FIND_RESULTS, find_files, grep_search
 from .shell import run_command
 from .symbols import TreeSitterIndex, find_references, find_symbol
 
@@ -234,7 +234,7 @@ def _grep_search_spec(workspace: Workspace) -> ToolSpec:
                                  "description": "Directory to search",
                                  "default": "."},
                         "include": {"type": "string",
-                                    "description": "Glob for file names, "
+                                    "description": "Wildcard for file names, "
                                                    "e.g. '*.py'"},
                         "ignore_case": {"type": "boolean", "default": False},
                         "max_results": {"type": "integer",
@@ -244,23 +244,28 @@ def _grep_search_spec(workspace: Workspace) -> ToolSpec:
                     partial(grep_search, workspace=workspace))
 
 
-def _glob_files_spec(workspace: Workspace) -> ToolSpec:
-    return ToolSpec("glob_files",
-                    "Find files by glob pattern (e.g. '**/*.py' or "
-                    "'userService*'); '*' also matches across directory "
-                    "separators and bare names match anywhere in the tree. "
+def _find_files_spec(workspace: Workspace) -> ToolSpec:
+    return ToolSpec("find_files",
+                    "Recursively find files whose workspace-relative paths "
+                    "match a wildcard pattern (e.g. '**/*.py' or "
+                    "'userService*'); '*' may match across directory "
+                    "separators and patterns without '/' also match "
+                    "basenames anywhere under the search directory. "
+                    "Skips common generated and dependency directories. "
                     "One call replaces many list_dir round trips.",
                     {"type": "object", "properties": {
                         "pattern": {"type": "string",
-                                    "description": "Glob pattern"},
+                                    "description": "Wildcard pattern matched "
+                                                   "against workspace-relative "
+                                                   "file paths"},
                         "path": {"type": "string",
                                  "description": "Directory to search",
                                  "default": "."},
                         "max_results": {"type": "integer",
                                         "description": "Maximum paths",
-                                        "default": DEFAULT_GLOB_RESULTS}},
+                                        "default": DEFAULT_FIND_RESULTS}},
                      "required": ["pattern"]},
-                    partial(glob_files, workspace=workspace))
+                    partial(find_files, workspace=workspace))
 
 
 def _find_symbol_spec(index: TreeSitterIndex) -> ToolSpec:
@@ -342,7 +347,7 @@ def builtin_tool_specs(executor: ShellExecutor | None = None,
         _edit_file_spec(file_workspace),
         _apply_patch_spec(file_workspace),
         _grep_search_spec(file_workspace),
-        _glob_files_spec(file_workspace),
+        _find_files_spec(file_workspace),
         _find_symbol_spec(symbol_index),
         _find_references_spec(symbol_index),
         _execute_code_spec(shell_executor, file_workspace),

@@ -85,10 +85,10 @@ echo
 fi
 
 if [[ "$CASE_NO" == "2" || "$CASE_NO" == "0" ]]; then
-echo "===== CASE 2: glob_files — 模型一次调用找全 .py 文件 ====="
+echo "===== CASE 2: find_files — 模型一次调用找全 .py 文件 ====="
 fresh_sandbox
 before=$(snapshot)
-agent "用 glob_files 工具找出工作区内所有 .py 文件的路径，并报告总数和完整清单。不要用 find/ls 命令。" trace-2-glob
+agent "用 find_files 工具找出工作区内所有 .py 文件的路径，并报告总数和完整清单。不要用 find/ls 命令。" trace-2-find
 check "沙盒未被修改" '[[ "$(snapshot)" == "$before" ]]'
 echo
 fi

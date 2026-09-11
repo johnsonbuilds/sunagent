@@ -10,7 +10,7 @@ from agent_runtime.execution.local import LocalWorkspace
 from agent_runtime.tools.tools import create_default_registry
 
 
-SEARCH_TOOLS = ["write_file", "read_file", "grep_search", "glob_files"]
+SEARCH_TOOLS = ["write_file", "read_file", "grep_search", "find_files"]
 
 
 def make_registry(directory: str):
@@ -106,7 +106,7 @@ class GrepSearchTests(unittest.IsolatedAsyncioTestCase):
                 await registry.execute("grep_search", {"pattern": "[unclosed"})
 
 
-class GlobFilesTests(unittest.IsolatedAsyncioTestCase):
+class FindFilesTests(unittest.IsolatedAsyncioTestCase):
     async def test_recursive_pattern_matches_nested_and_root(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             registry = make_registry(directory)
@@ -114,7 +114,7 @@ class GlobFilesTests(unittest.IsolatedAsyncioTestCase):
                 await registry.execute("write_file", {"path": path,
                                                       "content": "x"})
 
-            result = await registry.execute("glob_files", {
+            result = await registry.execute("find_files", {
                 "pattern": "**/*.py"})
 
         self.assertEqual(result["matches"], ["app.py", "src/models/user.py"])
@@ -127,7 +127,7 @@ class GlobFilesTests(unittest.IsolatedAsyncioTestCase):
                 await registry.execute("write_file", {"path": path,
                                                       "content": "x"})
 
-            result = await registry.execute("glob_files", {"pattern": "*.py"})
+            result = await registry.execute("find_files", {"pattern": "*.py"})
 
         self.assertEqual(result["matches"], ["a.py", "deep/nested/b.py"])
 
@@ -137,7 +137,7 @@ class GlobFilesTests(unittest.IsolatedAsyncioTestCase):
             await registry.execute("write_file", {
                 "path": "src/models/user.py", "content": "x"})
 
-            result = await registry.execute("glob_files", {
+            result = await registry.execute("find_files", {
                 "pattern": "user.py"})
 
         self.assertEqual(result["matches"], ["src/models/user.py"])
@@ -149,7 +149,7 @@ class GlobFilesTests(unittest.IsolatedAsyncioTestCase):
                 await registry.execute("write_file", {
                     "path": f"f{index}.txt", "content": "x"})
 
-            result = await registry.execute("glob_files", {
+            result = await registry.execute("find_files", {
                 "pattern": "*.txt", "max_results": 2})
 
         self.assertEqual(result["match_count"], 2)
