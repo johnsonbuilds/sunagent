@@ -1,0 +1,50 @@
+id: code-v10
+parent: code-v9
+mutation: 'verification.mode: off->return_contract'
+reason: 'require structured return (solution_description/evidence/command_to_verify) at the finish boundary: shape-check plus retry, no test execution; model authors the verify command per task so the gate stays generic'
+prompt:
+  system: ''
+  iteration_limit_notice: Iteration limit reached. Summarize the progress and give
+    the best possible final answer. Do not call tools.
+tools:
+  enabled:
+  - run_command
+  - read_file
+  - apply_patch
+  - edit_file
+  - write_file
+  - grep_search
+  - find_files
+control:
+  max_iterations: 50
+memory:
+  strategy: llm_summary
+recovery:
+  tool_error: feed_error_and_continue
+  tool_error_max_retries: 3
+  llm_errors:
+    provider_error:
+      max_retries: 0
+      backoff: exponential
+      base_delay: 0.5
+    stream_empty:
+      max_retries: 2
+      backoff: exponential
+      base_delay: 0.5
+    stream_idle_timeout:
+      max_retries: 2
+      backoff: exponential
+      base_delay: 0.5
+    stream_truncated:
+      max_retries: 2
+      backoff: exponential
+      base_delay: 0.5
+verification:
+  enabled: true
+  mode: return_contract
+  require:
+  - solution_description
+  - evidence
+  - command_to_verify
+  rerun_declared_command: false
+skills: []

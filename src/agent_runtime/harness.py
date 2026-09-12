@@ -171,7 +171,27 @@ class RecoveryGenome:
 
 @dataclass(frozen=True)
 class VerificationGenome:
+    """Return-contract gate enforced at the turn boundary, not in the loop.
+
+    Mirrors the labs-OO-Agents BenchAgent pattern (structured TaskResult):
+    the model declares ``solution_description / evidence / command_to_verify``
+    as free text; the harness only checks *shape* (field present + minimal
+    content). The declared command is model-authored per task, so the gate
+    stays generic across SWE-bench / terminal-bench. ``rerun_declared_command``
+    is reserved for a follow-up gene (re-execute the declared command once);
+    v10 keeps it False: shape-check + retry only, no gold-test execution.
+    """
+
     enabled: bool = False
+    mode: str = "off"
+    require: tuple[str, ...] = ()
+    rerun_declared_command: bool = False
+
+
+VERIFICATION_MODES: tuple[str, ...] = ("off", "return_contract")
+
+DEFAULT_VERIFICATION_REQUIRE: tuple[str, ...] = (
+    "solution_description", "evidence", "command_to_verify")
 
 
 def _hash_genes(genes: Mapping[str, Any]) -> str:
@@ -403,11 +423,40 @@ def _verification_genome(data: Mapping[str, Any]) -> VerificationGenome:
     section = data.get("verification") or {}
     if not isinstance(section, Mapping):
         raise HarnessError("verification must be a mapping")
-    _check_keys(section, {"enabled"}, "verification")
+    _check_keys(section, {"enabled", "mode", "require",
+                          "rerun_declared_command"}, "verification")
     enabled = section.get("enabled", False)
     if not isinstance(enabled, bool):
         raise HarnessError("verification.enabled must be a boolean")
-    return VerificationGenome(enabled=enabled)
+    mode = section.get("mode", "off")
+    if not isinstance(mode, str) or mode not in VERIFICATION_MODES:
+        raise HarnessError(
+            f"verification.mode must be one of {list(VERIFICATION_MODES)}, "
+            f"got {mode!r}")
+    require_raw = section.get("require", [])
+    if require_raw is None:
+        require_raw = []
+    if not isinstance(require_raw, (list, tuple)):
+        raise HarnessError("verification.require must be a list")
+    require: list[str] = []
+    for item in require_raw:
+        if not isinstance(item, str) or not item.strip():
+            raise HarnessError(
+                "verification.require entries must be non-empty text")
+        require.append(item.strip())
+    rerun = section.get("rerun_declared_command", False)
+    if not isinstance(rerun, bool):
+        raise HarnessError(
+            "verification.rerun_declared_command must be a boolean")
+    if mode == "return_contract" and not require:
+        require = list(DEFAULT_VERIFICATION_REQUIRE)
+    if rerun and mode != "return_contract":
+        raise HarnessError(
+            "verification.rerun_declared_command requires "
+            "verification.mode=return_contract")
+    return VerificationGenome(enabled=enabled, mode=mode,
+                              require=tuple(require),
+                              rerun_declared_command=rerun)
 
 
 def from_dict(data: Mapping[str, Any]) -> HarnessSpec:
@@ -610,7 +659,8 @@ if __name__ == "__main__":
 __all__ = [
     "DEFAULT_HARNESS", "HarnessError", "HarnessSpec", "ITERATION_LIMIT_NOTICE",
     "PromptGenome", "ToolGenome", "ControlGenome", "MemoryGenome",
-    "RecoveryGenome", "VerificationGenome", "TOOL_ERROR_STRATEGIES",
+    "RecoveryGenome", "VerificationGenome", "DEFAULT_VERIFICATION_REQUIRE",
+    "VERIFICATION_MODES", "TOOL_ERROR_STRATEGIES",
     "LLM_RETRY_CATEGORIES", "LLMRetryPolicy", "BACKOFF_POLICIES",
     "MEMORY_STRATEGIES", "default_harness", "feed_error_and_continue",
     "from_dict", "load_harness", "resolve_harness", "_main",

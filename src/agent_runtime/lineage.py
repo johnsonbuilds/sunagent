@@ -264,7 +264,11 @@ def manifest_text(spec: HarnessSpec) -> str:
                 for category, policy in sorted(spec.recovery.llm_errors.items())
             },
         },
-        "verification": {"enabled": spec.verification.enabled},
+        "verification": {"enabled": spec.verification.enabled,
+                         "mode": spec.verification.mode,
+                         "require": list(spec.verification.require),
+                         "rerun_declared_command":
+                             spec.verification.rerun_declared_command},
         "skills": list(spec.skills),
     }
     return yaml.safe_dump(data, sort_keys=False, allow_unicode=True, default_flow_style=False)

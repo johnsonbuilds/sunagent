@@ -36,6 +36,7 @@ from agent_runtime.agent.tool_error_budget import (
     SameToolErrorBudget,
     resolve_max_retries,
 )
+from agent_runtime.agent.verification import contract_nudge, missing_fields
 from agent_runtime.agent.observations import ObservationFormatter
 from agent_runtime.agent.turn_history import (
     Conversation,
@@ -189,6 +190,10 @@ class AgentTurn:
 
             if not tool_calls:
                 answer = response.get("content", "")
+                nudge = self._contract_nudge(answer, iteration)
+                if nudge is not None:
+                    history.append({"role": "user", "content": nudge})
+                    continue
                 logger.debug("agent.final iteration=%d answer_chars=%d",
                              iteration, len(answer))
                 events.emit("agent.completed", iteration, iterations=iteration, answer=answer)
@@ -282,9 +287,43 @@ class AgentTurn:
             agent_meta.update(stage="llm", error=error)
             raise _TurnFailure(error) from exc
         answer = response.get("content", "")
+        self._emit_contract_outcome(answer, iteration)
         logger.debug("agent.final iteration=%d answer_chars=%d", iteration, len(answer))
         events.emit("agent.completed", iteration, iterations=iteration, answer=answer)
         return answer
+
+    def _contract_nudge(self, answer: str, iteration: int) -> str | None:
+        """Enforce the verification return-contract at the finish boundary.
+
+        Returns a retry nudge when the harness requires a structured
+        return (labs-OO-Agents TaskResult pattern) and the answer lacks
+        fields; ``None`` means the answer may be accepted. The check costs
+        one iteration of the existing budget and never executes tests, so
+        it stays generic across tasks and cannot leak gold tests.
+        """
+        verification = self.harness.verification
+        if verification.mode != "return_contract":
+            return None
+        if iteration >= self.max_iterations:
+            # No budget left for a retry; accept as-is (outcome recorded
+            # on the summary turn instead of forcing an overrun).
+            return None
+        missing = missing_fields(answer, verification.require)
+        if not missing:
+            self.trace.emit("verification.passed", iteration,
+                            missing=[])
+            return None
+        self.trace.emit("verification.failed", iteration, missing=missing)
+        return contract_nudge(missing)
+
+    def _emit_contract_outcome(self, answer: str, iteration: int) -> None:
+        """Record the contract outcome on the budget-exhausted summary turn."""
+        if self.harness.verification.mode != "return_contract":
+            return
+        missing = missing_fields(answer, self.harness.verification.require)
+        self.trace.emit(
+            "verification.passed" if not missing else "verification.failed",
+            iteration, missing=missing)
 
     def _check_error_budget(self, budget: SameToolErrorBudget,
                               iteration: int, tool: Any,
