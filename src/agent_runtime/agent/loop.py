@@ -36,7 +36,7 @@ from agent_runtime.agent.tool_error_budget import (
     SameToolErrorBudget,
     resolve_max_retries,
 )
-from agent_runtime.agent.verification import contract_nudge, missing_fields
+from agent_runtime.agent.verification import check_contract, contract_nudge
 from agent_runtime.agent.observations import ObservationFormatter
 from agent_runtime.agent.turn_history import (
     Conversation,
@@ -190,7 +190,7 @@ class AgentTurn:
 
             if not tool_calls:
                 answer = response.get("content", "")
-                nudge = self._contract_nudge(answer, iteration)
+                nudge = self._contract_nudge(answer, iteration, history.messages)
                 if nudge is not None:
                     history.append({"role": "user", "content": nudge})
                     continue
@@ -287,19 +287,22 @@ class AgentTurn:
             agent_meta.update(stage="llm", error=error)
             raise _TurnFailure(error) from exc
         answer = response.get("content", "")
-        self._emit_contract_outcome(answer, iteration)
+        self._emit_contract_outcome(answer, iteration, history.messages)
         logger.debug("agent.final iteration=%d answer_chars=%d", iteration, len(answer))
         events.emit("agent.completed", iteration, iterations=iteration, answer=answer)
         return answer
 
-    def _contract_nudge(self, answer: str, iteration: int) -> str | None:
+    def _contract_nudge(self, answer: str, iteration: int,
+                          messages: list[dict[str, Any]] | None = None) -> str | None:
         """Enforce the verification return-contract at the finish boundary.
 
         Returns a retry nudge when the harness requires a structured
-        return (labs-OO-Agents TaskResult pattern) and the answer lacks
-        fields; ``None`` means the answer may be accepted. The check costs
-        one iteration of the existing budget and never executes tests, so
-        it stays generic across tasks and cannot leak gold tests.
+        return (labs-OO-Agents TaskResult pattern) and the answer fails
+        shape or grounding; ``None`` means the answer may be accepted.
+        Grounding compares the answer against the trajectory so far
+        (evidence must quote observed output, the declared command must
+        have been run) — generic across tasks, no gold tests involved.
+        The check costs one iteration of the existing budget.
         """
         verification = self.harness.verification
         if verification.mode != "return_contract":
@@ -308,22 +311,24 @@ class AgentTurn:
             # No budget left for a retry; accept as-is (outcome recorded
             # on the summary turn instead of forcing an overrun).
             return None
-        missing = missing_fields(answer, verification.require)
-        if not missing:
+        gaps = check_contract(answer, verification.require, messages)
+        if not gaps:
             self.trace.emit("verification.passed", iteration,
                             missing=[])
             return None
-        self.trace.emit("verification.failed", iteration, missing=missing)
-        return contract_nudge(missing)
+        self.trace.emit("verification.failed", iteration,
+                        missing=sorted(gaps), reasons=gaps)
+        return contract_nudge(gaps)
 
-    def _emit_contract_outcome(self, answer: str, iteration: int) -> None:
+    def _emit_contract_outcome(self, answer: str, iteration: int,
+                               messages: list[dict[str, Any]] | None = None) -> None:
         """Record the contract outcome on the budget-exhausted summary turn."""
         if self.harness.verification.mode != "return_contract":
             return
-        missing = missing_fields(answer, self.harness.verification.require)
+        gaps = check_contract(answer, self.harness.verification.require, messages)
         self.trace.emit(
-            "verification.passed" if not missing else "verification.failed",
-            iteration, missing=missing)
+            "verification.passed" if not gaps else "verification.failed",
+            iteration, missing=sorted(gaps), reasons=gaps)
 
     def _check_error_budget(self, budget: SameToolErrorBudget,
                               iteration: int, tool: Any,

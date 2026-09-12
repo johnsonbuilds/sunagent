@@ -2,18 +2,43 @@
 
 labs-OO-Agents BenchAgent pattern adapted to a free-text turn:
 the model must declare solution_description / evidence / command_to_verify
-in its final answer. The harness checks *shape only* — field present plus
-minimal content — and never executes gold tests here. The declared command
-is model-authored per task, so the gate stays generic across benchmarks.
+in its final answer. The harness checks *shape* (field present plus minimal
+content) and *grounding* (evidence quotes observed tool output; the declared
+command was actually executed). It never executes gold tests here. The
+declared command is model-authored per task, so the gate stays generic
+across benchmarks; the finish instruction itself lives in the prompt gene
+(harness ``prompt.system``), not here.
 """
 
 from __future__ import annotations
 
 import json
 import re
-from typing import Any
+from typing import Any, Mapping
 
 MIN_FIELD_CHARS = 20
+MIN_COMMAND_CHARS = 3
+# Evidence must quote this many verbatim chars from one observation, or
+# share this many significant tokens with observed outputs.
+QUOTE_CHARS = 16
+TOKEN_OVERLAP = 2
+
+# Generic boilerplate that proves nothing when shared between evidence and
+# outputs; grounding requires *specific* overlap (names, numbers, lines).
+_STOPWORDS = frozenset({
+    "with", "from", "that", "this", "have", "were", "your", "observed",
+    "output", "shell", "command", "result", "results", "evidence",
+    "tests", "test", "passed", "failed", "passing", "failing", "success",
+    "successful", "error", "errors", "failure", "failures",
+})
+
+_TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9_\-\.]{4,}")
+
+
+def _field_min_chars(field: str) -> int:
+    # A legit verify command can be short ("pytest -q"); descriptions and
+    # evidence may not.
+    return MIN_COMMAND_CHARS if field.lower() == "command_to_verify" else MIN_FIELD_CHARS
 
 
 def _parse_json_object(answer: str) -> dict[str, Any] | None:
@@ -39,48 +64,166 @@ def _section_content(answer_lower: str, field: str) -> str:
     idx = answer_lower.find(field.lower())
     if idx < 0:
         return ""
-    return answer_lower[idx + len(field):idx + len(field) + 500]
+    return answer_lower[idx + len(field):idx + len(field) + 800]
 
 
-def missing_fields(answer: str, require: tuple[str, ...] | list[str]) -> list[str]:
-    """Fields whose key is absent or whose section is too thin to be evidence."""
-    if not require:
-        return []
+def extract_field_value(answer: str, field: str) -> str:
+    """Best-effort value of one contract field (JSON-aware, else section)."""
     answer = answer or ""
     parsed = _parse_json_object(answer)
     if parsed is not None:
         lowered = {str(key).lower(): str(value) for key, value in parsed.items()}
-        missing: list[str] = []
-        for field in require:
-            value = lowered.get(field.lower(), "")
-            if len(value.strip()) < MIN_FIELD_CHARS:
-                missing.append(field)
-        return missing
-    answer_lower = answer.lower()
+        return lowered.get(field.lower(), "").strip()
+    content = _section_content(answer.lower(), field)
+    return re.sub(r"^[\s:#*\-`\"']+", "", content).strip()
+
+
+def missing_fields(answer: str, require: tuple[str, ...] | list[str]) -> list[str]:
+    """Fields whose key is absent or whose section is too thin to count."""
+    if not require:
+        return []
     missing = []
     for field in require:
-        content = _section_content(answer_lower, field)
-        if not content:
-            missing.append(field)
-            continue
-        # Strip the key's own separators (":", "#", "*", whitespace) so a
-        # bare "evidence:" header with nothing after it does not pass.
-        stripped = re.sub(r"^[\s:#*\-`\"']+", "", content).strip()
-        if len(stripped) < MIN_FIELD_CHARS:
+        if len(extract_field_value(answer, field)) < _field_min_chars(field):
             missing.append(field)
     return missing
 
 
-def contract_nudge(missing: list[str]) -> str:
-    """User-channel retry message listing the absent contract fields."""
-    fields = ", ".join(missing)
+def contract_nudge(gaps: dict[str, str] | list[str]) -> str:
+    """User-channel retry message naming each failing contract field + why."""
+    if isinstance(gaps, dict):
+        fields = "; ".join(f"{field} ({reason})" for field, reason in gaps.items())
+    else:
+        fields = ", ".join(gaps)
     return (
-        f"Your final answer is missing the return contract fields: {fields}. "
+        f"Your final answer fails the return contract: {fields}. "
         "Reply with all required fields: solution_description (root cause + fix), "
-        "evidence (actual shell output you observed, not a guess), "
-        "command_to_verify (a shell command that exits 0 on success). "
-        "Do not call further tools unless you need fresh evidence first."
+        "evidence (quote the actual shell output you observed: test names, counts, "
+        "key lines — do not invent results), "
+        "command_to_verify (one shell command you already ran that exits 0 on success). "
+        "Run the tests first if you have not; then restate the answer."
     )
 
 
-__all__ = ["MIN_FIELD_CHARS", "missing_fields", "contract_nudge"]
+def _significant_tokens(text: str) -> set[str]:
+    return {tok for tok in _TOKEN_RE.findall(text.lower()) if tok not in _STOPWORDS}
+
+
+def _normalize(text: str) -> str:
+    return re.sub(r"\s+", " ", text.lower()).strip()
+
+
+def executed_commands(messages: list[Mapping[str, Any]]) -> list[str]:
+    """``run_command`` command strings issued so far (canonical history)."""
+    commands: list[str] = []
+    for message in messages or []:
+        if not isinstance(message, Mapping) or message.get("role") != "assistant":
+            continue
+        for call in message.get("tool_calls") or []:
+            if not isinstance(call, Mapping):
+                continue
+            function = call.get("function")
+            if not isinstance(function, Mapping) or function.get("name") != "run_command":
+                continue
+            try:
+                args = json.loads(function.get("arguments") or "{}")
+            except (TypeError, json.JSONDecodeError, ValueError):
+                continue
+            command = args.get("command") if isinstance(args, dict) else None
+            if isinstance(command, str) and command.strip():
+                commands.append(command.strip())
+    return commands
+
+
+def observation_texts(messages: list[Mapping[str, Any]]) -> list[str]:
+    """Rendered ``role: tool`` observation contents seen so far."""
+    texts: list[str] = []
+    for message in messages or []:
+        if not isinstance(message, Mapping) or message.get("role") != "tool":
+            continue
+        content = message.get("content")
+        if isinstance(content, str) and content.strip():
+            texts.append(content)
+    return texts
+
+
+def _evidence_grounded(evidence: str, observations: list[str]) -> bool:
+    """Evidence quotes (verbatim span) or shares specific tokens with output."""
+    norm_evidence = _normalize(evidence)
+    if len(norm_evidence) < MIN_FIELD_CHARS:
+        return False
+    norm_observations = [_normalize(obs) for obs in observations
+                         if len(_normalize(obs)) >= QUOTE_CHARS]
+    # Short outputs quoted in full count immediately.
+    if any(obs in norm_evidence for obs in norm_observations if len(obs) <= 64):
+        return True
+    # Otherwise any verbatim quote of QUOTE_CHARS from the evidence found
+    # in output (step 4 guarantees a window lands inside any quoted run).
+    for i in range(0, len(norm_evidence) - QUOTE_CHARS + 1, 4):
+        span = norm_evidence[i:i + QUOTE_CHARS]
+        if any(span in obs for obs in norm_observations):
+            return True
+    obs_tokens: set[str] = set()
+    for obs in observations:
+        obs_tokens |= _significant_tokens(obs)
+    if not obs_tokens:
+        return False
+    return len(_significant_tokens(evidence) & obs_tokens) >= TOKEN_OVERLAP
+
+
+def _command_grounded(command: str, executed: list[str]) -> bool:
+    """Declared command was actually run (substring or program + detail)."""
+    norm = _normalize(command)
+    if len(norm) < MIN_COMMAND_CHARS:
+        return False
+    norm_executed = [_normalize(cmd) for cmd in executed]
+    for cmd in norm_executed:
+        if norm in cmd or cmd in norm:
+            return True
+    program = norm.split()[0] if norm.split() else ""
+    wanted = _significant_tokens(norm)
+    for cmd in norm_executed:
+        cmd_tokens = _significant_tokens(cmd)
+        if program and program in cmd.split():
+            # Tiny commands ("pytest -q") pass on the program; detailed
+            # ones must share detail, or "pytest tests/other.py" would
+            # pass off a "pytest tests/login.py" run.
+            if len(wanted) < 2 or len(wanted & cmd_tokens) >= 2:
+                return True
+    return False
+
+
+def check_contract(answer: str, require: tuple[str, ...] | list[str],
+                   messages: list[Mapping[str, Any]] | None = None) -> dict[str, str]:
+    """Full gate: shape per field plus evidence/command grounding.
+
+    Returns ``{field: reason}`` for every failing field; empty means accept.
+    Without trajectory (``messages=None``) only the shape check applies.
+    """
+    gaps: dict[str, str] = {}
+    for field in require or []:
+        if len(extract_field_value(answer, field)) < _field_min_chars(field):
+            gaps[field] = "missing or too short"
+    if messages is None:
+        return gaps
+    if "evidence" in (require or []) and "evidence" not in gaps:
+        observations = observation_texts(messages)
+        if not observations:
+            gaps["evidence"] = "no tool output observed at all — run the tests first"
+        elif not _evidence_grounded(extract_field_value(answer, "evidence"), observations):
+            gaps["evidence"] = ("cites no observed tool output — quote actual lines "
+                                "from a command you ran")
+    if "command_to_verify" in (require or []) and "command_to_verify" not in gaps:
+        executed = executed_commands(messages)
+        if not executed:
+            gaps["command_to_verify"] = "no shell command run yet — run it first"
+        elif not _command_grounded(extract_field_value(answer, "command_to_verify"),
+                                   executed):
+            gaps["command_to_verify"] = ("was never run — run that exact command "
+                                         "before claiming it verifies the fix")
+    return gaps
+
+
+__all__ = ["MIN_FIELD_CHARS", "MIN_COMMAND_CHARS", "missing_fields",
+           "extract_field_value", "executed_commands", "observation_texts",
+           "check_contract", "contract_nudge"]
