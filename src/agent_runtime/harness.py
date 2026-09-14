@@ -175,11 +175,14 @@ class VerificationGenome:
 
     Mirrors the labs-OO-Agents BenchAgent pattern (structured TaskResult):
     the model declares ``solution_description / evidence / command_to_verify``
-    as free text; the harness only checks *shape* (field present + minimal
-    content). The declared command is model-authored per task, so the gate
-    stays generic across SWE-bench / terminal-bench. ``rerun_declared_command``
-    is reserved for a follow-up gene (re-execute the declared command once);
-    v10 keeps it False: shape-check + retry only, no gold-test execution.
+    as free text; the harness checks *shape* (field present + minimal
+    content) plus *grounding* (evidence quotes observed output, the declared
+    command was run, at least one source edit exists). The declared command
+    is model-authored per task, so the gate stays generic across
+    SWE-bench / terminal-bench. When ``rerun_declared_command`` is true
+    (code-v12), a passing answer's declared command is re-executed once
+    via ``run_command``: exit 0 accepts, anything else rejects as a
+    ``command_to_verify`` gap with the rerun output quoted.
     """
 
     enabled: bool = False

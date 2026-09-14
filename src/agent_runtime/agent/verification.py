@@ -4,7 +4,8 @@ labs-OO-Agents BenchAgent pattern adapted to a free-text turn:
 the model must declare solution_description / evidence / command_to_verify
 in its final answer. The harness checks *shape* (field present plus minimal
 content) and *grounding* (evidence quotes observed tool output; the declared
-command was actually executed). It never executes gold tests here. The
+command was actually executed; at least one source edit was made via
+edit_file / apply_patch / write_file). It never executes gold tests here. The
 declared command is model-authored per task, so the gate stays generic
 across benchmarks; the finish instruction itself lives in the prompt gene
 (harness ``prompt.system``), not here.
@@ -25,6 +26,10 @@ TOKEN_OVERLAP = 2
 
 # Generic boilerplate that proves nothing when shared between evidence and
 # outputs; grounding requires *specific* overlap (names, numbers, lines).
+# Edit-necessity: a real fix necessarily writes; any attempted source edit
+# via these tools counts (success is not parsed — the rerun gate checks
+# the declared command actually passes).
+EDIT_TOOLS = frozenset({"edit_file", "apply_patch", "write_file"})
 _STOPWORDS = frozenset({
     "with", "from", "that", "this", "have", "were", "your", "observed",
     "output", "shell", "command", "result", "results", "evidence",
@@ -101,6 +106,8 @@ def contract_nudge(gaps: dict[str, str] | list[str]) -> str:
         "evidence (quote the actual shell output you observed: test names, counts, "
         "key lines — do not invent results), "
         "command_to_verify (one shell command you already ran that exits 0 on success). "
+        "A finished fix must include at least one source edit "
+        "(edit_file/apply_patch/write_file). "
         "Run the tests first if you have not; then restate the answer."
     )
 
@@ -133,6 +140,20 @@ def executed_commands(messages: list[Mapping[str, Any]]) -> list[str]:
             if isinstance(command, str) and command.strip():
                 commands.append(command.strip())
     return commands
+
+
+def has_source_edit(messages: list[Mapping[str, Any]] | None) -> bool:
+    """One attempted ``edit_file`` / ``apply_patch`` / ``write_file`` call."""
+    for message in messages or []:
+        if not isinstance(message, Mapping) or message.get("role") != "assistant":
+            continue
+        for call in message.get("tool_calls") or []:
+            if not isinstance(call, Mapping):
+                continue
+            function = call.get("function")
+            if isinstance(function, Mapping) and function.get("name") in EDIT_TOOLS:
+                return True
+    return False
 
 
 def observation_texts(messages: list[Mapping[str, Any]]) -> list[str]:
@@ -195,10 +216,13 @@ def _command_grounded(command: str, executed: list[str]) -> bool:
 
 def check_contract(answer: str, require: tuple[str, ...] | list[str],
                    messages: list[Mapping[str, Any]] | None = None) -> dict[str, str]:
-    """Full gate: shape per field plus evidence/command grounding.
+    """Full gate: shape per field plus evidence/command/edit grounding.
 
     Returns ``{field: reason}`` for every failing field; empty means accept.
     Without trajectory (``messages=None``) only the shape check applies.
+    Edit-necessity rejects edit-less finishes as a ``solution_description``
+    gap: a real fix necessarily writes, so quoting output and naming a
+    command you ran is not enough (psf-1142 / pytest-10051 class).
     """
     gaps: dict[str, str] = {}
     for field in require or []:
@@ -206,6 +230,11 @@ def check_contract(answer: str, require: tuple[str, ...] | list[str],
             gaps[field] = "missing or too short"
     if messages is None:
         return gaps
+    if "solution_description" in (require or []) and "solution_description" not in gaps:
+        if not has_source_edit(messages):
+            gaps["solution_description"] = (
+                "no source edits yet — make a code change with "
+                "edit_file/apply_patch/write_file before finishing")
     if "evidence" in (require or []) and "evidence" not in gaps:
         observations = observation_texts(messages)
         if not observations:
@@ -224,6 +253,6 @@ def check_contract(answer: str, require: tuple[str, ...] | list[str],
     return gaps
 
 
-__all__ = ["MIN_FIELD_CHARS", "MIN_COMMAND_CHARS", "missing_fields",
-           "extract_field_value", "executed_commands", "observation_texts",
-           "check_contract", "contract_nudge"]
+__all__ = ["MIN_FIELD_CHARS", "MIN_COMMAND_CHARS", "EDIT_TOOLS", "missing_fields",
+           "extract_field_value", "executed_commands", "has_source_edit",
+           "observation_texts", "check_contract", "contract_nudge"]

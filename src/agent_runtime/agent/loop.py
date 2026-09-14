@@ -36,7 +36,11 @@ from agent_runtime.agent.tool_error_budget import (
     SameToolErrorBudget,
     resolve_max_retries,
 )
-from agent_runtime.agent.verification import check_contract, contract_nudge
+from agent_runtime.agent.verification import (
+    check_contract,
+    contract_nudge,
+    extract_field_value,
+)
 from agent_runtime.agent.observations import ObservationFormatter
 from agent_runtime.agent.turn_history import (
     Conversation,
@@ -49,6 +53,24 @@ from agent_runtime.tools import ToolExecutor
 from agent_runtime.trace import RunTrace
 
 logger = logging.getLogger(__name__)
+
+_RERUN_OUTPUT_CHARS = 1500
+
+
+def _rerun_outcome(result: Any) -> tuple[bool, Any, str]:
+    """Success flag, exit code, and a truncated output excerpt for a rerun."""
+    if not isinstance(result, Mapping):
+        return False, None, str(result)[:_RERUN_OUTPUT_CHARS]
+    error = result.get("error")
+    exit_code = result.get("exit_code")
+    stdout = result.get("stdout") if isinstance(result.get("stdout"), str) else ""
+    stderr = result.get("stderr") if isinstance(result.get("stderr"), str) else ""
+    output = (f"stdout: {stdout} stderr: {stderr}").strip()
+    if len(output) > _RERUN_OUTPUT_CHARS:
+        output = output[:_RERUN_OUTPUT_CHARS] + "…"
+    if error:
+        return False, exit_code, output or str(error)[:_RERUN_OUTPUT_CHARS]
+    return exit_code == 0, exit_code, output
 
 
 class _TurnFailure(Exception):
@@ -190,7 +212,7 @@ class AgentTurn:
 
             if not tool_calls:
                 answer = response.get("content", "")
-                nudge = self._contract_nudge(answer, iteration, history.messages)
+                nudge = await self._contract_nudge(answer, iteration, history.messages)
                 if nudge is not None:
                     history.append({"role": "user", "content": nudge})
                     continue
@@ -292,8 +314,8 @@ class AgentTurn:
         events.emit("agent.completed", iteration, iterations=iteration, answer=answer)
         return answer
 
-    def _contract_nudge(self, answer: str, iteration: int,
-                          messages: list[dict[str, Any]] | None = None) -> str | None:
+    async def _contract_nudge(self, answer: str, iteration: int,
+                                messages: list[dict[str, Any]] | None = None) -> str | None:
         """Enforce the verification return-contract at the finish boundary.
 
         Returns a retry nudge when the harness requires a structured
@@ -301,7 +323,12 @@ class AgentTurn:
         shape or grounding; ``None`` means the answer may be accepted.
         Grounding compares the answer against the trajectory so far
         (evidence must quote observed output, the declared command must
-        have been run) — generic across tasks, no gold tests involved.
+        have been run, at least one source edit must exist) — generic
+        across tasks, no gold tests involved.
+        When ``verification.rerun_declared_command`` is true and the
+        contract otherwise passes, the declared command is re-executed
+        once via the tool layer: exit 0 accepts, anything else rejects
+        as a ``command_to_verify`` gap with the rerun output quoted.
         The check costs one iteration of the existing budget.
         """
         verification = self.harness.verification
@@ -312,13 +339,53 @@ class AgentTurn:
             # on the summary turn instead of forcing an overrun).
             return None
         gaps = check_contract(answer, verification.require, messages)
-        if not gaps:
+        if gaps:
+            self.trace.emit("verification.failed", iteration,
+                            missing=sorted(gaps), reasons=gaps)
+            return contract_nudge(gaps)
+        if not verification.rerun_declared_command:
             self.trace.emit("verification.passed", iteration,
                             missing=[])
             return None
+        return await self._rerun_declared_command(answer, iteration)
+
+    async def _rerun_declared_command(self, answer: str,
+                                      iteration: int) -> str | None:
+        """Re-execute the declared verify command once; accept only on exit 0."""
+        command = extract_field_value(answer, "command_to_verify")
+        if not command:
+            gaps = {"command_to_verify": "missing or too short"}
+            self.trace.emit("verification.failed", iteration,
+                            missing=sorted(gaps), reasons=gaps)
+            return contract_nudge(gaps)
+        try:
+            result = await self.tools.execute("run_command",
+                                              {"command": command})
+        except Exception as exc:
+            gaps = {"command_to_verify":
+                    f"rerun failed to execute ({exc}); declare a command "
+                    "that runs cleanly before finishing"}
+            self.trace.emit("verification.rerun", iteration, command=command,
+                            success=False, error=str(exc))
+            self.trace.emit("verification.failed", iteration,
+                            missing=sorted(gaps), reasons=gaps)
+            return contract_nudge(gaps)
+        success, exit_code, excerpt = _rerun_outcome(result)
+        self.trace.emit("verification.rerun", iteration, command=command,
+                        success=success, exit_code=exit_code, output=excerpt)
+        if success:
+            self.trace.emit("verification.passed", iteration,
+                            missing=[], reran=True)
+            return None
+        gaps = {"command_to_verify":
+                f"rerun exited {exit_code} — fix the failure, re-run it "
+                "yourself, then restate the answer"}
         self.trace.emit("verification.failed", iteration,
                         missing=sorted(gaps), reasons=gaps)
-        return contract_nudge(gaps)
+        nudge = contract_nudge(gaps)
+        if excerpt:
+            nudge += f" Rerun output of `{command}`: {excerpt}"
+        return nudge
 
     def _emit_contract_outcome(self, answer: str, iteration: int,
                                messages: list[dict[str, Any]] | None = None) -> None:

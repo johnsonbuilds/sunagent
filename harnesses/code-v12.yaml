@@ -1,0 +1,60 @@
+id: code-v12
+parent: code-v11
+mutation: 'verification.rerun_declared_command: false->true + prompt.system advertises edit-necessity/rerun'
+reason: 're-execute the declared verify command once after the contract passes (exit 0 accepts, else reject as command_to_verify with rerun output); grounding now also requires >=1 edit_file/apply_patch/write_file to close the psf-1142/pytest-10051 edit-less class'
+prompt:
+  system: 'When you finish, your final answer must contain exactly three sections:
+    `solution_description` (root cause and what you changed), `evidence` (quote
+    the actual shell output you observed — test names, counts, key lines; do not
+    invent results), `command_to_verify` (one shell command you already ran that
+    exits 0 on success). Example: solution_description: fixed missing URL-encoding
+    in auth.py with quote_plus(). evidence: pytest tests/test_login.py -x passed:
+    5 passed in 1.2s. command_to_verify: pytest tests/test_login.py -x. An answer
+    that cites output you never produced, or a command you never ran, is rejected
+    — run the tests before finishing. You must make at least one source edit
+    (edit_file/apply_patch/write_file) before finishing, and your declared
+    command is re-executed once to confirm it exits 0.'
+  iteration_limit_notice: Iteration limit reached. Summarize the progress and give
+    the best possible final answer. Do not call tools.
+tools:
+  enabled:
+  - run_command
+  - read_file
+  - apply_patch
+  - edit_file
+  - write_file
+  - grep_search
+  - find_files
+control:
+  max_iterations: 50
+memory:
+  strategy: llm_summary
+recovery:
+  tool_error: feed_error_and_continue
+  tool_error_max_retries: 3
+  llm_errors:
+    provider_error:
+      max_retries: 0
+      backoff: exponential
+      base_delay: 0.5
+    stream_empty:
+      max_retries: 2
+      backoff: exponential
+      base_delay: 0.5
+    stream_idle_timeout:
+      max_retries: 2
+      backoff: exponential
+      base_delay: 0.5
+    stream_truncated:
+      max_retries: 2
+      backoff: exponential
+      base_delay: 0.5
+verification:
+  enabled: true
+  mode: return_contract
+  require:
+  - solution_description
+  - evidence
+  - command_to_verify
+  rerun_declared_command: true
+skills: []
