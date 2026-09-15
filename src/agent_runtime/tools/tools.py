@@ -387,7 +387,7 @@ def _submit_result_spec() -> ToolSpec:
     return ToolSpec(
         "submit_result",
         "Declare the task finished with a structured result. Call this tool, "
-        "and only this tool, when the fix is complete and verified. "
+        "and only this tool, when the task is complete and verified. "
         "solution_description states the root cause and what was changed "
         "(at least 20 characters). evidence quotes the actual shell output "
         "observed: test names, counts, key lines — never invent results "
@@ -397,8 +397,7 @@ def _submit_result_spec() -> ToolSpec:
         "bazel test //... — with no file filter). "
         "The declared suite is re-executed once, exactly as originally run, "
         "to confirm every test passes; a failing rerun rejects "
-        "the submission. At least one source-code edit must exist before "
-        "submitting. Plain-text replies cannot finish the task.",
+        "the submission.",
         {"type": "object", "properties": {
             "solution_description": {"type": "string",
                                      "description": "Root cause and fix",

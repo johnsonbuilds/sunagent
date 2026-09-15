@@ -14,8 +14,7 @@ prompt:
     evidence: pytest -q passed: 128 passed in 4.3s.
     command_to_verify: pytest -q. Plain-text replies cannot
     finish the task, and repeated finish attempts without doing work abort it.
-    You must make at least one source edit before submitting,
-    and your declared suite is re-executed once, exactly as you ran it, to
+    Your declared suite is re-executed once, exactly as you ran it, to
     confirm every test passes — a failing rerun rejects the submission, so run
     the full suite yourself first.'
   iteration_limit_notice: Iteration limit reached. Summarize the progress and give
