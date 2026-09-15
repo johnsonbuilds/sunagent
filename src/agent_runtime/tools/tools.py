@@ -368,6 +368,50 @@ def _execute_code_spec(executor: ShellExecutor, workspace: Workspace) -> ToolSpe
                     partial(execute_code, workspace=workspace, executor=executor))
 
 
+async def submit_result(solution_description: str = "",
+                        evidence: str = "",
+                        command_to_verify: str = "") -> dict[str, Any]:
+    """Finish-signal placeholder; the agent loop intercepts this tool.
+
+    Under a ``task_result`` verification harness the loop validates the
+    three parameters (shape, grounding, declared-command rerun) before
+    this handler could ever run. Reaching here means the harness does
+    not honor the tool, so report that instead of pretending to finish.
+    """
+    return {"submitted": False,
+            "hint": ("submit_result is only honored under a task_result "
+                     "verification harness; state your final answer as text.")}
+
+
+def _submit_result_spec() -> ToolSpec:
+    return ToolSpec(
+        "submit_result",
+        "Declare the task finished with a structured result. Call this tool, "
+        "and only this tool, when the fix is complete and verified. "
+        "solution_description states the root cause and what was changed "
+        "(at least 20 characters). evidence quotes the actual shell output "
+        "observed: test names, counts, key lines — never invent results "
+        "(at least 20 characters). command_to_verify is one shell command "
+        "already run that exits 0 on success. The declared command is "
+        "re-executed once to confirm it exits 0; a failing rerun rejects "
+        "the submission. At least one source-code edit must exist before "
+        "submitting. Plain-text replies cannot finish the task.",
+        {"type": "object", "properties": {
+            "solution_description": {"type": "string",
+                                     "description": "Root cause and fix",
+                                     "minLength": 20},
+            "evidence": {"type": "string",
+                         "description": "Quoted shell output observed",
+                         "minLength": 20},
+            "command_to_verify": {"type": "string",
+                                  "description": "Shell command already run, exits 0",
+                                  "minLength": 3}},
+         "required": ["solution_description", "evidence",
+                      "command_to_verify"],
+         "additionalProperties": False},
+        submit_result)
+
+
 def builtin_tool_specs(executor: ShellExecutor | None = None,
                        workspace: Workspace | None = None) -> list[ToolSpec]:
     """Every tool the runtime knows how to build."""
@@ -387,6 +431,7 @@ def builtin_tool_specs(executor: ShellExecutor | None = None,
         _find_symbol_spec(symbol_index),
         _find_references_spec(symbol_index),
         _execute_code_spec(shell_executor, file_workspace),
+        _submit_result_spec(),
     ]
 
 

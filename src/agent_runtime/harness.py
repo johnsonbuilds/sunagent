@@ -181,8 +181,14 @@ class VerificationGenome:
     is model-authored per task, so the gate stays generic across
     SWE-bench / terminal-bench. When ``rerun_declared_command`` is true
     (code-v12), a passing answer's declared command is re-executed once
-    via ``run_command``: exit 0 accepts, anything else rejects as a
-    ``command_to_verify`` gap with the rerun output quoted.
+    via ``run_command``: the canonical history command grounding the
+    declaration runs (never the raw declared string, which may carry
+    fences or trailing prose), exit 0 accepts, anything else rejects as
+    a ``command_to_verify`` gap with the rerun output quoted.
+    ``task_result`` mode (code-v13) moves the declaration into the
+    ``submit_result`` tool: finishing requires one call with all three
+    parameters as typed arguments — no answer-string parsing — while the
+    same shape/grounding/rerun pipeline validates the submission.
     """
 
     enabled: bool = False
@@ -191,7 +197,7 @@ class VerificationGenome:
     rerun_declared_command: bool = False
 
 
-VERIFICATION_MODES: tuple[str, ...] = ("off", "return_contract")
+VERIFICATION_MODES: tuple[str, ...] = ("off", "return_contract", "task_result")
 
 DEFAULT_VERIFICATION_REQUIRE: tuple[str, ...] = (
     "solution_description", "evidence", "command_to_verify")
@@ -451,12 +457,12 @@ def _verification_genome(data: Mapping[str, Any]) -> VerificationGenome:
     if not isinstance(rerun, bool):
         raise HarnessError(
             "verification.rerun_declared_command must be a boolean")
-    if mode == "return_contract" and not require:
+    if mode in ("return_contract", "task_result") and not require:
         require = list(DEFAULT_VERIFICATION_REQUIRE)
-    if rerun and mode != "return_contract":
+    if rerun and mode not in ("return_contract", "task_result"):
         raise HarnessError(
             "verification.rerun_declared_command requires "
-            "verification.mode=return_contract")
+            "verification.mode=return_contract or task_result")
     return VerificationGenome(enabled=enabled, mode=mode,
                               require=tuple(require),
                               rerun_declared_command=rerun)

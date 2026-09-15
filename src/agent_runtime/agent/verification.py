@@ -24,12 +24,17 @@ MIN_COMMAND_CHARS = 3
 QUOTE_CHARS = 16
 TOKEN_OVERLAP = 2
 
-# Generic boilerplate that proves nothing when shared between evidence and
-# outputs; grounding requires *specific* overlap (names, numbers, lines).
+# Canonical submit_result parameters, in contract order. The free-text
+# gate and the submit_result tool share these: a submission is rendered
+# to the three-section answer shape before checking.
+SUBMIT_FIELDS = ("solution_description", "evidence", "command_to_verify")
 # Edit-necessity: a real fix necessarily writes; any attempted source edit
 # via these tools counts (success is not parsed — the rerun gate checks
 # the declared command actually passes).
 EDIT_TOOLS = frozenset({"edit_file", "apply_patch", "write_file"})
+
+# Generic boilerplate that proves nothing when shared between evidence and
+# outputs; grounding requires *specific* overlap (names, numbers, lines).
 _STOPWORDS = frozenset({
     "with", "from", "that", "this", "have", "were", "your", "observed",
     "output", "shell", "command", "result", "results", "evidence",
@@ -109,6 +114,36 @@ def contract_nudge(gaps: dict[str, str] | list[str]) -> str:
         "A finished fix must include at least one source edit "
         "(edit_file/apply_patch/write_file). "
         "Run the tests first if you have not; then restate the answer."
+    )
+
+
+def render_submission(fields: Mapping[str, Any]) -> str:
+    """Render submit_result parameters to the three-section answer shape.
+
+    Lets tool submissions reuse the free-text gate verbatim (shape plus
+    grounding), and keeps the recorded answer in the established format
+    so traces stay comparable across harness modes.
+    """
+    def value(key: str) -> str:
+        raw = fields.get(key, "")
+        return raw if isinstance(raw, str) else str(raw)
+
+    return (f"solution_description: {value('solution_description')}\n"
+            f"evidence: {value('evidence')}\n"
+            f"command_to_verify: {value('command_to_verify')}")
+
+
+def submit_nudge() -> str:
+    """User-channel retry message: finish via the submit_result tool."""
+    return (
+        "To finish, call the submit_result tool (and only that tool) with all "
+        "three parameters: solution_description (root cause + fix), "
+        "evidence (quote the actual shell output you observed: test names, counts, "
+        "key lines — do not invent results), "
+        "command_to_verify (one shell command you already ran that exits 0 on success). "
+        "Plain-text answers cannot finish the task. "
+        "A finished fix must include at least one source edit; "
+        "run the tests first if you have not, then submit."
     )
 
 
@@ -192,26 +227,38 @@ def _evidence_grounded(evidence: str, observations: list[str]) -> bool:
     return len(_significant_tokens(evidence) & obs_tokens) >= TOKEN_OVERLAP
 
 
-def _command_grounded(command: str, executed: list[str]) -> bool:
-    """Declared command was actually run (substring or program + detail)."""
+def match_executed_command(command: str,
+                           executed: list[str]) -> str | None:
+    """The history command grounding the declared one, if any.
+
+    Same rule as the gate (substring or program + detail): the declared
+    string may carry trailing prose or fences from free-text answers, so
+    the rerun executes the canonical history command it matches — clean
+    and with known exit behavior — instead of the raw declared string.
+    """
     norm = _normalize(command)
     if len(norm) < MIN_COMMAND_CHARS:
-        return False
-    norm_executed = [_normalize(cmd) for cmd in executed]
-    for cmd in norm_executed:
-        if norm in cmd or cmd in norm:
-            return True
+        return None
+    norm_executed = [(_normalize(cmd), cmd) for cmd in executed]
+    for norm_cmd, raw in norm_executed:
+        if norm in norm_cmd or norm_cmd in norm:
+            return raw
     program = norm.split()[0] if norm.split() else ""
     wanted = _significant_tokens(norm)
-    for cmd in norm_executed:
-        cmd_tokens = _significant_tokens(cmd)
-        if program and program in cmd.split():
+    for norm_cmd, raw in norm_executed:
+        cmd_tokens = _significant_tokens(norm_cmd)
+        if program and program in norm_cmd.split():
             # Tiny commands ("pytest -q") pass on the program; detailed
             # ones must share detail, or "pytest tests/other.py" would
             # pass off a "pytest tests/login.py" run.
             if len(wanted) < 2 or len(wanted & cmd_tokens) >= 2:
-                return True
-    return False
+                return raw
+    return None
+
+
+def _command_grounded(command: str, executed: list[str]) -> bool:
+    """Declared command was actually run (substring or program + detail)."""
+    return match_executed_command(command, executed) is not None
 
 
 def check_contract(answer: str, require: tuple[str, ...] | list[str],
@@ -253,6 +300,8 @@ def check_contract(answer: str, require: tuple[str, ...] | list[str],
     return gaps
 
 
-__all__ = ["MIN_FIELD_CHARS", "MIN_COMMAND_CHARS", "EDIT_TOOLS", "missing_fields",
-           "extract_field_value", "executed_commands", "has_source_edit",
-           "observation_texts", "check_contract", "contract_nudge"]
+__all__ = ["MIN_FIELD_CHARS", "MIN_COMMAND_CHARS", "EDIT_TOOLS", "SUBMIT_FIELDS",
+           "missing_fields", "extract_field_value", "executed_commands",
+           "has_source_edit", "match_executed_command", "observation_texts",
+           "render_submission", "check_contract", "contract_nudge",
+           "submit_nudge"]

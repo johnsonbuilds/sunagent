@@ -13,7 +13,7 @@ from agent_runtime.tools.tools import create_default_registry
 BUILTIN_TOOLS = ["run_command", "write_file", "read_file", "read_output",
                  "list_dir", "edit_file", "apply_patch", "grep_search",
                  "find_files", "find_symbol", "find_references",
-                 "execute_code"]
+                 "execute_code", "submit_result"]
 
 
 class DefaultRegistryTests(unittest.TestCase):
