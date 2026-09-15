@@ -1,14 +1,14 @@
 """Return-contract gate for the verification gene.
 
-labs-OO-Agents BenchAgent pattern adapted to a free-text turn:
-the model must declare solution_description / evidence / command_to_verify
-in its final answer. The harness checks *shape* (field present plus minimal
-content) and *grounding* (evidence quotes observed tool output; the declared
-command was actually executed; at least one source edit was made via
-edit_file / apply_patch / write_file). It never executes gold tests here. The
-declared command is model-authored per task, so the gate stays generic
+labs-OO-Agents BenchAgent pattern as a typed tool call: the model must
+submit solution_description / evidence / command_to_verify via the
+submit_result tool when finishing. The harness checks *shape* (field
+present plus minimal content) and *grounding* (evidence quotes observed
+tool output; the declared command was actually executed; at least one
+source edit was made via edit_file / apply_patch / write_file). It never executes gold tests here.
+The declared command is model-authored per task, so the gate stays generic
 across benchmarks; the finish instruction itself lives in the prompt gene
-(harness ``prompt.system``), not here.
+(harness ``prompt.system``) and the tool description, not here.
 """
 
 from __future__ import annotations
@@ -51,52 +51,10 @@ def _field_min_chars(field: str) -> int:
     return MIN_COMMAND_CHARS if field.lower() == "command_to_verify" else MIN_FIELD_CHARS
 
 
-def _parse_json_object(answer: str) -> dict[str, Any] | None:
-    """Return the first JSON object found in the answer, if any."""
-    try:
-        data = json.loads(answer)
-        if isinstance(data, dict):
-            return data
-    except (json.JSONDecodeError, ValueError):
-        pass
-    for match in re.finditer(r"\{.*?\}", answer, re.DOTALL):
-        try:
-            data = json.loads(match.group(0))
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if isinstance(data, dict):
-            return data
-    return None
-
-
-def _section_content(answer_lower: str, field: str) -> str:
-    """Text following the field key (up to the next required key or EOF)."""
-    idx = answer_lower.find(field.lower())
-    if idx < 0:
-        return ""
-    return answer_lower[idx + len(field):idx + len(field) + 800]
-
-
-def extract_field_value(answer: str, field: str) -> str:
-    """Best-effort value of one contract field (JSON-aware, else section)."""
-    answer = answer or ""
-    parsed = _parse_json_object(answer)
-    if parsed is not None:
-        lowered = {str(key).lower(): str(value) for key, value in parsed.items()}
-        return lowered.get(field.lower(), "").strip()
-    content = _section_content(answer.lower(), field)
-    return re.sub(r"^[\s:#*\-`\"']+", "", content).strip()
-
-
-def missing_fields(answer: str, require: tuple[str, ...] | list[str]) -> list[str]:
-    """Fields whose key is absent or whose section is too thin to count."""
-    if not require:
-        return []
-    missing = []
-    for field in require:
-        if len(extract_field_value(answer, field)) < _field_min_chars(field):
-            missing.append(field)
-    return missing
+def _field_value(fields: Mapping[str, Any], field: str) -> str:
+    """Typed parameter value (schema guarantees strings; coerce defensively)."""
+    raw = fields.get(field, "") if isinstance(fields, Mapping) else ""
+    return raw if isinstance(raw, str) else str(raw)
 
 
 def contract_nudge(gaps: dict[str, str] | list[str]) -> str:
@@ -106,23 +64,23 @@ def contract_nudge(gaps: dict[str, str] | list[str]) -> str:
     else:
         fields = ", ".join(gaps)
     return (
-        f"Your final answer fails the return contract: {fields}. "
-        "Reply with all required fields: solution_description (root cause + fix), "
+        f"Your submission fails the return contract: {fields}. "
+        "Call submit_result again with all required parameters: "
+        "solution_description (root cause + fix), "
         "evidence (quote the actual shell output you observed: test names, counts, "
         "key lines — do not invent results), "
-        "command_to_verify (one shell command you already ran that exits 0 on success). "
-        "A finished fix must include at least one source edit "
-        "(edit_file/apply_patch/write_file). "
-        "Run the tests first if you have not; then restate the answer."
+        "command_to_verify (the FULL test-suite command for this repository "
+        "that you already ran and that exits 0 — no file filters). "
+        "A finished fix must include at least one source edit. "
+        "Run the full suite first if you have not; then submit again."
     )
 
 
 def render_submission(fields: Mapping[str, Any]) -> str:
     """Render submit_result parameters to the three-section answer shape.
 
-    Lets tool submissions reuse the free-text gate verbatim (shape plus
-    grounding), and keeps the recorded answer in the established format
-    so traces stay comparable across harness modes.
+    The recorded answer keeps the established format so traces stay
+    comparable across harness versions.
     """
     def value(key: str) -> str:
         raw = fields.get(key, "")
@@ -155,9 +113,9 @@ def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text.lower()).strip()
 
 
-def executed_commands(messages: list[Mapping[str, Any]]) -> list[str]:
-    """``run_command`` command strings issued so far (canonical history)."""
-    commands: list[str] = []
+def executed_calls(messages: list[Mapping[str, Any]]) -> list[tuple[str, str | None]]:
+    """``run_command`` (command, cwd) pairs issued so far (canonical history)."""
+    calls: list[tuple[str, str | None]] = []
     for message in messages or []:
         if not isinstance(message, Mapping) or message.get("role") != "assistant":
             continue
@@ -172,9 +130,17 @@ def executed_commands(messages: list[Mapping[str, Any]]) -> list[str]:
             except (TypeError, json.JSONDecodeError, ValueError):
                 continue
             command = args.get("command") if isinstance(args, dict) else None
-            if isinstance(command, str) and command.strip():
-                commands.append(command.strip())
-    return commands
+            if not (isinstance(command, str) and command.strip()):
+                continue
+            cwd = args.get("cwd") if isinstance(args, dict) else None
+            calls.append((command.strip(),
+                          cwd.strip() if isinstance(cwd, str) and cwd.strip() else None))
+    return calls
+
+
+def executed_commands(messages: list[Mapping[str, Any]]) -> list[str]:
+    """``run_command`` command strings issued so far (canonical history)."""
+    return [command for command, _ in executed_calls(messages)]
 
 
 def has_source_edit(messages: list[Mapping[str, Any]] | None) -> bool:
@@ -227,33 +193,44 @@ def _evidence_grounded(evidence: str, observations: list[str]) -> bool:
     return len(_significant_tokens(evidence) & obs_tokens) >= TOKEN_OVERLAP
 
 
-def match_executed_command(command: str,
-                           executed: list[str]) -> str | None:
-    """The history command grounding the declared one, if any.
+def match_executed_call(command: str,
+                          calls: list[tuple[str, str | None]]
+                          ) -> tuple[str, str | None] | None:
+    """The history call grounding the declared command, if any.
 
-    Same rule as the gate (substring or program + detail): the declared
-    string may carry trailing prose or fences from free-text answers, so
-    the rerun executes the canonical history command it matches — clean
-    and with known exit behavior — instead of the raw declared string.
+    Matching rule is exact, then substring, then program + detail. The
+    rerun executes the matched call verbatim — command string and cwd —
+    so it replays what was actually run, exactly as it was run, instead
+    of a re-typed declaration that may carry prose or lose its directory.
     """
     norm = _normalize(command)
     if len(norm) < MIN_COMMAND_CHARS:
         return None
-    norm_executed = [(_normalize(cmd), cmd) for cmd in executed]
-    for norm_cmd, raw in norm_executed:
+    normed = [(_normalize(cmd), cmd, cwd) for cmd, cwd in calls]
+    for norm_cmd, raw, cwd in normed:
+        if norm_cmd == norm:
+            return raw, cwd
+    for norm_cmd, raw, cwd in normed:
         if norm in norm_cmd or norm_cmd in norm:
-            return raw
+            return raw, cwd
     program = norm.split()[0] if norm.split() else ""
     wanted = _significant_tokens(norm)
-    for norm_cmd, raw in norm_executed:
+    for norm_cmd, raw, cwd in normed:
         cmd_tokens = _significant_tokens(norm_cmd)
         if program and program in norm_cmd.split():
             # Tiny commands ("pytest -q") pass on the program; detailed
             # ones must share detail, or "pytest tests/other.py" would
             # pass off a "pytest tests/login.py" run.
             if len(wanted) < 2 or len(wanted & cmd_tokens) >= 2:
-                return raw
+                return raw, cwd
     return None
+
+
+def match_executed_command(command: str,
+                           executed: list[str]) -> str | None:
+    """The history command grounding the declared one, if any."""
+    matched = match_executed_call(command, [(cmd, None) for cmd in executed])
+    return matched[0] if matched is not None else None
 
 
 def _command_grounded(command: str, executed: list[str]) -> bool:
@@ -261,19 +238,23 @@ def _command_grounded(command: str, executed: list[str]) -> bool:
     return match_executed_command(command, executed) is not None
 
 
-def check_contract(answer: str, require: tuple[str, ...] | list[str],
-                   messages: list[Mapping[str, Any]] | None = None) -> dict[str, str]:
-    """Full gate: shape per field plus evidence/command/edit grounding.
+def check_submission(fields: Mapping[str, Any],
+                     require: tuple[str, ...] | list[str],
+                     messages: list[Mapping[str, Any]] | None = None) -> dict[str, str]:
+    """Full gate on typed submit_result parameters: shape plus grounding.
 
     Returns ``{field: reason}`` for every failing field; empty means accept.
     Without trajectory (``messages=None``) only the shape check applies.
     Edit-necessity rejects edit-less finishes as a ``solution_description``
-    gap: a real fix necessarily writes, so quoting output and naming a
-    command you ran is not enough (psf-1142 / pytest-10051 class).
+    gap: a real fix necessarily writes. The declared command must have been
+    run, and — when the harness reruns — must exit 0 on the rerun. Which
+    command counts as the full suite is the model's call per repository
+    (prompt contract); the gate verifies authenticity (run, passing,
+    quoted), never the runner's identity.
     """
     gaps: dict[str, str] = {}
     for field in require or []:
-        if len(extract_field_value(answer, field)) < _field_min_chars(field):
+        if len(_field_value(fields, field).strip()) < _field_min_chars(field):
             gaps[field] = "missing or too short"
     if messages is None:
         return gaps
@@ -286,22 +267,22 @@ def check_contract(answer: str, require: tuple[str, ...] | list[str],
         observations = observation_texts(messages)
         if not observations:
             gaps["evidence"] = "no tool output observed at all — run the tests first"
-        elif not _evidence_grounded(extract_field_value(answer, "evidence"), observations):
+        elif not _evidence_grounded(_field_value(fields, "evidence"), observations):
             gaps["evidence"] = ("cites no observed tool output — quote actual lines "
                                 "from a command you ran")
     if "command_to_verify" in (require or []) and "command_to_verify" not in gaps:
         executed = executed_commands(messages)
+        command = _field_value(fields, "command_to_verify")
         if not executed:
             gaps["command_to_verify"] = "no shell command run yet — run it first"
-        elif not _command_grounded(extract_field_value(answer, "command_to_verify"),
-                                   executed):
+        elif not _command_grounded(command, executed):
             gaps["command_to_verify"] = ("was never run — run that exact command "
-                                         "before claiming it verifies the fix")
+                                          "before claiming it verifies the fix")
     return gaps
 
 
 __all__ = ["MIN_FIELD_CHARS", "MIN_COMMAND_CHARS", "EDIT_TOOLS", "SUBMIT_FIELDS",
-           "missing_fields", "extract_field_value", "executed_commands",
-           "has_source_edit", "match_executed_command", "observation_texts",
-           "render_submission", "check_contract", "contract_nudge",
+           "executed_calls", "executed_commands", "has_source_edit",
+           "match_executed_call", "match_executed_command", "observation_texts",
+           "render_submission", "check_submission", "contract_nudge",
            "submit_nudge"]

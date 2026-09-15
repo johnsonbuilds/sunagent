@@ -146,6 +146,11 @@ class ControlGenome:
     max_iterations: int = 10
     max_observation_chars: int = DEFAULT_MAX_OBSERVATION_CHARS
     spill_preview_chars: int = DEFAULT_SPILL_PREVIEW_CHARS
+    # Consecutive finish attempts rejected without interleaving work
+    # (plain-text finishes, invalid submissions) tolerated before the
+    # turn aborts. 0 disables the fuse (legacy behavior: burn the whole
+    # iteration budget on prose).
+    finish_violation_limit: int = 3
 
 
 @dataclass(frozen=True)
@@ -188,7 +193,14 @@ class VerificationGenome:
     ``task_result`` mode (code-v13) moves the declaration into the
     ``submit_result`` tool: finishing requires one call with all three
     parameters as typed arguments — no answer-string parsing — while the
-    same shape/grounding/rerun pipeline validates the submission.
+    same shape/grounding/rerun pipeline validates the submission. Which
+    command counts as the full suite is the model's call per repository
+    (prompt contract: whatever runner this repo uses, no file filters);
+    the gate verifies authenticity — the command was run, the rerun exits
+    0, the evidence quotes it — never the runner's identity.
+    ``return_contract`` stays parseable so the code-v10..v12 lineage
+    loads, but the runtime no longer accepts text finishes under any
+    enabled mode — those harnesses are retired, not runnable.
     """
 
     enabled: bool = False
@@ -330,10 +342,16 @@ def _control_genome(data: Mapping[str, Any]) -> ControlGenome:
     if not isinstance(section, Mapping):
         raise HarnessError("control must be a mapping")
     _check_keys(section, {"max_iterations", "max_observation_chars",
-                          "spill_preview_chars"}, "control")
+                          "spill_preview_chars", "finish_violation_limit"},
+                "control")
     value = section.get("max_iterations", 10)
     if not isinstance(value, int) or isinstance(value, bool) or value < 1:
         raise HarnessError("control.max_iterations must be an integer >= 1")
+    violation_limit = section.get("finish_violation_limit", 3)
+    if (not isinstance(violation_limit, int)
+            or isinstance(violation_limit, bool) or violation_limit < 0):
+        raise HarnessError(
+            "control.finish_violation_limit must be an integer >= 0")
     return ControlGenome(
         max_iterations=value,
         max_observation_chars=_positive_int(
@@ -341,7 +359,8 @@ def _control_genome(data: Mapping[str, Any]) -> ControlGenome:
             DEFAULT_MAX_OBSERVATION_CHARS),
         spill_preview_chars=_positive_int(
             section.get("spill_preview_chars"), "control.spill_preview_chars",
-            DEFAULT_SPILL_PREVIEW_CHARS))
+            DEFAULT_SPILL_PREVIEW_CHARS),
+        finish_violation_limit=violation_limit)
 
 
 def _memory_genome(data: Mapping[str, Any]) -> MemoryGenome:

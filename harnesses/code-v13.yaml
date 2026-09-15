@@ -1,19 +1,23 @@
 id: code-v13
 parent: code-v12
-mutation: 'verification.mode: return_contract->task_result + tools.enabled: +submit_result + prompt.system rewritten for tool-call submission'
-reason: 'finish via the submit_result tool with typed parameters instead of free-text sections (no answer-string parsing; labs TaskResult pattern); same shape/grounding/rerun pipeline validates the submission, and the rerun executes the canonical history command grounding the declaration'
+mutation: 'verification.mode: return_contract->task_result + tools.enabled: +submit_result + prompt.system rewritten for tool-call submission + finish-violation fuse'
+reason: 'finish via the submit_result tool with typed parameters instead of free-text sections (no answer-string parsing; labs TaskResult pattern); same shape/grounding/rerun pipeline validates the submission, the rerun replays the matched history call verbatim (command+cwd, 600s timeout), the model declares this repo FULL suite command itself (no harness runner list), and consecutive finish violations abort the turn instead of burning budget'
 prompt:
   system: 'Finish by calling the `submit_result` tool — and only that tool —
     with exactly three parameters: `solution_description` (root cause and what
     you changed), `evidence` (quote the actual shell output you observed — test
-    names, counts, key lines; do not invent results), `command_to_verify` (one
-    shell command you already ran that exits 0 on success). Example:
+    names, counts, key lines; do not invent results), `command_to_verify` (the
+    FULL test-suite command for this repository that you already ran and that
+    exits 0 — whatever runner this repo uses: pytest -q, npm test, go test ./...,
+    bazel test //..., with no file filter). Example:
     solution_description: fixed missing URL-encoding in auth.py with quote_plus().
-    evidence: pytest tests/test_login.py -x passed: 5 passed in 1.2s.
-    command_to_verify: pytest tests/test_login.py -x. Plain-text replies cannot
-    finish the task. You must make at least one source edit before submitting,
-    and your declared command is re-executed once to confirm it exits 0 — a
-    failing rerun rejects the submission, so re-run it yourself first.'
+    evidence: pytest -q passed: 128 passed in 4.3s.
+    command_to_verify: pytest -q. Plain-text replies cannot
+    finish the task, and repeated finish attempts without doing work abort it.
+    You must make at least one source edit before submitting,
+    and your declared suite is re-executed once, exactly as you ran it, to
+    confirm every test passes — a failing rerun rejects the submission, so run
+    the full suite yourself first.'
   iteration_limit_notice: Iteration limit reached. Summarize the progress and give
     the best possible final answer. Do not call tools.
 tools:
@@ -28,6 +32,7 @@ tools:
   - submit_result
 control:
   max_iterations: 50
+  finish_violation_limit: 3
 memory:
   strategy: llm_summary
 recovery:

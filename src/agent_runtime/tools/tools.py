@@ -391,9 +391,12 @@ def _submit_result_spec() -> ToolSpec:
         "solution_description states the root cause and what was changed "
         "(at least 20 characters). evidence quotes the actual shell output "
         "observed: test names, counts, key lines — never invent results "
-        "(at least 20 characters). command_to_verify is one shell command "
-        "already run that exits 0 on success. The declared command is "
-        "re-executed once to confirm it exits 0; a failing rerun rejects "
+        "(at least 20 characters). command_to_verify is the FULL test-suite "
+        "command for this repository, already run, that exits 0 on success "
+        "(whatever runner this repo uses — pytest, npm test, go test, "
+        "bazel test //... — with no file filter). "
+        "The declared suite is re-executed once, exactly as originally run, "
+        "to confirm every test passes; a failing rerun rejects "
         "the submission. At least one source-code edit must exist before "
         "submitting. Plain-text replies cannot finish the task.",
         {"type": "object", "properties": {
@@ -404,10 +407,10 @@ def _submit_result_spec() -> ToolSpec:
                          "description": "Quoted shell output observed",
                          "minLength": 20},
             "command_to_verify": {"type": "string",
-                                  "description": "Shell command already run, exits 0",
+                                  "description": "Full test-suite command "
+                                                 "already run, exits 0",
                                   "minLength": 3}},
-         "required": ["solution_description", "evidence",
-                      "command_to_verify"],
+         "required": ["solution_description", "evidence"],
          "additionalProperties": False},
         submit_result)
 
