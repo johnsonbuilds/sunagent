@@ -9,10 +9,13 @@ prompt:
     names, counts, key lines; do not invent results), `command_to_verify` (the
     FULL test-suite command for this repository that you already ran and that
     exits 0 — whatever runner this repo uses: pytest -q, npm test, go test ./...,
-    bazel test //..., with no file filter). Example:
+    bazel test //..., with no file filter — declared exactly as you ran it,
+    including any leading cd). Example:
     solution_description: fixed missing URL-encoding in auth.py with quote_plus().
     evidence: pytest -q passed: 128 passed in 4.3s.
-    command_to_verify: pytest -q. Plain-text replies cannot
+    command_to_verify: cd /testbed && pytest -q. Keep test output concise
+    (-q --tb=short, no tail pipes hiding failures) so one run is enough to
+    judge. Plain-text replies cannot
     finish the task, and repeated finish attempts without doing work abort it.
     Your declared suite is re-executed once, exactly as you ran it, to
     confirm every test passes — a failing rerun rejects the submission, so run

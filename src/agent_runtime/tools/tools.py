@@ -394,7 +394,8 @@ def _submit_result_spec() -> ToolSpec:
         "(at least 20 characters). command_to_verify is the FULL test-suite "
         "command for this repository, already run, that exits 0 on success "
         "(whatever runner this repo uses — pytest, npm test, go test, "
-        "bazel test //... — with no file filter). "
+        "bazel test //... — with no file filter). Declare it exactly as "
+        "you ran it, including any leading cd. "
         "The declared suite is re-executed once, exactly as originally run, "
         "to confirm every test passes; a failing rerun rejects "
         "the submission.",
