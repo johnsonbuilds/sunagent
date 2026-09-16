@@ -1,7 +1,7 @@
 id: code-v13
 parent: code-v12
 mutation: 'verification.mode: return_contract->task_result + tools.enabled: +submit_result + prompt.system rewritten for tool-call submission + finish-violation fuse + incremental-verify workflow'
-reason: 'finish via the submit_result tool with typed parameters instead of free-text sections (no answer-string parsing; labs TaskResult pattern); same shape/grounding/rerun pipeline validates the submission, the rerun replays the matched history call verbatim (command+cwd, 600s timeout), the model declares this repo FULL suite command itself (no harness runner list), and consecutive finish violations abort the turn instead of burning budget'
+reason: 'finish via the submit_result tool with typed parameters instead of free-text sections (no answer-string parsing; labs TaskResult pattern); same shape/grounding pipeline validates the submission, a declared command is always re-executed verbatim (600s timeout), the model declares this repo FULL suite command itself (no harness runner list), and consecutive finish violations abort the turn instead of burning budget'
 prompt:
   system: 'Finish by calling the `submit_result` tool — and only that tool —
     with exactly three parameters: `solution_description` (root cause and what
@@ -19,8 +19,8 @@ prompt:
     to your change first (find them yourself by exploring the repo), and
     run the FULL suite once before submitting. Plain-text replies cannot
     finish the task, and repeated finish attempts without doing work abort it.
-    Your declared suite is re-executed once, exactly as you ran it, to
-    confirm every test passes — a failing rerun rejects the submission, so run
+    Your declared suite is re-executed verbatim once to confirm every test
+    passes — a failing rerun rejects the submission, so run
     the full suite yourself first.'
   iteration_limit_notice: Iteration limit reached. Summarize the progress and give
     the best possible final answer. Do not call tools.
@@ -66,5 +66,4 @@ verification:
   - solution_description
   - evidence
   - command_to_verify
-  rerun_declared_command: true
 skills: []

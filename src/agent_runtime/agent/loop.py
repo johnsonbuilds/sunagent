@@ -39,8 +39,6 @@ from agent_runtime.agent.tool_error_budget import (
 from agent_runtime.agent.verification import (
     check_submission,
     contract_nudge,
-    executed_calls,
-    match_executed_call,
     render_submission,
     submit_nudge,
 )
@@ -417,10 +415,10 @@ class AgentTurn:
                                    ) -> str | None:
         """Validate a submit_result finish attempt; ``None`` means accept.
 
-        Checks shape plus grounding on the typed parameters, then reruns
-        the declared full-suite command once when the harness asks for it.
-        Non-code harnesses (no ``command_to_verify`` in require) skip the
-        rerun: there is no suite to confirm.
+        Checks shape plus grounding on the typed parameters, then always
+        re-executes a declared command once. Non-code harnesses (no
+        ``command_to_verify`` declared) skip the rerun: there is nothing
+        to confirm.
         """
         verification = self.harness.verification
         gaps = check_submission(fields, verification.require, messages)
@@ -431,51 +429,43 @@ class AgentTurn:
             return contract_nudge(gaps)
         raw = fields.get("command_to_verify", "")
         command = raw if isinstance(raw, str) else str(raw)
-        if (not verification.rerun_declared_command
-                or "command_to_verify" not in verification.require
-                or not command.strip()):
+        if not command.strip():
             self.trace.emit("verification.passed", iteration,
                             missing=[])
             return None
-        return await self._rerun_declared_command(command, iteration, messages)
+        return await self._rerun_declared_command(command, iteration)
 
-    async def _rerun_declared_command(self, command: str, iteration: int,
-                                      messages: list[dict[str, Any]] | None = None
-                                      ) -> str | None:
-        """Re-execute the declared verify command once; accept only on exit 0.
+    async def _rerun_declared_command(self, command: str,
+                                      iteration: int) -> str | None:
+        """Re-execute the declared string verbatim once; accept only on exit 0.
 
-        Executes the history call grounding the declaration — command
-        string and cwd, exactly as originally run — never the raw declared
-        string, which may carry prose or lose its directory.
+        No history resolution: the declaration is authoritative (the prompt
+        mandates exact-as-run, including any cd prefix), so what runs is
+        exactly what was declared. The cheap was-run pre-filter already
+        passed; this execution is the real confirmation and its exit code
+        decides.
         """
         if not command.strip():
             gaps = {"command_to_verify": "missing or too short"}
             self.trace.emit("verification.failed", iteration,
                             missing=sorted(gaps), reasons=gaps)
             return contract_nudge(gaps)
-        matched = match_executed_call(command,
-                                      executed_calls(messages or []))
-        target, target_cwd = matched if matched is not None else (command, None)
-        arguments: dict[str, Any] = {"command": target,
-                                     "timeout": _RERUN_TIMEOUT}
-        if target_cwd is not None:
-            arguments["cwd"] = target_cwd
         try:
-            result = await self.tools.execute("run_command", arguments)
+            result = await self.tools.execute(
+                "run_command", {"command": command,
+                                "timeout": _RERUN_TIMEOUT})
         except Exception as exc:
             gaps = {"command_to_verify":
-                    f"rerun failed to execute ({exc}); declare a command "
-                    "that runs cleanly before finishing"}
+                    f"rerun failed to execute ({exc}); declare the exact "
+                    "command you ran, that runs cleanly, before finishing"}
             self.trace.emit("verification.rerun", iteration, command=command,
-                            reran=target, cwd=target_cwd, success=False,
-                            error=str(exc))
+                            success=False, error=str(exc))
             self.trace.emit("verification.failed", iteration,
                             missing=sorted(gaps), reasons=gaps)
             return contract_nudge(gaps)
         success, exit_code, excerpt = _rerun_outcome(result)
         self.trace.emit("verification.rerun", iteration, command=command,
-                        reran=target, cwd=target_cwd, success=success,
-                        exit_code=exit_code, output=excerpt)
+                        success=success, exit_code=exit_code, output=excerpt)
         if success:
             self.trace.emit("verification.passed", iteration,
                             missing=[], reran=True)
@@ -487,7 +477,7 @@ class AgentTurn:
                         missing=sorted(gaps), reasons=gaps)
         nudge = contract_nudge(gaps)
         if excerpt:
-            nudge += f" Rerun output of `{target}`: {excerpt}"
+            nudge += f" Rerun output of `{command}`: {excerpt}"
         return nudge
 
     def _emit_contract_outcome(self, answer: str, iteration: int,

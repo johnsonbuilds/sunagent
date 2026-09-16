@@ -7,10 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
 
 from agent_runtime.agent.loop import run_turn
-from agent_runtime.agent.verification import (
-    match_executed_command,
-    render_submission,
-)
+from agent_runtime.agent.verification import render_submission
 from agent_runtime.harness import (
     ControlGenome,
     HarnessSpec,
@@ -88,30 +85,23 @@ def run_turn_call(command: str, call_id: str = "1",
             "name": "run_command", "arguments": json.dumps(arguments)}}]}
 
 
-def submit_harness(rerun: bool = False,
-                   require=("solution_description", "evidence",
+def submit_harness(require=("solution_description", "evidence",
                             "command_to_verify")) -> HarnessSpec:
     return HarnessSpec(verification=VerificationGenome(
-        enabled=True, mode="task_result", require=require,
-        rerun_declared_command=rerun))
+        enabled=True, mode="task_result", require=require))
 
 
-class MatchExecutedCommandTests(unittest.TestCase):
-    def test_dirty_declaration_resolves_to_history_command(self) -> None:
-        dirty = ("pytest -q`\nthis command was just "
-                 "re-run and exits 0 (output: `5 passed`).")
-        self.assertEqual(
-            match_executed_command(dirty, ["pytest -q"]),
-            "pytest -q")
+class MatchCommandTests(unittest.TestCase):
+    def test_substring_declaration_accepted(self) -> None:
+        from agent_runtime.agent.verification import _command_grounded
+        self.assertTrue(_command_grounded(
+            "pytest -q", ["cd /testbed && pytest -q 2>&1 | tail -5"]))
 
-    def test_unrun_command_matches_nothing(self) -> None:
-        self.assertIsNone(
-            match_executed_command("npm test", ["pytest -q"]))
-
-    def test_exact_match_wins_over_substring(self) -> None:
-        self.assertEqual(
-            match_executed_command("pytest -q", ["pytest -q -x", "pytest -q"]),
-            "pytest -q")
+    def test_program_only_similarity_rejected(self) -> None:
+        from agent_runtime.agent.verification import _command_grounded
+        self.assertFalse(_command_grounded(
+            "pytest -q", ["pytest tests/other/ -q -x"]))
+        self.assertFalse(_command_grounded("npm test", ["pytest -q"]))
 
 
 class SubmitResultLoopTests(unittest.IsolatedAsyncioTestCase):
@@ -214,20 +204,25 @@ class NonCodeHarnessTests(unittest.IsolatedAsyncioTestCase):
         llm = FakeLLM([edit_turn(), run_turn_call("pytest -q"),
                        submit_turn(fields)])
         harness = submit_harness(
-            rerun=True,
             require=("solution_description", "evidence"))
+        trace = RunTrace()
         answer = await run_turn("fix it", llm, submit_registry(),
-                                harness=harness)
+                                harness=harness, trace=trace)
         self.assertEqual(answer, render_submission(fields))
         self.assertEqual(len(llm.messages), 3)
+        self.assertFalse(any(event.event_type == "verification.rerun"
+                             for event in trace.events))
 
 
 class SubmitRerunTests(unittest.IsolatedAsyncioTestCase):
-    async def test_dirty_declaration_reruns_history_match(self) -> None:
+    async def test_dirty_declaration_runs_verbatim_and_fails(self) -> None:
         seen: list[str] = []
 
         async def recording_run(command: str, **kwargs) -> dict:
             seen.append(command)
+            if "`" in command or "\n" in command:
+                return {"exit_code": 2, "stdout": "",
+                        "stderr": "bash: unexpected EOF"}
             return {"exit_code": 0, "stdout": "5 passed in 1.2s",
                     "stderr": ""}
 
@@ -235,21 +230,24 @@ class SubmitRerunTests(unittest.IsolatedAsyncioTestCase):
             "pytest -q`\nthis command was just re-run "
             "and exits 0 (output: `5 passed`)."))
         llm = FakeLLM([edit_turn(), run_turn_call(GOOD_FIELDS["command_to_verify"]),
-                       submit_turn(dirty)])
+                       submit_turn(dirty),
+                       submit_turn(GOOD_FIELDS, call_id="4")])
         trace = RunTrace()
         answer = await run_turn("fix it", llm, submit_registry(recording_run),
-                                harness=submit_harness(rerun=True), trace=trace)
-        self.assertEqual(answer, render_submission(dirty))
-        # The rerun executed the clean history command, not the dirty string.
-        self.assertEqual(seen[-1], GOOD_FIELDS["command_to_verify"])
+                                harness=submit_harness(), trace=trace)
+        # Grounding still matches by substring, but the rerun executes the
+        # dirty string verbatim — declare exactly what was run instead.
+        self.assertEqual(answer, render_submission(GOOD_FIELDS))
+        self.assertEqual(len(llm.messages), 4)
+        self.assertIn("command_to_verify", llm.messages[3][-1]["content"])
         reruns = [event for event in trace.events
                   if event.event_type == "verification.rerun"]
-        self.assertEqual(len(reruns), 1)
-        self.assertTrue(reruns[0].data["success"])
-        self.assertEqual(reruns[0].data["reran"],
-                         GOOD_FIELDS["command_to_verify"])
+        self.assertEqual(len(reruns), 2)
+        self.assertFalse(reruns[0].data["success"])
+        self.assertEqual(reruns[0].data["command"], dirty["command_to_verify"])
+        self.assertTrue(reruns[1].data["success"])
 
-    async def test_rerun_replays_cwd_with_long_timeout(self) -> None:
+    async def test_rerun_verbatim_with_long_timeout(self) -> None:
         seen: list[dict] = []
 
         async def recording_run(command: str, cwd=None,
@@ -263,16 +261,16 @@ class SubmitRerunTests(unittest.IsolatedAsyncioTestCase):
                        submit_turn(GOOD_FIELDS)])
         trace = RunTrace()
         answer = await run_turn("fix it", llm, submit_registry(recording_run),
-                                harness=submit_harness(rerun=True), trace=trace)
+                                harness=submit_harness(), trace=trace)
         self.assertEqual(answer, render_submission(GOOD_FIELDS))
-        # History call had cwd=/testbed: the rerun replays it verbatim with
-        # the long suite timeout instead of the 30s tool default.
-        self.assertEqual(seen[-1], {"command": "pytest -q", "cwd": "/testbed",
+        # History cwd is NOT replayed: the declared string runs verbatim
+        # with the long suite timeout instead of the 30s tool default.
+        self.assertEqual(seen[-1], {"command": "pytest -q", "cwd": None,
                                     "timeout": 600.0})
         reruns = [event for event in trace.events
                   if event.event_type == "verification.rerun"]
         self.assertEqual(len(reruns), 1)
-        self.assertEqual(reruns[0].data["cwd"], "/testbed")
+        self.assertEqual(reruns[0].data["command"], "pytest -q")
 
     async def test_genuine_rerun_failure_rejects_then_recovers(self) -> None:
         async def routing_run(command: str, **kwargs) -> dict:
@@ -295,7 +293,7 @@ class SubmitRerunTests(unittest.IsolatedAsyncioTestCase):
             submit_turn(GOOD_FIELDS, call_id="3"),
         ])
         answer = await run_turn("fix it", llm, submit_registry(routing_run),
-                                harness=submit_harness(rerun=True))
+                                harness=submit_harness())
         self.assertEqual(answer, render_submission(GOOD_FIELDS))
         self.assertEqual(len(llm.messages), 5)
         self.assertIn("command_to_verify", llm.messages[3][-1]["content"])
@@ -377,15 +375,15 @@ class TaskResultGenomeTests(unittest.TestCase):
         self.assertEqual(tuple(spec.verification.require),
                          ("solution_description", "evidence", "command_to_verify"))
 
-    def test_rerun_allowed_with_task_result(self) -> None:
+    def test_legacy_rerun_key_ignored(self) -> None:
+        # code-v10..v12 manifests carry the retired flag; they must still
+        # load for lineage, and the rerun is unconditional now.
         spec = from_dict({"verification": {"mode": "task_result",
                                            "rerun_declared_command": True}})
-        self.assertTrue(spec.verification.rerun_declared_command)
-
-    def test_rerun_still_rejected_when_off(self) -> None:
-        from agent_runtime.harness import HarnessError
-        with self.assertRaises(HarnessError):
-            from_dict({"verification": {"rerun_declared_command": True}})
+        self.assertFalse(hasattr(spec.verification, "rerun_declared_command"))
+        legacy = from_dict({"verification": {"mode": "return_contract",
+                                             "rerun_declared_command": False}})
+        self.assertEqual(legacy.verification.mode, "return_contract")
 
     def test_finish_violation_limit_defaults_and_validates(self) -> None:
         spec = from_dict({})

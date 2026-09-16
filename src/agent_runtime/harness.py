@@ -193,11 +193,14 @@ class VerificationGenome:
     ``task_result`` mode (code-v13) moves the declaration into the
     ``submit_result`` tool: finishing requires one call with all three
     parameters as typed arguments — no answer-string parsing — while the
-    same shape/grounding/rerun pipeline validates the submission. Which
+    same shape/grounding pipeline validates the submission. Which
     command counts as the full suite is the model's call per repository
-    (prompt contract: whatever runner this repo uses, no file filters);
-    the gate verifies authenticity — the command was run, the rerun exits
-    0, the evidence quotes it — never the runner's identity.
+    (prompt contract: whatever runner this repo uses, declared exactly as
+    run). A declared command is always re-executed verbatim via
+    ``run_command`` (600s timeout): exit 0 accepts, anything else rejects
+    as a ``command_to_verify`` gap with the rerun output quoted. The gate
+    verifies authenticity — the command was run, the rerun passes, the
+    evidence quotes it — never the runner's identity.
     ``return_contract`` stays parseable so the code-v10..v12 lineage
     loads, but the runtime no longer accepts text finishes under any
     enabled mode — those harnesses are retired, not runnable.
@@ -206,7 +209,6 @@ class VerificationGenome:
     enabled: bool = False
     mode: str = "off"
     require: tuple[str, ...] = ()
-    rerun_declared_command: bool = False
 
 
 VERIFICATION_MODES: tuple[str, ...] = ("off", "return_contract", "task_result")
@@ -453,6 +455,9 @@ def _verification_genome(data: Mapping[str, Any]) -> VerificationGenome:
         raise HarnessError("verification must be a mapping")
     _check_keys(section, {"enabled", "mode", "require",
                           "rerun_declared_command"}, "verification")
+    # Legacy (code-v10..v12): accepted so old manifests load for lineage,
+    # otherwise ignored — since code-v13 a declared command is always
+    # re-executed, no flag needed.
     enabled = section.get("enabled", False)
     if not isinstance(enabled, bool):
         raise HarnessError("verification.enabled must be a boolean")
@@ -472,19 +477,10 @@ def _verification_genome(data: Mapping[str, Any]) -> VerificationGenome:
             raise HarnessError(
                 "verification.require entries must be non-empty text")
         require.append(item.strip())
-    rerun = section.get("rerun_declared_command", False)
-    if not isinstance(rerun, bool):
-        raise HarnessError(
-            "verification.rerun_declared_command must be a boolean")
     if mode in ("return_contract", "task_result") and not require:
         require = list(DEFAULT_VERIFICATION_REQUIRE)
-    if rerun and mode not in ("return_contract", "task_result"):
-        raise HarnessError(
-            "verification.rerun_declared_command requires "
-            "verification.mode=return_contract or task_result")
     return VerificationGenome(enabled=enabled, mode=mode,
-                              require=tuple(require),
-                              rerun_declared_command=rerun)
+                              require=tuple(require))
 
 
 def from_dict(data: Mapping[str, Any]) -> HarnessSpec:

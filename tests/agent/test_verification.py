@@ -10,8 +10,7 @@ from agent_runtime.agent.loop import run_turn
 from agent_runtime.agent.verification import (
     SUBMIT_FIELDS,
     check_submission,
-    executed_calls,
-    match_executed_call,
+    executed_commands,
 )
 from agent_runtime.harness import HarnessSpec, VerificationGenome, from_dict
 from agent_runtime.tools.tools import ToolRegistry, ToolSpec
@@ -140,15 +139,23 @@ class AuthenticityTests(unittest.TestCase):
             gaps = check_submission(fields, REQUIRE, messages)
             self.assertNotIn("command_to_verify", gaps, command)
 
-    def test_executed_calls_carry_cwd(self) -> None:
+    def test_history_commands_listed(self) -> None:
         messages = [{"role": "assistant", "tool_calls": [{
             "id": "1", "type": "function", "function": {
                 "name": "run_command",
                 "arguments": json.dumps({"command": "pytest -q",
                                          "cwd": "/testbed"})}}]}]
-        self.assertEqual(executed_calls(messages), [("pytest -q", "/testbed")])
-        matched = match_executed_call("pytest -q", executed_calls(messages))
-        self.assertEqual(matched, ("pytest -q", "/testbed"))
+        self.assertEqual(executed_commands(messages), ["pytest -q"])
+
+    def test_program_only_similarity_rejected(self) -> None:
+        # No substring relation, only a shared program: not grounded.
+        # (The old program+tokens rule misfired on shell-prefixed commands.)
+        messages = [assistant_edit(),
+                    assistant_run("pytest tests/other/ -q -x"),
+                    {"role": "tool", "tool_call_id": "1",
+                     "content": "5 passed in 1.2s"}]
+        gaps = check_submission(FIELDS, REQUIRE, messages)
+        self.assertIn("command_to_verify", gaps)
 
 
 class VerificationGenomeTests(unittest.TestCase):
@@ -165,10 +172,9 @@ class VerificationGenomeTests(unittest.TestCase):
         with self.assertRaises(HarnessError):
             from_dict({"verification": {"mode": "judge"}})
 
-    def test_rerun_requires_contract_mode(self) -> None:
-        from agent_runtime.harness import HarnessError
-        with self.assertRaises(HarnessError):
-            from_dict({"verification": {"rerun_declared_command": True}})
+    def test_legacy_rerun_key_tolerated(self) -> None:
+        spec = from_dict({"verification": {"rerun_declared_command": True}})
+        self.assertFalse(hasattr(spec.verification, "rerun_declared_command"))
 
 
 class OffModeLoopTests(unittest.IsolatedAsyncioTestCase):

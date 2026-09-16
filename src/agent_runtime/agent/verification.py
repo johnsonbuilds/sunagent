@@ -113,9 +113,9 @@ def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text.lower()).strip()
 
 
-def executed_calls(messages: list[Mapping[str, Any]]) -> list[tuple[str, str | None]]:
-    """``run_command`` (command, cwd) pairs issued so far (canonical history)."""
-    calls: list[tuple[str, str | None]] = []
+def executed_commands(messages: list[Mapping[str, Any]]) -> list[str]:
+    """``run_command`` command strings issued so far (canonical history)."""
+    commands: list[str] = []
     for message in messages or []:
         if not isinstance(message, Mapping) or message.get("role") != "assistant":
             continue
@@ -130,17 +130,9 @@ def executed_calls(messages: list[Mapping[str, Any]]) -> list[tuple[str, str | N
             except (TypeError, json.JSONDecodeError, ValueError):
                 continue
             command = args.get("command") if isinstance(args, dict) else None
-            if not (isinstance(command, str) and command.strip()):
-                continue
-            cwd = args.get("cwd") if isinstance(args, dict) else None
-            calls.append((command.strip(),
-                          cwd.strip() if isinstance(cwd, str) and cwd.strip() else None))
-    return calls
-
-
-def executed_commands(messages: list[Mapping[str, Any]]) -> list[str]:
-    """``run_command`` command strings issued so far (canonical history)."""
-    return [command for command, _ in executed_calls(messages)]
+            if isinstance(command, str) and command.strip():
+                commands.append(command.strip())
+    return commands
 
 
 def has_source_edit(messages: list[Mapping[str, Any]] | None) -> bool:
@@ -193,49 +185,18 @@ def _evidence_grounded(evidence: str, observations: list[str]) -> bool:
     return len(_significant_tokens(evidence) & obs_tokens) >= TOKEN_OVERLAP
 
 
-def match_executed_call(command: str,
-                          calls: list[tuple[str, str | None]]
-                          ) -> tuple[str, str | None] | None:
-    """The history call grounding the declared command, if any.
+def _command_grounded(command: str, executed: list[str]) -> bool:
+    """Declared command matches a history run (exact or substring).
 
-    Matching rule is exact, then substring, then program + detail. The
-    rerun executes the matched call verbatim — command string and cwd —
-    so it replays what was actually run, exactly as it was run, instead
-    of a re-typed declaration that may carry prose or lose its directory.
+    Cheap pre-filter only: the rerun executes the declared string itself,
+    so a miss here merely rejects without spending a full-suite execution.
+    No program/token heuristics — those misfire on shell-prefixed commands.
     """
     norm = _normalize(command)
     if len(norm) < MIN_COMMAND_CHARS:
-        return None
-    normed = [(_normalize(cmd), cmd, cwd) for cmd, cwd in calls]
-    for norm_cmd, raw, cwd in normed:
-        if norm_cmd == norm:
-            return raw, cwd
-    for norm_cmd, raw, cwd in normed:
-        if norm in norm_cmd or norm_cmd in norm:
-            return raw, cwd
-    program = norm.split()[0] if norm.split() else ""
-    wanted = _significant_tokens(norm)
-    for norm_cmd, raw, cwd in normed:
-        cmd_tokens = _significant_tokens(norm_cmd)
-        if program and program in norm_cmd.split():
-            # Tiny commands ("pytest -q") pass on the program; detailed
-            # ones must share detail, or "pytest tests/other.py" would
-            # pass off a "pytest tests/login.py" run.
-            if len(wanted) < 2 or len(wanted & cmd_tokens) >= 2:
-                return raw, cwd
-    return None
-
-
-def match_executed_command(command: str,
-                           executed: list[str]) -> str | None:
-    """The history command grounding the declared one, if any."""
-    matched = match_executed_call(command, [(cmd, None) for cmd in executed])
-    return matched[0] if matched is not None else None
-
-
-def _command_grounded(command: str, executed: list[str]) -> bool:
-    """Declared command was actually run (substring or program + detail)."""
-    return match_executed_command(command, executed) is not None
+        return False
+    return any(norm in _normalize(cmd) or _normalize(cmd) in norm
+               for cmd in executed)
 
 
 def check_submission(fields: Mapping[str, Any],
@@ -282,7 +243,6 @@ def check_submission(fields: Mapping[str, Any],
 
 
 __all__ = ["MIN_FIELD_CHARS", "MIN_COMMAND_CHARS", "EDIT_TOOLS", "SUBMIT_FIELDS",
-           "executed_calls", "executed_commands", "has_source_edit",
-           "match_executed_call", "match_executed_command", "observation_texts",
+           "executed_commands", "has_source_edit", "observation_texts",
            "render_submission", "check_submission", "contract_nudge",
            "submit_nudge"]
