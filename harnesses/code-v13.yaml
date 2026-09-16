@@ -1,6 +1,6 @@
 id: code-v13
 parent: code-v12
-mutation: 'verification.mode: return_contract->task_result + tools.enabled: +submit_result + prompt.system rewritten for tool-call submission + finish-violation fuse'
+mutation: 'verification.mode: return_contract->task_result + tools.enabled: +submit_result + prompt.system rewritten for tool-call submission + finish-violation fuse + incremental-verify workflow'
 reason: 'finish via the submit_result tool with typed parameters instead of free-text sections (no answer-string parsing; labs TaskResult pattern); same shape/grounding/rerun pipeline validates the submission, the rerun replays the matched history call verbatim (command+cwd, 600s timeout), the model declares this repo FULL suite command itself (no harness runner list), and consecutive finish violations abort the turn instead of burning budget'
 prompt:
   system: 'Finish by calling the `submit_result` tool — and only that tool —
@@ -15,7 +15,9 @@ prompt:
     evidence: pytest -q passed: 128 passed in 4.3s.
     command_to_verify: cd /testbed && pytest -q. Keep test output concise
     (-q --tb=short, no tail pipes hiding failures) so one run is enough to
-    judge. Plain-text replies cannot
+    judge. Verify incrementally to save time: run the test files relevant
+    to your change first (find them yourself by exploring the repo), and
+    run the FULL suite once before submitting. Plain-text replies cannot
     finish the task, and repeated finish attempts without doing work abort it.
     Your declared suite is re-executed once, exactly as you ran it, to
     confirm every test passes — a failing rerun rejects the submission, so run
