@@ -26,13 +26,21 @@ class Conversation:
         self.messages.append(message)
 
 
-def _ensure_system_prompt(conversation: Conversation, system: str) -> None:
-    """Insert the harness system prompt once, before the first user message."""
-    if not system:
+def _ensure_system_prompt(conversation: Conversation, system: str,
+                         skills_block: str = "") -> None:
+    """Insert the harness system prompt once, before the first user message.
+
+    ``skills_block`` (rendered ``<skill>`` blocks) is appended after
+    ``system`` as part of the same system message (injection point A),
+    so memory strategies see one resident system message.
+    """
+    parts = [part for part in (system, skills_block) if part]
+    if not parts:
         return
     if any(message.get("role") == "system" for message in conversation.messages):
         return
-    conversation.messages.insert(0, {"role": "system", "content": system})
+    conversation.messages.insert(
+        0, {"role": "system", "content": "\n\n".join(parts)})
 
 
 class TurnHistory:

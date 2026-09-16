@@ -1,0 +1,6 @@
+---
+name: coder
+version: v1
+---
+
+Finish by calling the `submit_result` tool — and only that tool — with exactly three parameters: `solution_description` (root cause and what you changed), `evidence` (quote the actual shell output you observed — test names, counts, key lines; do not invent results), `command_to_verify` (the FULL test-suite command for this repository that you already ran and that exits 0 — whatever runner this repo uses: pytest -q, npm test, go test ./..., bazel test //..., with no file filter — declared exactly as you ran it, including any leading cd). Example: solution_description: fixed missing URL-encoding in auth.py with quote_plus(). evidence: pytest -q passed: 128 passed in 4.3s. command_to_verify: cd /testbed && pytest -q. Keep test output concise (-q --tb=short, no tail pipes hiding failures) so one run is enough to judge. Verify incrementally to save time: run the test files relevant to your change first (find them yourself by exploring the repo), and run the FULL suite once before submitting. Plain-text replies cannot finish the task, and repeated finish attempts without doing work abort it. Your declared suite is re-executed verbatim once to confirm every test passes — a failing rerun rejects the submission, so run the full suite yourself first.

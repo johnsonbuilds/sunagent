@@ -50,6 +50,11 @@ from agent_runtime.agent.turn_history import (
 )
 from agent_runtime.events import EventEmitter
 from agent_runtime.harness import HarnessSpec, default_harness
+from agent_runtime.skills import (
+    render_skills_block,
+    resolve_skills,
+    skills_trace_meta,
+)
 from agent_runtime.tools import ToolExecutor
 from agent_runtime.trace import RunTrace
 
@@ -98,8 +103,10 @@ class AgentTurn:
                  conversation: Conversation | None = None,
                  stream: bool = False,
                  trace: RunTrace | None = None,
-                 events: EventEmitter | None = None) -> None:
+                 events: EventEmitter | None = None,
+                 skills_dir: Any | None = None) -> None:
         self.harness = harness or default_harness()
+        self.skills_dir = skills_dir
         self.max_iterations = (
             max_iterations if max_iterations is not None
             else self.harness.control.max_iterations)
@@ -149,7 +156,14 @@ class AgentTurn:
         tools, harness = self.tools, self.harness
 
         events.emit("agent.started", message=self.user_message)
-        _ensure_system_prompt(self.conversation, harness.prompt.system)
+        skills = resolve_skills(list(harness.skills),
+                                skills_dir=self.skills_dir,
+                                harness=harness)
+        skills_block = render_skills_block(skills)
+        if skills:
+            trace.emit("skills.loaded", 0, **skills_trace_meta(skills))
+        _ensure_system_prompt(self.conversation, harness.prompt.system,
+                              skills_block)
         self.conversation.append({"role": "user", "content": self.user_message})
         history = TurnHistory(self.conversation.messages)
         error_budget = SameToolErrorBudget(
@@ -555,7 +569,8 @@ async def run_turn(user_message: str, llm: ChatModel, tools: ToolExecutor,
                conversation: Conversation | None = None,
                stream: bool = False,
                trace: RunTrace | None = None,
-               events: EventEmitter | None = None) -> str:
+               events: EventEmitter | None = None,
+               skills_dir: Any | None = None) -> str:
     """Run one agent turn under the given harness.
 
     Convenience wrapper around :class:`AgentTurn`. ``max_iterations``
@@ -564,7 +579,8 @@ async def run_turn(user_message: str, llm: ChatModel, tools: ToolExecutor,
     """
     return await AgentTurn(user_message, llm, tools, max_iterations,
                            harness=harness, conversation=conversation,
-                           stream=stream, trace=trace, events=events).run()
+                           stream=stream, trace=trace, events=events,
+                           skills_dir=skills_dir).run()
 
 
 __all__ = [
