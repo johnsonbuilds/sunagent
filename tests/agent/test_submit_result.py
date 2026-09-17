@@ -298,6 +298,153 @@ class SubmitRerunTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(llm.messages), 5)
         self.assertIn("command_to_verify", llm.messages[3][-1]["content"])
 
+    async def test_genuine_failure_nudge_names_what_failed(self) -> None:
+        async def routing_run(command: str, **kwargs) -> dict:
+            if " -x" in command:
+                return {"exit_code": 1,
+                        "stdout": ("....F..\n1 failed, 5 passed in 0.5s\n"
+                                   "FAILED test_x.py::test_y - "
+                                   "AssertionError: bad value\n"),
+                        "stderr": ""}
+            return {"exit_code": 0, "stdout": "5 passed in 1.2s",
+                    "stderr": ""}
+
+        failing = {
+            "solution_description": GOOD_FIELDS["solution_description"],
+            "evidence": "pytest -q -x: 1 failed, 5 passed in 0.5s observed.",
+            "command_to_verify": "pytest -q -x",
+        }
+        llm = FakeLLM([
+            edit_turn(),
+            run_turn_call("pytest -q -x"),
+            submit_turn(failing),
+            run_turn_call("pytest -q", call_id="2"),
+            submit_turn(GOOD_FIELDS, call_id="3"),
+        ])
+        answer = await run_turn("fix it", llm, submit_registry(routing_run),
+                                harness=submit_harness())
+        self.assertEqual(answer, render_submission(GOOD_FIELDS))
+        # The nudge states the result + the acceptance criterion only:
+        # no fix target (tests vs. source belongs to the task
+        # instructions), no prescribed action, no blanket "full suite".
+        nudge = llm.messages[3][-1]["content"]
+        self.assertIn("test_x.py::test_y", nudge)
+        self.assertIn("1 failed, 5 passed", nudge)
+        self.assertIn("only accepted when that command exits 0", nudge)
+        self.assertNotIn("full suite", nudge)
+        self.assertNotIn("fix the failing tests", nudge)
+        self.assertNotIn("Re-run", nudge)
+        self.assertNotIn("until it exits 0", nudge)
+
+    async def test_unlisted_env_error_still_declaration_fix(self) -> None:
+        # No hardcoded error list: any rerun without test-runner output
+        # (here "Permission denied", never in any list) takes the
+        # declaration-fix branch.
+        async def routing_run(command: str, **kwargs) -> dict:
+            if command == "./run_tests.sh":
+                return {"exit_code": 126, "stdout": "",
+                        "stderr": "bash: ./run_tests.sh: Permission denied"}
+            return {"exit_code": 0, "stdout": "5 passed in 1.2s",
+                    "stderr": ""}
+
+        broken = dict(
+            GOOD_FIELDS,
+            evidence="./run_tests.sh: Permission denied observed.",
+            command_to_verify="./run_tests.sh",
+        )
+        llm = FakeLLM([
+            edit_turn(),
+            run_turn_call("./run_tests.sh"),
+            submit_turn(broken),
+            run_turn_call("pytest -q", call_id="2"),
+            submit_turn(GOOD_FIELDS, call_id="3"),
+        ])
+        answer = await run_turn("fix it", llm, submit_registry(routing_run),
+                                harness=submit_harness())
+        self.assertEqual(answer, render_submission(GOOD_FIELDS))
+        nudge = llm.messages[3][-1]["content"]
+        self.assertIn("never reached the tests", nudge)
+        self.assertNotIn("full suite", nudge)
+        self.assertNotIn("yourself", nudge)
+
+    async def test_rerun_excerpt_keeps_head_and_tail(self) -> None:
+        from agent_runtime.agent.loop import _rerun_outcome
+        stdout = "START\n" + "." * 3000 + "\n1 failed, 5 passed in 0.5s\n"
+        _, _, excerpt = _rerun_outcome(
+            {"exit_code": 1, "stdout": stdout, "stderr": ""})
+        self.assertIn("START", excerpt)
+        self.assertIn("1 failed, 5 passed", excerpt)
+        self.assertIn("truncated", excerpt)
+
+    async def test_contract_nudge_states_reasons_only(self) -> None:
+        from agent_runtime.agent.verification import contract_nudge
+        nudge = contract_nudge({"solution_description": "no source edits yet",
+                                "command_to_verify": "was never run"})
+        self.assertIn("no source edits yet", nudge)
+        self.assertIn("was never run", nudge)
+        self.assertIn("submit_result requires", nudge)
+        self.assertNotIn("Next step", nudge)
+        self.assertNotIn("full suite", nudge)
+        self.assertNotIn("until it exits 0", nudge)
+
+    async def test_ran_detection_covers_runners_not_error_lists(self) -> None:
+        from agent_runtime.agent.loop import _rerun_declaration_broken
+        # Genuine failures across runners: tests ran, not broken.
+        self.assertFalse(_rerun_declaration_broken(
+            1, "stdout: 1 failed, 5 passed in 0.5s stderr:"))
+        self.assertFalse(_rerun_declaration_broken(
+            1, "stdout: --- FAIL: TestParse (0.00s) FAIL stderr:"))
+        self.assertFalse(_rerun_declaration_broken(
+            1, "stdout: 3 passing, 2 failing stderr:"))
+        # Environment failures without runner output: broken declaration,
+        # with no hardcoded error list behind the decision.
+        self.assertTrue(_rerun_declaration_broken(
+            126, "stdout:  stderr: bash: ./run_tests.sh: Permission denied"))
+        self.assertTrue(_rerun_declaration_broken(
+            1, "stdout:  stderr: /opt/miniconda3/bin/python: "
+               "No module named pytest"))
+
+    async def test_env_broken_rerun_nudges_declaration_fix(self) -> None:
+        async def routing_run(command: str, **kwargs) -> dict:
+            if command == "python -m pytest -q":
+                return {"exit_code": 1, "stdout": "",
+                        "stderr": ("/opt/miniconda3/bin/python: "
+                                   "No module named pytest")}
+            return {"exit_code": 0, "stdout": "5 passed in 1.2s",
+                    "stderr": ""}
+
+        broken = dict(
+            GOOD_FIELDS,
+            evidence=("python -m pytest -q: No module named pytest observed."),
+            command_to_verify="python -m pytest -q",
+        )
+        fixed = dict(
+            GOOD_FIELDS,
+            evidence="env python -m pytest -q: 5 passed in 1.2s observed.",
+            command_to_verify="/opt/miniconda3/envs/testbed/bin/python -m pytest -q",
+        )
+        llm = FakeLLM([
+            edit_turn(),
+            run_turn_call("python -m pytest -q"),
+            submit_turn(broken),
+            run_turn_call(fixed["command_to_verify"], call_id="2"),
+            submit_turn(fixed, call_id="3"),
+        ])
+        trace = RunTrace()
+        answer = await run_turn("fix it", llm, submit_registry(routing_run),
+                                harness=submit_harness(), trace=trace)
+        self.assertEqual(answer, render_submission(fixed))
+        reruns = [event for event in trace.events
+                  if event.event_type == "verification.rerun"]
+        self.assertEqual(len(reruns), 2)
+        self.assertFalse(reruns[0].data["success"])
+        # Result + reason only: no prescribed action, no full-suite ask
+        # (the tests were never reached).
+        nudge = llm.messages[3][-1]["content"]
+        self.assertIn("never reached the tests", nudge)
+        self.assertNotIn("full suite", nudge)
+        self.assertNotIn("yourself", nudge)
+
 
 class FinishFuseTests(unittest.IsolatedAsyncioTestCase):
     async def test_three_text_finishes_abort_the_turn(self) -> None:

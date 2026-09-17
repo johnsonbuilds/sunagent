@@ -2,8 +2,9 @@
 
 A harness declares ``skills: [coder]``; each name resolves to
 ``skills/<name>/SKILL.md`` (front-matter ``name``/``version`` plus a
-markdown body). The runtime renders them as ``<skill>`` blocks appended
-after ``prompt.system`` (injection point A) and records content hashes
+markdown body). The runtime renders them as plain text appended after
+``prompt.system`` (injection point A) — no wrapper tags, so the model
+reads skill content as direct instructions — and records content hashes
 on the trace so a run stays attributable when body text changes but
 names do not.
 """
@@ -141,12 +142,10 @@ def resolve_skills(names: Sequence[str],
 
 
 def render_skills_block(skills: Sequence[Skill]) -> str:
-    """Render resolved skills as appended system-prompt blocks."""
+    """Render resolved skills as plain appended system-prompt text."""
     if not skills:
         return ""
-    blocks = [f'<skill name="{skill.name}">\n{skill.content}\n</skill>'
-              for skill in skills]
-    return "\n\n".join(blocks)
+    return "\n\n".join(skill.content for skill in skills)
 
 
 def skills_content_hash(skills: Sequence[Skill]) -> str:

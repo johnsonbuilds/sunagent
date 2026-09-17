@@ -30,7 +30,7 @@ def _ensure_system_prompt(conversation: Conversation, system: str,
                          skills_block: str = "") -> None:
     """Insert the harness system prompt once, before the first user message.
 
-    ``skills_block`` (rendered ``<skill>`` blocks) is appended after
+    ``skills_block`` (rendered plain skill text) is appended after
     ``system`` as part of the same system message (injection point A),
     so memory strategies see one resident system message.
     """

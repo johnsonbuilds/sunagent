@@ -58,21 +58,23 @@ def _field_value(fields: Mapping[str, Any], field: str) -> str:
 
 
 def contract_nudge(gaps: dict[str, str] | list[str]) -> str:
-    """User-channel retry message naming each failing contract field + why."""
+    """User-channel retry message naming each failing contract field + why.
+
+    Result + reason + contract shape only: no prescribed action — the
+    model decides the next step from the failure named here.
+    """
     if isinstance(gaps, dict):
         fields = "; ".join(f"{field} ({reason})" for field, reason in gaps.items())
     else:
         fields = ", ".join(gaps)
     return (
         f"Your submission fails the return contract: {fields}. "
-        "Call submit_result again with all required parameters: "
+        "submit_result requires: "
         "solution_description (root cause + fix), "
         "evidence (quote the actual shell output you observed: test names, counts, "
         "key lines — do not invent results), "
-        "command_to_verify (the FULL test-suite command for this repository "
-        "that you already ran and that exits 0 — no file filters). "
-        "A finished fix must include at least one source edit. "
-        "Run the full suite first if you have not; then submit again."
+        "command_to_verify (one shell command you already ran that exits 0 on success). "
+        "A finished fix must include at least one source edit."
     )
 
 

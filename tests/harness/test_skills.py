@@ -69,6 +69,14 @@ class SkillLoadingTests(unittest.TestCase):
         self.assertEqual(resolve_skills([]), [])
         self.assertEqual(render_skills_block([]), "")
 
+    def test_render_is_plain_text_without_tags(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            _write_skill(Path(directory), "a", "first body")
+            _write_skill(Path(directory), "b", "second body")
+            skills = resolve_skills(["a", "b"], skills_dir=Path(directory))
+            self.assertEqual(render_skills_block(skills),
+                             "first body\n\nsecond body")
+
     def test_unknown_skill_raises_harness_error(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaises(HarnessError) as caught:
@@ -110,15 +118,15 @@ class SkillLoadingTests(unittest.TestCase):
 class EnsureSystemPromptTests(unittest.TestCase):
     def test_system_and_block_combine(self) -> None:
         conversation = Conversation()
-        _ensure_system_prompt(conversation, "sys", "<skill/>")
+        _ensure_system_prompt(conversation, "sys", "skill-text")
         self.assertEqual(conversation.messages,
-                         [{"role": "system", "content": "sys\n\n<skill/>"}])
+                          [{"role": "system", "content": "sys\n\nskill-text"}])
 
     def test_skill_only_becomes_system(self) -> None:
         conversation = Conversation()
-        _ensure_system_prompt(conversation, "", "<skill/>")
+        _ensure_system_prompt(conversation, "", "skill-text")
         self.assertEqual(conversation.messages,
-                         [{"role": "system", "content": "<skill/>"}])
+                          [{"role": "system", "content": "skill-text"}])
 
     def test_empty_stays_empty(self) -> None:
         conversation = Conversation()
@@ -147,7 +155,7 @@ class SkillTurnTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(answer, "done")
         system = llm.seen[0][0]
         self.assertEqual(system["role"], "system")
-        self.assertIn('<skill name="coder">', system["content"])
+        self.assertNotIn("<skill", system["content"])
         self.assertIn("submit_result", system["content"])
         loaded = [e for e in trace.events if e.event_type == "skills.loaded"]
         self.assertEqual(len(loaded), 1)
