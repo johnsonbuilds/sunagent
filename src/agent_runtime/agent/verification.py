@@ -201,6 +201,23 @@ def _command_grounded(command: str, executed: list[str]) -> bool:
                for cmd in executed)
 
 
+_QUOTED_SPAN_RE = re.compile(r"'[^']*'|\"[^\"]*\"")
+
+
+def _masks_exit_code(command: str) -> bool:
+    """Declared command hides the runner's exit code behind shell plumbing.
+
+    ``|`` hands the exit code to the last pipe stage (tail/grep) and
+    ``;`` / ``||`` let a trailing command succeed, so a failing suite
+    looks green. ``&&`` chains are fail-closed (an early failure stops
+    the chain nonzero) and ``>`` redirects keep the runner's own exit
+    code, so both stay allowed. Quoted spans are ignored: a ``|`` inside
+    a grep pattern is not a pipe.
+    """
+    bare = _QUOTED_SPAN_RE.sub("", command)
+    return "|" in bare or ";" in bare
+
+
 def check_submission(fields: Mapping[str, Any],
                      require: tuple[str, ...] | list[str],
                      messages: list[Mapping[str, Any]] | None = None) -> dict[str, str]:
@@ -241,6 +258,11 @@ def check_submission(fields: Mapping[str, Any],
         elif not _command_grounded(command, executed):
             gaps["command_to_verify"] = ("was never run — run that exact command "
                                           "before claiming it verifies the fix")
+        elif _masks_exit_code(command):
+            gaps["command_to_verify"] = (
+                "output pipes mask the test exit code (the exit code "
+                "becomes the pipe's, not the tests') — declare the command "
+                "without pipes; redirect to a file if you need the log")
     return gaps
 
 

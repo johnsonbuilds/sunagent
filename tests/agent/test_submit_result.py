@@ -336,6 +336,42 @@ class SubmitRerunTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Re-run", nudge)
         self.assertNotIn("until it exits 0", nudge)
 
+    async def test_piped_declaration_rejected_then_fixed(self) -> None:
+        piped = dict(
+            GOOD_FIELDS,
+            evidence="pytest -q | tail: 5 passed in 1.2s observed.",
+            command_to_verify="pytest -q 2>&1 | tail -5",
+        )
+        llm = FakeLLM([
+            edit_turn(),
+            run_turn_call("pytest -q 2>&1 | tail -5"),
+            submit_turn(piped),
+            run_turn_call("pytest -q", call_id="2"),
+            submit_turn(GOOD_FIELDS, call_id="3"),
+        ])
+        answer = await run_turn("fix it", llm, submit_registry(),
+                                harness=submit_harness())
+        self.assertEqual(answer, render_submission(GOOD_FIELDS))
+        # Grounded (it was run) but rejected: the pipe masks exit code.
+        nudge = llm.messages[3][-1]["content"]
+        self.assertIn("mask the test exit code", nudge)
+        self.assertNotIn("full suite", nudge)
+
+    async def test_redirect_declaration_accepted(self) -> None:
+        logged = dict(
+            GOOD_FIELDS,
+            evidence="pytest -q > log: 5 passed in 1.2s observed.",
+            command_to_verify="cd /testbed && pytest -q > /tmp/run.log 2>&1",
+        )
+        llm = FakeLLM([
+            edit_turn(),
+            run_turn_call("cd /testbed && pytest -q > /tmp/run.log 2>&1"),
+            submit_turn(logged),
+        ])
+        answer = await run_turn("fix it", llm, submit_registry(),
+                                harness=submit_harness())
+        self.assertEqual(answer, render_submission(logged))
+
     async def test_unlisted_env_error_still_declaration_fix(self) -> None:
         # No hardcoded error list: any rerun without test-runner output
         # (here "Permission denied", never in any list) takes the

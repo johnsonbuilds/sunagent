@@ -158,6 +158,43 @@ class AuthenticityTests(unittest.TestCase):
         self.assertIn("command_to_verify", gaps)
 
 
+class ExitCodeMaskingTests(unittest.TestCase):
+    def _piped(self, command: str) -> dict[str, str]:
+        evidence = f"{command}: 5 passed in 1.2s observed."
+        messages = [assistant_edit(),
+                    assistant_run(command),
+                    {"role": "tool", "tool_call_id": "1",
+                     "content": "5 passed in 1.2s"}]
+        fields = {"solution_description": FIELDS["solution_description"],
+                  "evidence": evidence,
+                  "command_to_verify": command}
+        return check_submission(fields, REQUIRE, messages)
+
+    def test_piped_declaration_rejected(self) -> None:
+        gaps = self._piped("pytest -q 2>&1 | tail -20")
+        self.assertIn("command_to_verify", gaps)
+        self.assertIn("mask the test exit code",
+                      gaps["command_to_verify"])
+
+    def test_semicolon_chain_rejected(self) -> None:
+        gaps = self._piped("pytest -q; echo done")
+        self.assertIn("command_to_verify", gaps)
+
+    def test_and_chain_and_redirect_allowed(self) -> None:
+        for command in ("cd /testbed && pytest -q",
+                        "pytest -q > /tmp/run.log 2>&1",
+                        "source env.sh && conda activate t && pytest -q"):
+            gaps = self._piped(command)
+            self.assertNotIn("command_to_verify", gaps, command)
+
+    def test_quoted_pipe_is_not_a_pipe(self) -> None:
+        from agent_runtime.agent.verification import _masks_exit_code
+        self.assertFalse(_masks_exit_code("pytest -q --tb=no 2>&1"))
+        self.assertFalse(_masks_exit_code("grep -E '^(FAILED|ERROR)' /tmp/x"))
+        self.assertTrue(_masks_exit_code("pytest -q | grep -E 'a|b'"))
+        self.assertTrue(_masks_exit_code("pytest -q || echo failed"))
+
+
 class VerificationGenomeTests(unittest.TestCase):
     def test_return_contract_fills_default_require(self) -> None:
         spec = from_dict({"verification": {"mode": "return_contract"}})

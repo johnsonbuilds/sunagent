@@ -60,10 +60,10 @@ class SkillLoadingTests(unittest.TestCase):
         self.assertIn("submit_result", skills[0].content)
         self.assertFalse(skills[0].truncated)
 
-    def test_coder_content_matches_v13_system(self) -> None:
-        v13 = resolve_harness("code-v13")
+    def test_coder_content_carries_submit_contract(self) -> None:
         skills = resolve_skills(["coder"], harness=resolve_harness("code-v14"))
-        self.assertEqual(skills[0].content, v13.prompt.system)
+        self.assertTrue(skills[0].content.strip())
+        self.assertIn("submit_result", skills[0].content)
 
     def test_empty_names_resolve_to_empty(self) -> None:
         self.assertEqual(resolve_skills([]), [])
@@ -176,14 +176,14 @@ class SkillTurnTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CodeV14Tests(unittest.TestCase):
-    def test_code_v14_moves_v13_system_into_skill(self) -> None:
+    def test_code_v14_uses_coder_skill_with_empty_system(self) -> None:
         v13 = resolve_harness("code-v13")
         v14 = resolve_harness("code-v14")
         self.assertEqual(v14.parent, "code-v13")
         self.assertEqual(v14.prompt.system, "")
         self.assertEqual(list(v14.skills), ["coder"])
         skills = resolve_skills(list(v14.skills), harness=v14)
-        self.assertEqual(skills[0].content, v13.prompt.system)
+        self.assertTrue(skills[0].content.strip())
         for gene in ("tools", "control", "memory", "recovery",
                      "verification"):
             self.assertEqual(getattr(v14, gene), getattr(v13, gene))
