@@ -390,11 +390,11 @@ def _submit_result_spec() -> ToolSpec:
         "and only this tool, when the task is complete and verified. "
         "solution_description: states the root cause and what was changed. "
         "evidence: quote the actual shell output you observed; do not invent results."
-        "command_to_verify: the FULL test-suite command for this repository,"
-        " already run, that exits 0 on success (whatever runner this repo uses — pytest, npm test, go test, "
-        "bazel test //... — with no file filter). Declare it exactly as you ran it, including any leading cd. "
+        "command_to_verify: one shell command you already ran, that exits 0 on success "
+        "(usually the test files relevant to your change — whatever runner this repo uses: pytest, npm test, go test, "
+        "bazel test //... — targeted commands are fine, the full suite is not required). Declare it exactly as you ran it, including any leading cd. "
         "Example: solution_description: fixed missing URL-encoding in auth.py with quote_plus()."
-        "evidence: pytest -q passed: 128 passed in 4.3s. command_to_verify: cd /testbed && pytest -q.",
+        "evidence: pytest -q passed: 128 passed in 4.3s. command_to_verify: cd /testbed && pytest tests/test_auth.py -q.",
         {"type": "object", "properties": {
             "solution_description": {"type": "string",
                                      "description": "Root cause and fix",
@@ -403,9 +403,9 @@ def _submit_result_spec() -> ToolSpec:
                          "description": "Quoted shell output observed",
                          "minLength": 20},
             "command_to_verify": {"type": "string",
-                                  "description": "Full test-suite command "
-                                                 "already run, exits 0."
-                                                 "Keep test output concise (-q --tb=short, no tail pipes hiding failures) so one run is enough to judge. ",
+                                   "description": "Test command "
+                                                  "already run, exits 0."
+                                                  "Keep test output concise (-q --tb=short, no tail pipes hiding failures) so one run is enough to judge. ",
                                   "minLength": 3}},
          "required": ["solution_description", "evidence"],
          "additionalProperties": False},

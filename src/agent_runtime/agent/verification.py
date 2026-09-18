@@ -191,7 +191,7 @@ def _command_grounded(command: str, executed: list[str]) -> bool:
     """Declared command matches a history run (exact or substring).
 
     Cheap pre-filter only: the rerun executes the declared string itself,
-    so a miss here merely rejects without spending a full-suite execution.
+    so a miss here merely rejects without spending a verify-command execution.
     No program/token heuristics — those misfire on shell-prefixed commands.
     """
     norm = _normalize(command)
@@ -228,7 +228,7 @@ def check_submission(fields: Mapping[str, Any],
     Edit-necessity rejects edit-less finishes as a ``solution_description``
     gap: a real fix necessarily writes. The declared command must have been
     run, and — when the harness reruns — must exit 0 on the rerun. Which
-    command counts as the full suite is the model's call per repository
+    command counts as the verify command is the model's call per task
     (prompt contract); the gate verifies authenticity (run, passing,
     quoted), never the runner's identity.
     """

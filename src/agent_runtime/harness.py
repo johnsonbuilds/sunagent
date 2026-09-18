@@ -194,7 +194,7 @@ class VerificationGenome:
     ``submit_result`` tool: finishing requires one call with all three
     parameters as typed arguments — no answer-string parsing — while the
     same shape/grounding pipeline validates the submission. Which
-    command counts as the full suite is the model's call per repository
+    command counts as the verify command is the model's call per task
     (prompt contract: whatever runner this repo uses, declared exactly as
     run). A declared command is always re-executed verbatim via
     ``run_command`` (600s timeout): exit 0 accepts, anything else rejects

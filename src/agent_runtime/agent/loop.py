@@ -66,7 +66,7 @@ logger = logging.getLogger(__name__)
 SUBMIT_TOOL = "submit_result"
 
 _RERUN_OUTPUT_CHARS = 1500
-# Full suites take minutes; the agent's own default (30s) would turn every
+# Verify commands take minutes; the agent's own default (30s) would turn every
 # honest rerun into a timeout failure. The timeout is a ceiling only: the
 # rerun returns as soon as the process exits, so a broken declaration
 # (e.g. "No module named pytest") fails fast instead of burning 600s.
@@ -78,7 +78,7 @@ _RERUN_TIMEOUT = 600.0
 # exhaustive): without evidence that tests ran, the declaration itself is
 # treated as broken. That default is safe: misjudged as broken, the model
 # re-runs the command once and self-corrects; misjudged as a test failure,
-# it would burn a full-suite run and loop.
+# it would burn a long verify run and loop.
 _TEST_RAN_RE = re.compile(
     r"\d+\s+(passed|failed|failing)\b|\bFAILED\b|--- FAIL\b"
     r"|\bFAIL\b|collected\s+\d+\s+item|test result:\s*\S*FAILED",
@@ -460,7 +460,7 @@ class AgentTurn:
                 f"ABORTED_REPEATED_FINISH_VIOLATIONS: {self._finish_violations} "
                 f"consecutive finish attempts rejected without interleaving work "
                 f"(limit {limit}). Finish by calling submit_result with valid "
-                f"parameters after running the full test suite.")
+                 f"parameters after running the tests.")
 
     def _take_submit_args(
             self, outcomes: list[ToolCallOutcome]) -> dict[str, Any] | None:
