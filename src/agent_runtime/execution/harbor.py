@@ -158,3 +158,172 @@ class HarborWorkspace:
                             "size": int(raw_size)})
         entries.sort(key=lambda entry: (entry["type"] != "dir", entry["name"].lower()))
         return {"path": path, "entries": entries}
+
+    async def search_contents(self, pattern: str, path: str = ".",
+                              include: str | None = None,
+                              ignore_case: bool = False,
+                              max_results: int = 200) -> dict[str, Any] | None:
+        """Single-exec server-side grep via rg (fallback grep -rn).
+
+        Same contract as tools.grep_search. Returns None only when the
+        container has neither rg nor grep (caller falls back to walk+read).
+        borrows labs-OO-Agents fail-closed ideas: rg exit 2 (bad regex
+        dialect) is reported as an error instead of guessed anchors.
+        """
+        from agent_runtime.tools.search import (MATCHES_PER_FILE,
+                                                MAX_FILE_BYTES, PREVIEW_CHARS,
+                                                SKIP_DIRS)
+        import fnmatch
+
+        if not pattern:
+            raise ValueError("pattern must not be empty")
+        max_results = max(1, min(max_results, 1000))
+        target = self._resolve(path)
+
+        def build_rg(extra_args: list[str]) -> str:
+            parts: list[str] = ["rg", "--vimgrep", "--no-heading",
+                                "--hidden", "--no-ignore",
+                                "--max-filesize", str(MAX_FILE_BYTES),
+                                "--max-count", str(MATCHES_PER_FILE)]
+            if ignore_case:
+                parts.append("-i")
+            for junk in sorted(SKIP_DIRS):
+                parts += ["--glob", f"!{junk}/**", "--glob", f"!{junk}"]
+            if include:
+                parts += ["--glob", include]
+            parts += extra_args + ["--", pattern, target]
+            return " ".join(shlex.quote(p) for p in parts)
+
+        async def run_raw(command: str) -> Any:
+            try:
+                return await self.environment.exec(command, cwd=None,
+                                                   timeout_sec=60)
+            except Exception as exc:
+                return exc
+
+        result = await run_raw(build_rg([]))
+        if isinstance(result, Exception):
+            return {"error": {"type": type(result).__name__,
+                              "message": str(result)}}
+        if result.return_code not in (0, 1):
+            retry = await run_raw(build_rg(["--pcre2"]))
+            if isinstance(retry, Exception):
+                return {"error": {"type": type(retry).__name__,
+                                  "message": str(retry)}}
+            if retry.return_code not in (0, 1):
+                msg = _text(retry.stderr).strip() or f"exit code {retry.return_code}"
+                if retry.return_code == 127:
+                    return None
+                return {"pattern": pattern, "path": path,
+                        "error": {"type": "SearchError", "message": msg}}
+            result = retry
+        if result.return_code == 1:
+            return {"pattern": pattern, "matches": [], "match_count": 0,
+                    "truncated": False, "files_scanned": 0, "files_skipped": 0}
+
+        matches: list[dict[str, Any]] = []
+        truncated = False
+        seen_files: set[str] = set()
+        per_file: dict[str, int] = {}
+        root = posixpath.normpath(self.root) if self.root is not None else None
+        for line in _text(result.stdout).splitlines():
+            parts = line.split(":", 3)
+            if len(parts) != 4:
+                continue
+            raw_path, raw_line, _col, text = parts
+            if not raw_line.isdigit():
+                continue
+            rel = self._to_workspace_path(raw_path, path, target, root)
+            if include and not fnmatch.fnmatchcase(posixpath.basename(rel),
+                                                   include):
+                continue
+            seen_files.add(rel)
+            count = per_file.get(rel, 0)
+            if count >= MATCHES_PER_FILE:
+                continue
+            if len(matches) >= max_results:
+                truncated = True
+                break
+            preview = text.strip()
+            if len(preview) > PREVIEW_CHARS:
+                preview = preview[:PREVIEW_CHARS - 1] + "…"
+            matches.append({"path": rel, "line": int(raw_line),
+                            "preview": preview})
+            per_file[rel] = count + 1
+        out: dict[str, Any] = {
+            "pattern": pattern,
+            "matches": matches,
+            "match_count": len(matches),
+            "truncated": truncated,
+            "files_scanned": len(seen_files),
+            "files_skipped": 0,
+        }
+        if truncated:
+            out["note"] = ("results truncated; narrow the pattern, set "
+                           "include (e.g. '*.py'), or raise max_results")
+        return out
+
+    def _to_workspace_path(self, raw_path: str, search_path: str,
+                           target: str, root: str | None) -> str:
+        """Map a container-side hit back to a workspace-relative path."""
+        cleaned = raw_path[2:] if raw_path.startswith("./") else raw_path
+        if root is not None:
+            norm = posixpath.normpath(cleaned)
+            if norm == root:
+                return search_path
+            if norm.startswith(root + "/"):
+                return norm[len(root) + 1:]
+            return cleaned
+        norm_target = posixpath.normpath(target)
+        if norm_target in (".", ""):
+            return cleaned
+        norm_clean = posixpath.normpath(cleaned)
+        if norm_clean == norm_target:
+            return search_path
+        if norm_clean.startswith(norm_target + "/"):
+            return norm_clean
+        return cleaned
+
+    async def find_paths(self, pattern: str, path: str = ".",
+                         max_results: int = 100) -> dict[str, Any] | None:
+        """Single-exec server-side filename listing via find."""
+        from agent_runtime.tools.search import SKIP_DIRS, _matches_path
+
+        if not pattern:
+            raise ValueError("pattern must not be empty")
+        max_results = max(1, min(max_results, 1000))
+        target = self._resolve(path)
+        prune = "".join(
+            f" -path {shlex.quote(f'*/{junk}')} -prune -o"
+            for junk in sorted(SKIP_DIRS)
+        )
+        command = (f"find {shlex.quote(target)}{prune} -type f -print")
+        try:
+            result = await self.environment.exec(command, cwd=None,
+                                                 timeout_sec=60)
+        except Exception as exc:
+            return {"error": {"type": type(exc).__name__, "message": str(exc)}}
+        if result.return_code != 0:
+            if result.return_code == 127:
+                return None
+            msg = _text(result.stderr).strip() or f"exit code {result.return_code}"
+            return {"pattern": pattern, "path": path,
+                    "error": {"type": "CommandError", "message": msg}}
+        root = posixpath.normpath(self.root) if self.root is not None else None
+        rel_paths: list[str] = []
+        for line in _text(result.stdout).splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            rel_paths.append(self._to_workspace_path(line, path, target, root))
+        matches = sorted(p for p in rel_paths if _matches_path(p, pattern))
+        truncated = len(matches) > max_results
+        return {
+            "pattern": pattern,
+            "matches": matches[:max_results],
+            "match_count": min(len(matches), max_results),
+            "total_matches": len(matches),
+            "truncated": truncated,
+            **({"note": "results truncated; raise max_results for more"}
+               if truncated else {}),
+        }

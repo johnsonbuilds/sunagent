@@ -45,6 +45,23 @@ class Workspace(Protocol):
     async def list_dir(self, path: str = ".") -> dict[str, Any]:
         """List one directory's entries, directories first."""
 
+    async def search_contents(self, pattern: str, path: str = ".",
+                              include: str | None = None,
+                              ignore_case: bool = False,
+                              max_results: int = 200) -> dict[str, Any] | None:
+        """Fast server-side content search; None means no fast path.
+
+        Returns the same shape as tools.grep_search (matches/match_count/
+        truncated/files_scanned/files_skipped), or None to let the caller
+        fall back to the generic walk+read loop.
+        """
+        return None
+
+    async def find_paths(self, pattern: str, path: str = ".",
+                         max_results: int = 100) -> dict[str, Any] | None:
+        """Fast server-side filename search; None means no fast path."""
+        return None
+
 
 def paginate_lines(text: str, offset: int, limit: int | None) -> dict[str, Any]:
     """Shared line-pagination semantics for ``read_file`` results.

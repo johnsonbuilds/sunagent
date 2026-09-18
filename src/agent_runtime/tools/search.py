@@ -102,6 +102,18 @@ async def grep_search(pattern: str, path: str = ".",
     max_results = max(1, min(max_results, MAX_GREP_RESULTS))
 
     ws = workspace or LocalWorkspace()
+    fast_search = getattr(ws, "search_contents", None)
+    if callable(fast_search):
+        try:
+            outcome = await ws.search_contents(
+                pattern, path, include, ignore_case, max_results)
+        except ValueError:
+            raise
+        except Exception as exc:
+            return {"pattern": pattern, "path": path,
+                    "error": {"type": type(exc).__name__, "message": str(exc)}}
+        if outcome is not None:
+            return outcome
     files = await walk_files(ws, path)
     if isinstance(files, dict):
         return {"pattern": pattern, "path": path, **files}
@@ -163,7 +175,19 @@ async def find_files(pattern: str, path: str = ".",
         raise ValueError("pattern must not be empty")
     max_results = max(1, min(max_results, MAX_FIND_RESULTS))
 
-    files = await walk_files(workspace or LocalWorkspace(), path)
+    ws = workspace or LocalWorkspace()
+    fast_find = getattr(ws, "find_paths", None)
+    if callable(fast_find):
+        try:
+            outcome = await ws.find_paths(pattern, path, max_results)
+        except ValueError:
+            raise
+        except Exception as exc:
+            return {"pattern": pattern, "path": path,
+                    "error": {"type": type(exc).__name__, "message": str(exc)}}
+        if outcome is not None:
+            return outcome
+    files = await walk_files(ws, path)
     if isinstance(files, dict):
         return {"pattern": pattern, "path": path, **files}
 

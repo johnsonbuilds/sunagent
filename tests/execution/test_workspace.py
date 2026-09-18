@@ -209,6 +209,43 @@ class HarborWorkspaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(read["error"]["type"], "CommandError")
         self.assertIn("No such file", read["error"]["message"])
 
+    async def test_search_contents_single_exec_vimgrep(self) -> None:
+        environment = ScriptedEnvironment([
+            FakeExecResult(stdout="src/app.py:2:7:return serve()\n"),
+        ])
+        workspace = HarborWorkspace(environment)
+
+        result = await workspace.search_contents(r"serve\(\)")
+
+        self.assertEqual(len(environment.commands), 1)
+        self.assertIn("rg", environment.commands[0])
+        self.assertEqual(result["match_count"], 1)
+        self.assertEqual(result["matches"][0],
+                         {"path": "src/app.py", "line": 2,
+                          "preview": "return serve()"})
+
+    async def test_search_contents_no_match_is_empty_not_error(self) -> None:
+        environment = ScriptedEnvironment([FakeExecResult(stdout="",
+                                                          return_code=1)])
+        workspace = HarborWorkspace(environment)
+
+        result = await workspace.search_contents("nothing-matches")
+
+        self.assertEqual(result["match_count"], 0)
+        self.assertFalse(result["truncated"])
+
+    async def test_find_paths_single_exec(self) -> None:
+        environment = ScriptedEnvironment([
+            FakeExecResult(stdout="src/models/user.py\nsrc/util.ts\n"),
+        ])
+        workspace = HarborWorkspace(environment)
+
+        result = await workspace.find_paths("**/*.py")
+
+        self.assertEqual(len(environment.commands), 1)
+        self.assertIn("find", environment.commands[0])
+        self.assertEqual(result["matches"], ["src/models/user.py"])
+
 
 if __name__ == "__main__":
     unittest.main()
