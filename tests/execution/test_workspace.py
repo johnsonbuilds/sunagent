@@ -234,6 +234,23 @@ class HarborWorkspaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["match_count"], 0)
         self.assertFalse(result["truncated"])
 
+    async def test_search_contents_falls_back_to_grep(self) -> None:
+        environment = ScriptedEnvironment([
+            FakeExecResult(stderr="rg: not found\n", return_code=127),
+            FakeExecResult(stderr="unrecognized\n", return_code=2),
+            FakeExecResult(stdout="src/app.py:2:return serve()\n"),
+        ])
+        workspace = HarborWorkspace(environment)
+
+        result = await workspace.search_contents(r"serve\(\)")
+
+        self.assertEqual(len(environment.commands), 3)
+        self.assertIn("grep", environment.commands[2])
+        self.assertEqual(result["match_count"], 1)
+        self.assertEqual(result["matches"][0],
+                         {"path": "src/app.py", "line": 2,
+                          "preview": "return serve()"})
+
     async def test_find_paths_single_exec(self) -> None:
         environment = ScriptedEnvironment([
             FakeExecResult(stdout="src/models/user.py\nsrc/util.ts\n"),

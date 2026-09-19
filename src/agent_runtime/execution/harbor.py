@@ -194,6 +194,19 @@ class HarborWorkspace:
             parts += extra_args + ["--", pattern, target]
             return " ".join(shlex.quote(p) for p in parts)
 
+        def build_grep() -> str:
+            # POSIX fallback: grep is coreutils, always present where rg
+            # may not be. Output is path:line:text (no column).
+            parts: list[str] = ["grep", "-rn", "-E", "-I"]
+            if ignore_case:
+                parts.append("-i")
+            for junk in sorted(SKIP_DIRS):
+                parts += ["--exclude-dir", junk]
+            if include:
+                parts += ["--include", include]
+            parts += ["-e", pattern, target]
+            return " ".join(shlex.quote(p) for p in parts)
+
         async def run_raw(command: str) -> Any:
             try:
                 return await self.environment.exec(command, cwd=None,
@@ -211,12 +224,26 @@ class HarborWorkspace:
                 return {"error": {"type": type(retry).__name__,
                                   "message": str(retry)}}
             if retry.return_code not in (0, 1):
-                msg = _text(retry.stderr).strip() or f"exit code {retry.return_code}"
-                if retry.return_code == 127:
-                    return None
-                return {"pattern": pattern, "path": path,
-                        "error": {"type": "SearchError", "message": msg}}
-            result = retry
+                if retry.return_code in (2, 127):
+                    result = await run_raw(build_grep())
+                    if isinstance(result, Exception):
+                        return {"error": {"type": type(result).__name__,
+                                          "message": str(result)}}
+                    if result.return_code not in (0, 1):
+                        if result.return_code == 127:
+                            return None
+                        msg = (_text(result.stderr).strip()
+                               or f"exit code {result.return_code}")
+                        return {"pattern": pattern, "path": path,
+                                "error": {"type": "SearchError",
+                                          "message": msg}}
+                else:
+                    msg = (_text(retry.stderr).strip()
+                           or f"exit code {retry.return_code}")
+                    return {"pattern": pattern, "path": path,
+                            "error": {"type": "SearchError", "message": msg}}
+            else:
+                result = retry
         if result.return_code == 1:
             return {"pattern": pattern, "matches": [], "match_count": 0,
                     "truncated": False, "files_scanned": 0, "files_skipped": 0}
@@ -227,12 +254,24 @@ class HarborWorkspace:
         per_file: dict[str, int] = {}
         root = posixpath.normpath(self.root) if self.root is not None else None
         for line in _text(result.stdout).splitlines():
-            parts = line.split(":", 3)
-            if len(parts) != 4:
-                continue
-            raw_path, raw_line, _col, text = parts
-            if not raw_line.isdigit():
-                continue
+            raw_path: str | None = None
+            raw_line: str | None = None
+            text: str | None = None
+            vimgrep = line.split(":", 3)
+            if len(vimgrep) == 4 and vimgrep[1].isdigit():
+                raw_path, raw_line, _col, text = vimgrep
+            else:
+                # grep -rn fallback: path:line:text (no column); a lone
+                # file target omits the filename -> line:text.
+                plain = line.split(":", 2)
+                if len(plain) == 3 and plain[1].isdigit():
+                    raw_path, raw_line, text = plain
+                elif len(plain) == 2 and plain[0].isdigit():
+                    raw_path, raw_line, text = target, plain[0], plain[1]
+                else:
+                    continue
+            assert raw_path is not None and raw_line is not None
+            assert text is not None
             rel = self._to_workspace_path(raw_path, path, target, root)
             if include and not fnmatch.fnmatchcase(posixpath.basename(rel),
                                                    include):
