@@ -391,6 +391,8 @@ def _submit_result_spec() -> ToolSpec:
         "solution_description: states the root cause and what was changed. "
         "evidence: quote the actual shell output you observed; do not invent results."
         "command_to_verify: one shell command you already ran, that exits 0 on success, "
+        "must name test files (file-level, e.g. pytest tests/test_auth.py -q --tb=short), "
+        "no -k/--deselect narrowing, "
         "including any leading cd. Keep test output concise (`-q --tb=short`, no tail pipes hiding failures). "
         "Never declare a command with output pipes (`|`, `;`, `||`): pipes hand the exit code"
         " to the last stage, so a failing suite looks green. `&&` chains and `>` redirects are fine."

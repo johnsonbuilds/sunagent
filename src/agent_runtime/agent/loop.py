@@ -40,6 +40,7 @@ from agent_runtime.agent.tool_error_budget import (
 from agent_runtime.agent.verification import (
     check_submission,
     contract_nudge,
+    has_source_edit,
     render_submission,
     submit_nudge,
 )
@@ -223,6 +224,7 @@ class AgentTurn:
             resolve_max_retries(harness.recovery.tool_error_max_retries))
 
         for iteration in range(1, self.max_iterations + 1):
+            self._maybe_emit_budget_reminder(history, iteration)
             try:
                 await history.refresh_view(harness.memory,
                                            trace=trace, iteration=iteration)
@@ -440,6 +442,41 @@ class AgentTurn:
         logger.debug("agent.final iteration=%d answer_chars=%d", iteration, len(answer))
         events.emit("agent.completed", iteration, iterations=iteration, answer=answer)
         return answer
+
+    def _maybe_emit_budget_reminder(self, history: TurnHistory, iteration: int) -> None:
+        """Close-loop nudge at configured budget fractions (control gene).
+
+        Fires once per threshold: reports remaining budget + whether a
+        source edit exists, and forces the file-level test + submit path.
+        Detection reuses verification helpers — no new state tracked.
+        """
+        reminder = self.harness.control.budget_reminder
+        if not reminder.enabled:
+            return
+        if iteration < 2:
+            return
+        triggered = any(
+            int(f * self.max_iterations) == iteration for f in reminder.at_fractions
+        )
+        if not triggered:
+            return
+        edited = has_source_edit(history.messages)
+        remaining = self.max_iterations - iteration
+        history.append({
+            "role": "user",
+            "content": (
+                f"Budget {iteration}/{self.max_iterations} "
+                f"({remaining} left). Source edit so far: {edited}. "
+                "Close the loop: 1) make >=1 source edit with the right tool "
+                "(apply_patch default multi-hunk, edit_file single-point/conflict "
+                "markers, write_file new/full rewrite), "
+                "2) run a FILE-LEVEL test command naming test files "
+                "(no -k/--deselect), "
+                "3) submit_result with that exact command."
+            ),
+        })
+        self.trace.emit("budget.reminder", iteration,
+                        remaining=remaining, edited=edited)
 
     def _note_finish_violation(self, iteration: int) -> None:
         """Count a rejected finish attempt; abort at the harness limit.

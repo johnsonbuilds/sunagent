@@ -22,8 +22,8 @@ from tests.agent.test_verification import EDIT_SCHEMA, RUN_SCHEMA
 
 GOOD_FIELDS = {
     "solution_description": "Root cause was X in auth.py, fixed with quote_plus().",
-    "evidence": "pytest -q passed: 5 passed in 1.2s, output observed above.",
-    "command_to_verify": "pytest -q",
+    "evidence": "pytest tests/test_x.py -q passed: 5 passed in 1.2s, output observed above.",
+    "command_to_verify": "pytest tests/test_x.py -q",
 }
 
 REQUIRE = ("solution_description", "evidence", "command_to_verify")
@@ -95,13 +95,13 @@ class MatchCommandTests(unittest.TestCase):
     def test_substring_declaration_accepted(self) -> None:
         from agent_runtime.agent.verification import _command_grounded
         self.assertTrue(_command_grounded(
-            "pytest -q", ["cd /testbed && pytest -q 2>&1 | tail -5"]))
+            "pytest tests/test_x.py -q", ["cd /testbed && pytest tests/test_x.py -q 2>&1 | tail -5"]))
 
     def test_program_only_similarity_rejected(self) -> None:
         from agent_runtime.agent.verification import _command_grounded
         self.assertFalse(_command_grounded(
-            "pytest -q", ["pytest tests/other/ -q -x"]))
-        self.assertFalse(_command_grounded("npm test", ["pytest -q"]))
+            "pytest tests/test_x.py -q", ["pytest tests/other/ -q -x"]))
+        self.assertFalse(_command_grounded("npm test", ["pytest tests/test_x.py -q"]))
 
 
 class SubmitResultLoopTests(unittest.IsolatedAsyncioTestCase):
@@ -201,7 +201,7 @@ class NonCodeHarnessTests(unittest.IsolatedAsyncioTestCase):
     async def test_command_optional_without_rerun(self) -> None:
         fields = {"solution_description": GOOD_FIELDS["solution_description"],
                   "evidence": GOOD_FIELDS["evidence"]}
-        llm = FakeLLM([edit_turn(), run_turn_call("pytest -q"),
+        llm = FakeLLM([edit_turn(), run_turn_call("pytest tests/test_x.py -q"),
                        submit_turn(fields)])
         harness = submit_harness(
             require=("solution_description", "evidence"))
@@ -227,7 +227,7 @@ class SubmitRerunTests(unittest.IsolatedAsyncioTestCase):
                     "stderr": ""}
 
         dirty = dict(GOOD_FIELDS, command_to_verify=(
-            "pytest -q`\nthis command was just re-run "
+            "pytest tests/test_x.py -q`\nthis command was just re-run "
             "and exits 0 (output: `5 passed`)."))
         llm = FakeLLM([edit_turn(), run_turn_call(GOOD_FIELDS["command_to_verify"]),
                        submit_turn(dirty),
@@ -257,7 +257,7 @@ class SubmitRerunTests(unittest.IsolatedAsyncioTestCase):
                     "stderr": ""}
 
         llm = FakeLLM([edit_turn(),
-                       run_turn_call("pytest -q", cwd="/testbed"),
+                       run_turn_call("pytest tests/test_x.py -q", cwd="/testbed"),
                        submit_turn(GOOD_FIELDS)])
         trace = RunTrace()
         answer = await run_turn("fix it", llm, submit_registry(recording_run),
@@ -265,12 +265,12 @@ class SubmitRerunTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(answer, render_submission(GOOD_FIELDS))
         # History cwd is NOT replayed: the declared string runs verbatim
         # with the long suite timeout instead of the 30s tool default.
-        self.assertEqual(seen[-1], {"command": "pytest -q", "cwd": None,
+        self.assertEqual(seen[-1], {"command": "pytest tests/test_x.py -q", "cwd": None,
                                     "timeout": 600.0})
         reruns = [event for event in trace.events
                   if event.event_type == "verification.rerun"]
         self.assertEqual(len(reruns), 1)
-        self.assertEqual(reruns[0].data["command"], "pytest -q")
+        self.assertEqual(reruns[0].data["command"], "pytest tests/test_x.py -q")
 
     async def test_genuine_rerun_failure_rejects_then_recovers(self) -> None:
         async def routing_run(command: str, **kwargs) -> dict:
@@ -282,14 +282,14 @@ class SubmitRerunTests(unittest.IsolatedAsyncioTestCase):
 
         failing = {
             "solution_description": GOOD_FIELDS["solution_description"],
-            "evidence": "pytest -q -x: 1 failed in 0.5s observed.",
-            "command_to_verify": "pytest -q -x",
+            "evidence": "pytest tests/test_x.py -q -x: 1 failed in 0.5s observed.",
+            "command_to_verify": "pytest tests/test_x.py -q -x",
         }
         llm = FakeLLM([
             edit_turn(),
-            run_turn_call("pytest -q -x"),
+            run_turn_call("pytest tests/test_x.py -q -x"),
             submit_turn(failing),
-            run_turn_call("pytest -q", call_id="2"),
+            run_turn_call("pytest tests/test_x.py -q", call_id="2"),
             submit_turn(GOOD_FIELDS, call_id="3"),
         ])
         answer = await run_turn("fix it", llm, submit_registry(routing_run),
@@ -311,14 +311,14 @@ class SubmitRerunTests(unittest.IsolatedAsyncioTestCase):
 
         failing = {
             "solution_description": GOOD_FIELDS["solution_description"],
-            "evidence": "pytest -q -x: 1 failed, 5 passed in 0.5s observed.",
-            "command_to_verify": "pytest -q -x",
+            "evidence": "pytest tests/test_x.py -q -x: 1 failed, 5 passed in 0.5s observed.",
+            "command_to_verify": "pytest tests/test_x.py -q -x",
         }
         llm = FakeLLM([
             edit_turn(),
-            run_turn_call("pytest -q -x"),
+            run_turn_call("pytest tests/test_x.py -q -x"),
             submit_turn(failing),
-            run_turn_call("pytest -q", call_id="2"),
+            run_turn_call("pytest tests/test_x.py -q", call_id="2"),
             submit_turn(GOOD_FIELDS, call_id="3"),
         ])
         answer = await run_turn("fix it", llm, submit_registry(routing_run),
@@ -339,14 +339,14 @@ class SubmitRerunTests(unittest.IsolatedAsyncioTestCase):
     async def test_piped_declaration_rejected_then_fixed(self) -> None:
         piped = dict(
             GOOD_FIELDS,
-            evidence="pytest -q | tail: 5 passed in 1.2s observed.",
-            command_to_verify="pytest -q 2>&1 | tail -5",
+            evidence="pytest tests/test_x.py -q | tail: 5 passed in 1.2s observed.",
+            command_to_verify="pytest tests/test_x.py -q 2>&1 | tail -5",
         )
         llm = FakeLLM([
             edit_turn(),
-            run_turn_call("pytest -q 2>&1 | tail -5"),
+            run_turn_call("pytest tests/test_x.py -q 2>&1 | tail -5"),
             submit_turn(piped),
-            run_turn_call("pytest -q", call_id="2"),
+            run_turn_call("pytest tests/test_x.py -q", call_id="2"),
             submit_turn(GOOD_FIELDS, call_id="3"),
         ])
         answer = await run_turn("fix it", llm, submit_registry(),
@@ -360,12 +360,12 @@ class SubmitRerunTests(unittest.IsolatedAsyncioTestCase):
     async def test_redirect_declaration_accepted(self) -> None:
         logged = dict(
             GOOD_FIELDS,
-            evidence="pytest -q > log: 5 passed in 1.2s observed.",
-            command_to_verify="cd /testbed && pytest -q > /tmp/run.log 2>&1",
+            evidence="pytest tests/test_x.py -q > log: 5 passed in 1.2s observed.",
+            command_to_verify="cd /testbed && pytest tests/test_x.py -q > /tmp/run.log 2>&1",
         )
         llm = FakeLLM([
             edit_turn(),
-            run_turn_call("cd /testbed && pytest -q > /tmp/run.log 2>&1"),
+            run_turn_call("cd /testbed && pytest tests/test_x.py -q > /tmp/run.log 2>&1"),
             submit_turn(logged),
         ])
         answer = await run_turn("fix it", llm, submit_registry(),
@@ -392,7 +392,7 @@ class SubmitRerunTests(unittest.IsolatedAsyncioTestCase):
             edit_turn(),
             run_turn_call("./run_tests.sh"),
             submit_turn(broken),
-            run_turn_call("pytest -q", call_id="2"),
+            run_turn_call("pytest tests/test_x.py -q", call_id="2"),
             submit_turn(GOOD_FIELDS, call_id="3"),
         ])
         answer = await run_turn("fix it", llm, submit_registry(routing_run),
@@ -442,7 +442,7 @@ class SubmitRerunTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_env_broken_rerun_nudges_declaration_fix(self) -> None:
         async def routing_run(command: str, **kwargs) -> dict:
-            if command == "python -m pytest -q":
+            if command == "python -m pytest tests/test_x.py -q":
                 return {"exit_code": 1, "stdout": "",
                         "stderr": ("/opt/miniconda3/bin/python: "
                                    "No module named pytest")}
@@ -451,17 +451,17 @@ class SubmitRerunTests(unittest.IsolatedAsyncioTestCase):
 
         broken = dict(
             GOOD_FIELDS,
-            evidence=("python -m pytest -q: No module named pytest observed."),
-            command_to_verify="python -m pytest -q",
+            evidence=("python -m pytest tests/test_x.py -q: No module named pytest observed."),
+            command_to_verify="python -m pytest tests/test_x.py -q",
         )
         fixed = dict(
             GOOD_FIELDS,
-            evidence="env python -m pytest -q: 5 passed in 1.2s observed.",
-            command_to_verify="/opt/miniconda3/envs/testbed/bin/python -m pytest -q",
+            evidence="env python -m pytest tests/test_x.py -q: 5 passed in 1.2s observed.",
+            command_to_verify="/opt/miniconda3/envs/testbed/bin/python -m pytest tests/test_x.py -q",
         )
         llm = FakeLLM([
             edit_turn(),
-            run_turn_call("python -m pytest -q"),
+            run_turn_call("python -m pytest tests/test_x.py -q"),
             submit_turn(broken),
             run_turn_call(fixed["command_to_verify"], call_id="2"),
             submit_turn(fixed, call_id="3"),
@@ -500,7 +500,7 @@ class FinishFuseTests(unittest.IsolatedAsyncioTestCase):
                        {"content": "done", "tool_calls": []},
                        {"content": "done", "tool_calls": []},
                        edit_turn(call_id="2"),
-                       run_turn_call("pytest -q", call_id="3"),
+                       run_turn_call("pytest tests/test_x.py -q", call_id="3"),
                        submit_turn(GOOD_FIELDS, call_id="4")])
         answer = await run_turn("fix it", llm, submit_registry(),
                                 harness=submit_harness())
@@ -541,7 +541,7 @@ class SubmitModeGatingTests(unittest.IsolatedAsyncioTestCase):
         ])
         legacy = HarnessSpec(verification=VerificationGenome(
             enabled=True, mode="return_contract", require=REQUIRE))
-        llm = FakeLLM([edit_turn(), run_turn_call("pytest -q"),
+        llm = FakeLLM([edit_turn(), run_turn_call("pytest tests/test_x.py -q"),
                        {"content": "still prose", "tool_calls": []},
                        submit_turn(GOOD_FIELDS, call_id="4")])
         answer = await run_turn("fix it", llm, registry, harness=legacy)

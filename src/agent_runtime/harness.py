@@ -142,6 +142,12 @@ class ToolGenome:
 
 
 @dataclass(frozen=True)
+class BudgetReminder:
+    enabled: bool = False
+    at_fractions: tuple[float, ...] = (0.6, 0.85)
+
+
+@dataclass(frozen=True)
 class ControlGenome:
     max_iterations: int = 10
     max_observation_chars: int = DEFAULT_MAX_OBSERVATION_CHARS
@@ -151,6 +157,7 @@ class ControlGenome:
     # turn aborts. 0 disables the fuse (legacy behavior: burn the whole
     # iteration budget on prose).
     finish_violation_limit: int = 3
+    budget_reminder: BudgetReminder = field(default_factory=BudgetReminder)
 
 
 @dataclass(frozen=True)
@@ -344,7 +351,8 @@ def _control_genome(data: Mapping[str, Any]) -> ControlGenome:
     if not isinstance(section, Mapping):
         raise HarnessError("control must be a mapping")
     _check_keys(section, {"max_iterations", "max_observation_chars",
-                          "spill_preview_chars", "finish_violation_limit"},
+                          "spill_preview_chars", "finish_violation_limit",
+                          "budget_reminder"},
                 "control")
     value = section.get("max_iterations", 10)
     if not isinstance(value, int) or isinstance(value, bool) or value < 1:
@@ -362,7 +370,30 @@ def _control_genome(data: Mapping[str, Any]) -> ControlGenome:
         spill_preview_chars=_positive_int(
             section.get("spill_preview_chars"), "control.spill_preview_chars",
             DEFAULT_SPILL_PREVIEW_CHARS),
-        finish_violation_limit=violation_limit)
+        finish_violation_limit=violation_limit,
+        budget_reminder=_budget_reminder(section.get("budget_reminder")))
+
+
+def _budget_reminder(value: Any) -> BudgetReminder:
+    if value is None:
+        return BudgetReminder()
+    if not isinstance(value, Mapping):
+        raise HarnessError("control.budget_reminder must be a mapping")
+    _check_keys(value, {"enabled", "at_fractions"}, "control.budget_reminder")
+    enabled = value.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise HarnessError("control.budget_reminder.enabled must be a boolean")
+    raw = value.get("at_fractions", (0.6, 0.85))
+    if not isinstance(raw, (list, tuple)) or not raw:
+        raise HarnessError("control.budget_reminder.at_fractions must be a non-empty list")
+    fractions: list[float] = []
+    for item in raw:
+        if not isinstance(item, (int, float)) or isinstance(item, bool) \
+                or not 0 < item < 1:
+            raise HarnessError(
+                "control.budget_reminder.at_fractions entries must be in (0, 1)")
+        fractions.append(float(item))
+    return BudgetReminder(enabled=enabled, at_fractions=tuple(sorted(fractions)))
 
 
 def _memory_genome(data: Mapping[str, Any]) -> MemoryGenome:
@@ -682,7 +713,7 @@ if __name__ == "__main__":
 
 __all__ = [
     "DEFAULT_HARNESS", "HarnessError", "HarnessSpec", "ITERATION_LIMIT_NOTICE",
-    "PromptGenome", "ToolGenome", "ControlGenome", "MemoryGenome",
+    "PromptGenome", "ToolGenome", "BudgetReminder", "ControlGenome", "MemoryGenome",
     "RecoveryGenome", "VerificationGenome", "DEFAULT_VERIFICATION_REQUIRE",
     "VERIFICATION_MODES", "TOOL_ERROR_STRATEGIES",
     "LLM_RETRY_CATEGORIES", "LLMRetryPolicy", "BACKOFF_POLICIES",

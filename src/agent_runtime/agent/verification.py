@@ -74,7 +74,7 @@ def contract_nudge(gaps: dict[str, str] | list[str]) -> str:
         "evidence (quote the actual shell output you observed: test names, counts, "
         "key lines — do not invent results), "
         "command_to_verify (one shell command you already ran that exits 0 on success). "
-        "A finished fix must include at least one source edit."
+        "A finished fix must include at least one source edit with the right tool."
     )
 
 
@@ -102,7 +102,7 @@ def submit_nudge() -> str:
         "key lines — do not invent results), "
         "command_to_verify (one shell command you already ran that exits 0 on success). "
         "Plain-text answers cannot finish the task. "
-        "A finished fix must include at least one source edit; "
+        "A finished fix must include at least one source edit with the right tool; "
         "run the tests first if you have not, then submit."
     )
 
@@ -203,6 +203,24 @@ def _command_grounded(command: str, executed: list[str]) -> bool:
 
 _QUOTED_SPAN_RE = re.compile(r"'[^']*'|\"[^\"]*\"")
 
+_NARROW_RE = re.compile(r"(^|\s)(-k\b|--deselect\b|--ignore\b|/::)", re.IGNORECASE)
+_FILE_TARGET_RE = re.compile(r"[\w\-/]+\.(?:py|sh)\b|tests?/[\w\-/.]+|test_[\w\-/]+")
+
+
+def _is_file_level(command: str) -> bool:
+    """Declared command targets test files, not a narrowed selection.
+
+    ``-k`` / ``-m`` / ``--deselect`` / node-ids select a subset, so a
+    passing rerun proves little about regressions. Only the last
+    ``&&`` segment is checked so ``cd`` / ``source ... activate``
+    prefixes stay allowed.
+    """
+    bare = _QUOTED_SPAN_RE.sub("", command)
+    if _NARROW_RE.search(bare):
+        return False
+    last = bare.split("&&")[-1]
+    return bool(_FILE_TARGET_RE.search(last))
+
 
 def _masks_exit_code(command: str) -> bool:
     """Declared command hides the runner's exit code behind shell plumbing.
@@ -263,6 +281,11 @@ def check_submission(fields: Mapping[str, Any],
                 "output pipes mask the test exit code (the exit code "
                 "becomes the pipe's, not the tests') — declare the command "
                 "without pipes; redirect to a file if you need the log")
+        elif not _is_file_level(command):
+            gaps["command_to_verify"] = (
+                "narrow/file-less command — declare a file-level test "
+                "command, e.g. cd /testbed && pytest tests/test_auth.py "
+                "-q --tb=short; -k/--deselect not allowed")
     return gaps
 
 
