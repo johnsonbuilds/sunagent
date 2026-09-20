@@ -1,6 +1,6 @@
 id: code-v15
 parent: code-v14
-mutation: 'control.budget_reminder gene (60%/85% close-loop nudge) + file-level command_to_verify gate'
+mutation: 'control.budget_reminder gene (60%/85% close-loop nudge) + file-level command_to_verify gate + max_iterations 50->80'
 reason: 'code-v14 63零分主因：52未提交耗尽预算、11窄-k假自信；加预算收口提醒并拒窄选命令'
 prompt:
   system: ''
@@ -17,7 +17,7 @@ tools:
   - find_files
   - submit_result
 control:
-  max_iterations: 50
+  max_iterations: 80
   finish_violation_limit: 3
   budget_reminder:
     enabled: true
