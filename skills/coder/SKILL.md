@@ -19,4 +19,4 @@ Edit routing (pick ONE per edit, must total >=1 source edit):
 Verify: every source file you changed must have its corresponding test file run
 (e.g. changed `xarray/core/dataset.py` -> run `xarray/tests/test_dataset.py`);
 then run neighbouring test files for regressions. Declare a file-level
-command naming test files (e.g. `pytest tests/test_auth.py -q --tb=short`), no `-k/--deselect` narrowing.
+command naming test files (e.g. `pytest tests/test_auth.py -q --tb=short`).

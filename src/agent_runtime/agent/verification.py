@@ -203,21 +203,18 @@ def _command_grounded(command: str, executed: list[str]) -> bool:
 
 _QUOTED_SPAN_RE = re.compile(r"'[^']*'|\"[^\"]*\"")
 
-_NARROW_RE = re.compile(r"(^|\s)(-k\b|--deselect\b|--ignore\b|/::)", re.IGNORECASE)
 _FILE_TARGET_RE = re.compile(r"[\w\-/]+\.(?:py|sh)\b|tests?/[\w\-/.]+|test_[\w\-/]+")
 
 
 def _is_file_level(command: str) -> bool:
-    """Declared command targets test files, not a narrowed selection.
+    """Declared command targets test files.
 
-    ``-k`` / ``-m`` / ``--deselect`` / node-ids select a subset, so a
-    passing rerun proves little about regressions. Only the last
-    ``&&`` segment is checked so ``cd`` / ``source ... activate``
-    prefixes stay allowed.
+    Only the last ``&&`` segment is checked so ``cd`` / ``source``
+    prefixes stay allowed. Which files (and how many) is the model's
+    call per the skill contract — the gate only requires that the
+    command names test files instead of running an unnamed suite.
     """
     bare = _QUOTED_SPAN_RE.sub("", command)
-    if _NARROW_RE.search(bare):
-        return False
     last = bare.split("&&")[-1]
     return bool(_FILE_TARGET_RE.search(last))
 
@@ -283,9 +280,9 @@ def check_submission(fields: Mapping[str, Any],
                 "without pipes; redirect to a file if you need the log")
         elif not _is_file_level(command):
             gaps["command_to_verify"] = (
-                "narrow/file-less command — declare a file-level test "
-                "command, e.g. cd /testbed && pytest tests/test_auth.py "
-                "-q --tb=short; -k/--deselect not allowed")
+                "file-less command — declare a test command naming test "
+                "files, e.g. cd /testbed && pytest tests/test_auth.py "
+                "-q --tb=short")
     return gaps
 
 

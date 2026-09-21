@@ -206,9 +206,14 @@ class FileLevelTests(unittest.TestCase):
                   "command_to_verify": command}
         return check_submission(fields, REQUIRE, messages)
 
-    def test_narrow_k_rejected(self) -> None:
+    def test_narrow_k_allowed_with_file(self) -> None:
+        # Narrowing is the skill's call, not the gate's: file-level
+        # commands pass even with -k/node-ids.
         gaps = self._file_level('pytest tests/test_x.py -q -k "foo"')
-        self.assertIn("command_to_verify", gaps)
+        self.assertNotIn("command_to_verify", gaps)
+        gaps = self._file_level(
+            "pytest tests/test_x.py::TestY::test_z -q --tb=short")
+        self.assertNotIn("command_to_verify", gaps)
 
     def test_bare_pytest_rejected(self) -> None:
         gaps = self._file_level("cd /testbed && pytest -q")
