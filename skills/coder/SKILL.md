@@ -16,4 +16,7 @@ Edit routing (pick ONE per edit, must total >=1 source edit):
 - edit_file: single-point fix, or text contains conflict markers (`<<<<<<<`/`=======`/`>>>>>>>`, apply_patch can't express them).
 - write_file: new file or full-file rewrite only; don't use it to dodge syntax-gate failures.
 
-Verify: file-level test command naming test files (e.g. `pytest tests/test_auth.py -q --tb=short`), no `-k/--deselect` narrowing.
+Verify: every source file you changed must have its corresponding test file run
+(e.g. changed `xarray/core/dataset.py` -> run `xarray/tests/test_dataset.py`);
+then run neighbouring test files for regressions. Declare a file-level
+command naming test files (e.g. `pytest tests/test_auth.py -q --tb=short`), no `-k/--deselect` narrowing.
