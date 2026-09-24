@@ -113,13 +113,12 @@ class ApplyPatchTests(unittest.IsolatedAsyncioTestCase):
                 await registry.execute("apply_patch", {
                     "patch": block("a.py", "", "y\n")})
 
-    async def test_edit_missing_file_reports_error(self) -> None:
+    async def test_edit_missing_file_raises(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             registry = make_registry(directory)
-            result = await registry.execute("apply_patch", {
-                "patch": block("ghost.py", "old text", "new text")})
-
-        self.assertIn("error", result)
+            with self.assertRaisesRegex(ValueError, "cannot read file"):
+                await registry.execute("apply_patch", {
+                    "patch": block("ghost.py", "old text", "new text")})
 
     async def test_malformed_patch_raises(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -138,6 +137,50 @@ class ApplyPatchTests(unittest.IsolatedAsyncioTestCase):
             registry = make_registry(directory)
             with self.assertRaisesRegex(ValueError, "non-empty"):
                 await registry.execute("apply_patch", {"patch": "  "})
+
+    async def test_unified_diff_is_rejected_with_guidance(self) -> None:
+        diff = ("diff --git a/calc.py b/calc.py\n"
+                "--- a/calc.py\n"
+                "+++ b/calc.py\n"
+                "@@ -1 +1 @@\n"
+                "-return a + b\n"
+                "+return a - b\n")
+        with tempfile.TemporaryDirectory() as directory:
+            registry = make_registry(directory)
+            with self.assertRaisesRegex(ValueError, "unified diff"):
+                await registry.execute("apply_patch", {"patch": diff})
+
+    async def test_absolute_path_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            registry = make_registry(directory)
+            with self.assertRaisesRegex(ValueError, "workspace-relative"):
+                await registry.execute("apply_patch", {
+                    "patch": block("/etc/calc.py", "x", "y")})
+
+    async def test_escaping_path_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            registry = make_registry(directory)
+            with self.assertRaisesRegex(ValueError, "escapes the workspace"):
+                await registry.execute("apply_patch", {
+                    "patch": block("../../evil.py", "x", "y")})
+
+    async def test_create_in_missing_directory_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            registry = make_registry(directory)
+            with self.assertRaisesRegex(ValueError, "parent directory"):
+                await registry.execute("apply_patch", {
+                    "patch": block("nope/sub/new.py", "", "print('hi')\n")})
+            self.assertFalse((Path(directory) / "nope").exists())
+
+    async def test_create_in_existing_directory_still_works(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            registry = make_registry(directory)
+            await registry.execute("write_file", {"path": "sub/keep.py",
+                                                  "content": "x = 1\n"})
+            result = await registry.execute("apply_patch", {
+                "patch": block("sub/new.py", "", "print('hi')\n")})
+
+        self.assertEqual(result["files_created"], ["sub/new.py"])
 
 
 if __name__ == "__main__":

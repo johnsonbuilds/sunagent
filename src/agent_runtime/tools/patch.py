@@ -22,6 +22,9 @@ the first write, so a bad patch never leaves half-edited files behind.
 
 from __future__ import annotations
 
+import posixpath
+import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -34,6 +37,14 @@ from agent_runtime.tools.syntax_gate import syntax_error
 BEGIN = "<<<<<<< SEARCH"
 SEP = "======="
 END = ">>>>>>> REPLACE"
+
+# Unified-diff markers that can never start a legitimate block line: seeing
+# one means the model pasted a diff instead of SEARCH/REPLACE blocks.  A
+# bare `---` is deliberately NOT listed (valid markdown/YAML content); a
+# `--- a/...` line therefore falls through to path handling and fails later
+# with the precise cannot-read error.
+_DIFF_LINE_PREFIXES = ("diff --git ", "+++ ")
+_HUNK_HEADER_RE = re.compile(r"^@@ -\d+.*@@")
 
 # Lines a merge conflict leaves inside file content.  When the SEARCH or
 # REPLACE text itself contains one, the block grammar cannot express the
@@ -56,9 +67,46 @@ class _Patch:
     blocks: list[_Block] = field(default_factory=list)
 
 
+def _error_text(error: Any) -> str:
+    """Best-effort one-line rendering of a structured workspace error."""
+    if isinstance(error, Mapping):
+        message = error.get("message", error)
+        err_type = error.get("type")
+        detail = str(message) if not isinstance(message, str) else message
+        return f"{err_type}: {detail}" if err_type else detail
+    return str(error)
+
+
+def _check_path(path: str, line_number: int) -> None:
+    """Generic workspace-path legality: relative and non-escaping.
+
+    Readability (does the file exist?) is checked later against the
+    workspace, where the precise reason is known; this only rejects paths
+    that can never be valid, whatever the model meant.
+    """
+    if path.startswith("/"):
+        raise ValueError(
+            f"apply_patch: line {line_number}: path {path!r} must be "
+            "workspace-relative (no leading '/')")
+    normalized = posixpath.normpath(path)
+    if normalized == ".." or normalized.startswith("../"):
+        raise ValueError(
+            f"apply_patch: line {line_number}: path {path!r} escapes the "
+            "workspace ('..' not allowed)")
+
+
 def parse_patch(patch: str) -> _Patch:
     """Parse patch text into ordered blocks, validating the grammar."""
     lines = patch.splitlines()
+    for number, line in enumerate(lines, 1):
+        stripped = line.strip()
+        if (stripped.startswith(_DIFF_LINE_PREFIXES)
+                or _HUNK_HEADER_RE.match(stripped)):
+            raise ValueError(
+                f"apply_patch: line {number}: looks like a unified diff "
+                f"(found {stripped[:20]!r}). This tool does not accept "
+                "unified diffs. Resend as: <bare workspace-relative path>, "
+                f"then {BEGIN} / {SEP} / {END} sections.")
     parsed = _Patch()
     path: str | None = None
     section: str | None = None  # None | "old" | "new"
@@ -99,6 +147,7 @@ def parse_patch(patch: str) -> _Patch:
                 raise fail(number,
                            f"expected {BEGIN} after file path {path!r}, "
                            f"got stray text")
+            _check_path(line.strip(), number)
             path = line.strip()
     if section is not None:
         raise fail(len(lines) + 1,
@@ -130,7 +179,22 @@ async def apply_patch(patch: str, *,
             read = await ws.read_file(block.path)
             if "error" in read:
                 if block.old:  # editing a file that cannot be read
-                    return {"path": block.path, "error": read["error"]}
+                    raise ValueError(
+                        f"apply_patch: block {block.index}: cannot read file "
+                        f"{block.path!r}: {_error_text(read['error'])}. "
+                        "Paths must be workspace-relative and match an "
+                        "existing file exactly; verify with find_files.")
+                parent = posixpath.dirname(block.path)
+                if parent not in ("", "."):
+                    listing = await ws.list_dir(parent)
+                    if "error" in listing:
+                        raise ValueError(
+                            f"apply_patch: block {block.index}: parent "
+                            f"directory {parent!r} of new file "
+                            f"{block.path!r} does not exist "
+                            f"({_error_text(listing['error'])}); not "
+                            "creating it. Check the path spelling, or "
+                            "create the directory first.")
                 state = {"content": None}  # to be created
             else:
                 state = {"content": read["content"]}
@@ -170,7 +234,9 @@ async def apply_patch(patch: str, *,
     for path, state in files.items():
         written = await ws.write_file(path, state["content"] or "")
         if "error" in written:
-            return {"path": path, "error": written["error"]}
+            raise ValueError(
+                f"apply_patch: cannot write file {path!r}: "
+                f"{_error_text(written['error'])}")
         bytes_written += written.get("bytes_written", 0)
         (created if state.get("created") else updated).append(path)
 

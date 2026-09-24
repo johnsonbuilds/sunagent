@@ -44,6 +44,27 @@ def _schema_for_tool(schemas: list[dict[str, Any]], name: str) -> Mapping[str, A
     return None
 
 
+def _available_tools_hint(schemas: list[dict[str, Any]]) -> str:
+    """Factual one-line catalog of registered tools, built from schemas.
+
+    Programmatic (never hand-written) so it cannot go stale when tools
+    are added or renamed. No similarity guessing: when the model names
+    something unknown, only facts are offered and it re-routes itself.
+    """
+    parts: list[str] = []
+    for schema in schemas:
+        function = schema.get("function")
+        if not isinstance(function, Mapping):
+            continue
+        name = function.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        description = function.get("description")
+        summary = str(description).split(". ")[0].split("\n")[0].strip()
+        parts.append(f"{name} ({summary})" if summary else name)
+    return ", ".join(parts)
+
+
 def _matches_type(value: Any, expected: str) -> bool:
     # bool is a subclass of int, so it needs to be checked separately.
     return {
@@ -75,7 +96,9 @@ def validate_tool_call(tool_call: Any, schemas: list[dict[str, Any]]) -> Validat
         raise ValueError("tool name is required")
     schema = _schema_for_tool(schemas, name)
     if schema is None:
-        raise ValueError(f"unknown tool: {name}")
+        raise ValueError(
+            f"unknown tool: {name}. "
+            f"Available tools: {_available_tools_hint(schemas)}.")
 
     raw_arguments = function.get("arguments") or "{}"
     if not isinstance(raw_arguments, str):
