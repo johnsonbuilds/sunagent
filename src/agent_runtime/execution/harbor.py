@@ -32,6 +32,16 @@ def _text(value: Any) -> str:
     return str(value)
 
 
+# A command string crosses several exec layers (local shell, docker CLI,
+# container runtime), each accounting argv against kernel limits
+# (MAX_ARG_STRLEN, 128 KiB per string). File content therefore never rides
+# argv past this budget; larger writes are split into pieces (see
+# HarborWorkspace.write_file). The margin is deliberately wide: observed
+# production failures sat in the hundreds of KiB.
+_WRITE_CHUNK_CHARS = 32 * 1024
+_WRITE_CHUNK_THRESHOLD = 64 * 1024
+
+
 class HarborShellExecutor:
     """Adapt a Harbor environment's async ``exec`` method to ShellExecutor."""
 
@@ -130,12 +140,42 @@ class HarborWorkspace:
         target = self._resolve(path)
         encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
         parent = posixpath.dirname(target)
-        command = (f"mkdir -p {shlex.quote(parent)} && "
-                   f"printf %s {shlex.quote(encoded)} | base64 -d > {shlex.quote(target)}")
-        outcome = await self._exec(command)
-        if "error" in outcome:
-            return {"path": path, "error": outcome["error"]}
-        return {"path": path, "bytes_written": len(content.encode("utf-8"))}
+        if len(encoded) <= _WRITE_CHUNK_THRESHOLD:
+            command = (f"mkdir -p {shlex.quote(parent)} && "
+                       f"printf %s {shlex.quote(encoded)} | base64 -d > {shlex.quote(target)}")
+            outcome = await self._exec(command)
+            if "error" in outcome:
+                return {"path": path, "error": outcome["error"]}
+            return {"path": path, "bytes_written": len(content.encode("utf-8"))}
+        return await self._write_chunked(path, target, parent, encoded,
+                                         len(content.encode("utf-8")))
+
+    async def _write_chunked(self, path: str, target: str, parent: str,
+                             encoded: str, byte_count: int) -> dict[str, Any]:
+        """Write large content piece by piece, then decode atomically.
+
+        Every individual command stays far below argv limits; the pieces
+        land in a temp file and only the final decode touches the target,
+        so a mid-write failure never truncates the original.
+        """
+        tmp = target + ".writetmp"
+        commands = [
+            f"mkdir -p {shlex.quote(parent)} && "
+            f"printf %s {shlex.quote(encoded[:_WRITE_CHUNK_CHARS])} "
+            f"> {shlex.quote(tmp)}",
+            *(f"printf %s {shlex.quote(encoded[i:i + _WRITE_CHUNK_CHARS])} "
+              f">> {shlex.quote(tmp)}"
+              for i in range(_WRITE_CHUNK_CHARS, len(encoded),
+                             _WRITE_CHUNK_CHARS)),
+            f"base64 -d {shlex.quote(tmp)} > {shlex.quote(target)} "
+            f"&& rm -f {shlex.quote(tmp)}",
+        ]
+        for command in commands:
+            outcome = await self._exec(command)
+            if "error" in outcome:
+                await self._exec(f"rm -f {shlex.quote(tmp)}")
+                return {"path": path, "error": outcome["error"]}
+        return {"path": path, "bytes_written": byte_count}
 
     async def list_dir(self, path: str = ".") -> dict[str, Any]:
         target = self._resolve(path)

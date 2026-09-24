@@ -264,5 +264,117 @@ class HarborWorkspaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["matches"], ["src/models/user.py"])
 
 
+class ArgLimitedEnvironment:
+    """Fake Harbor env enforcing an argv length limit, like docker exec.
+
+    Reproduces the production `OSError: [Errno 7] Argument list too long`
+    failure: any single command past the limit raises instead of running.
+    Understands exactly the command shapes HarborWorkspace.write_file
+    emits (mkdir -p, printf append/overwrite, base64 -d, rm -f) against an
+    in-memory filesystem. Base64 blobs never contain shell metacharacters,
+    so splitting on `&&` is safe here.
+    """
+
+    def __init__(self, command_limit: int = 100 * 1024) -> None:
+        self.command_limit = command_limit
+        self.commands: list[str] = []
+        self.files: dict[str, bytes] = {}
+
+    async def exec(self, command: str, cwd: str | None = None,
+                   timeout_sec: int | None = None) -> Any:
+        self.commands.append(command)
+        if len(command) > self.command_limit:
+            raise OSError(7, "Argument list too long: 'docker'")
+        for stage in command.split("&&"):
+            self._run_stage(stage.strip())
+        return FakeExecResult()
+
+    def _run_stage(self, stage: str) -> None:
+        if stage.startswith("mkdir -p "):
+            return  # directories are implicit in the in-memory fs
+        if stage.startswith("printf %s "):
+            rest = stage[len("printf %s "):]
+            if "| base64 -d" in rest:
+                # Legacy single-command shape: decode inline.
+                blob, _, target = rest.partition("| base64 -d")
+                target = target.strip()
+                if target.startswith(">"):
+                    target = target[1:].strip().strip("'")
+                self.files[target] = base64.b64decode(blob.strip())
+                return
+            head, _, target = rest.partition(" >")
+            append = target.startswith(">")
+            if append:
+                target = target[1:]
+            blob = head.strip()
+            if len(blob) >= 2 and blob.startswith("'") and blob.endswith("'"):
+                blob = blob[1:-1]
+            data = blob.encode("ascii")
+            target = target.strip().strip("'")
+            self.files[target] = (self.files.get(target, b"") + data
+                                  if append else data)
+            return
+        if stage.startswith("base64 -d "):
+            src, _, dst = stage[len("base64 -d "):].partition(" > ")
+            self.files[dst.strip().strip("'")] = base64.b64decode(
+                self.files[src.strip().strip("'")])
+            return
+        if stage.startswith("rm -f "):
+            self.files.pop(stage[len("rm -f "):].strip().strip("'"), None)
+            return
+        raise AssertionError(f"unexpected stage in test fake: {stage!r}")
+
+
+class HarborChunkedWriteTests(unittest.IsolatedAsyncioTestCase):
+    async def test_small_write_uses_single_legacy_command(self) -> None:
+        environment = ArgLimitedEnvironment()
+        workspace = HarborWorkspace(environment, root="/work")
+
+        result = await workspace.write_file("sub/app.py", "print('hi')\n")
+
+        self.assertEqual(result["bytes_written"], len("print('hi')\n"))
+        self.assertEqual(len(environment.commands), 1)
+        self.assertIn("| base64 -d >", environment.commands[0])
+        self.assertEqual(environment.files["/work/sub/app.py"],
+                         "print('hi')\n".encode())
+
+    async def test_large_write_chunks_under_limit_and_roundtrips(self) -> None:
+        content = "0123456789abcdef" * 5000  # 80KB; encoded past the threshold
+        environment = ArgLimitedEnvironment()
+        workspace = HarborWorkspace(environment, root="/work")
+
+        result = await workspace.write_file("sub/big.py", content)
+
+        self.assertEqual(result["bytes_written"], len(content.encode()))
+        self.assertGreater(len(environment.commands), 1)
+        # The legacy single-command shape would have blown the limit.
+        self.assertLess(max(len(c) for c in environment.commands),
+                        environment.command_limit)
+        self.assertEqual(environment.files["/work/sub/big.py"],
+                         content.encode())
+        self.assertNotIn("/work/sub/big.py.writetmp", environment.files)
+
+    async def test_chunk_failure_reports_and_cleans_tmp(self) -> None:
+        content = "z" * 100_000
+        environment = ArgLimitedEnvironment()
+        real_exec = environment.exec
+        calls = {"n": 0}
+
+        async def fail_once(command: str, cwd: str | None = None,
+                            timeout_sec: int | None = None) -> Any:
+            calls["n"] += 1
+            if calls["n"] == 2:
+                return FakeExecResult(stderr="disk full", return_code=1)
+            return await real_exec(command, cwd, timeout_sec)
+
+        environment.exec = fail_once  # type: ignore[method-assign]
+        workspace = HarborWorkspace(environment, root="/work")
+
+        result = await workspace.write_file("sub/big.py", content)
+
+        self.assertIn("error", result)
+        self.assertNotIn("/work/sub/big.py.writetmp", environment.files)
+
+
 if __name__ == "__main__":
     unittest.main()
