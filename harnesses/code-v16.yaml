@@ -1,0 +1,55 @@
+id: code-v16
+parent: code-v15
+mutation: 'control.budget_reminder gene: at_fractions [0.6, 0.85]->[0.25, 0.6, 0.85] (early edit nudge)'
+reason: 'eval100-code-v15-ling-flash 失败组首编辑中位数 18.5 步、9 个零编辑全败、48 步提醒时仍有 edited=False；25% 处（80 步即第 20 步）加一次早提醒逼首编辑提前。skill/coder 同步改为 edit_file default（非 gene，不计谱系变更）'
+prompt:
+  system: ''
+  iteration_limit_notice: Iteration limit reached. Summarize the progress and give
+    the best possible final answer. Do not call tools.
+tools:
+  enabled:
+  - run_command
+  - read_file
+  - apply_patch
+  - edit_file
+  - write_file
+  - grep_search
+  - find_files
+  - submit_result
+control:
+  max_iterations: 80
+  finish_violation_limit: 3
+  budget_reminder:
+    enabled: true
+    at_fractions: [0.25, 0.6, 0.85]
+memory:
+  strategy: llm_summary
+recovery:
+  tool_error: feed_error_and_continue
+  tool_error_max_retries: 3
+  llm_errors:
+    provider_error:
+      max_retries: 0
+      backoff: exponential
+      base_delay: 0.5
+    stream_empty:
+      max_retries: 2
+      backoff: exponential
+      base_delay: 0.5
+    stream_idle_timeout:
+      max_retries: 2
+      backoff: exponential
+      base_delay: 0.5
+    stream_truncated:
+      max_retries: 2
+      backoff: exponential
+      base_delay: 0.5
+verification:
+  enabled: true
+  mode: task_result
+  require:
+  - solution_description
+  - evidence
+  - command_to_verify
+skills:
+- coder

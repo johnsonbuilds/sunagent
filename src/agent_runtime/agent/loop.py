@@ -468,8 +468,8 @@ class AgentTurn:
                 f"Budget {iteration}/{self.max_iterations} "
                 f"({remaining} left). Source edit so far: {edited}. "
                 "Close the loop: 1) make >=1 source edit with the right tool "
-                "(apply_patch default multi-hunk, edit_file single-point/conflict "
-                "markers, write_file new/full rewrite), "
+                "(edit_file default single-point, apply_patch only for atomic "
+                "multi-hunk, write_file new/full rewrite), "
                 "2) run a FILE-LEVEL test command naming test files, "
                 "3) submit_result with that exact command."
             ),
