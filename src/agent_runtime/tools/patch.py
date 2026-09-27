@@ -77,24 +77,6 @@ def _error_text(error: Any) -> str:
     return str(error)
 
 
-def _check_path(path: str, line_number: int) -> None:
-    """Generic workspace-path legality: relative and non-escaping.
-
-    Readability (does the file exist?) is checked later against the
-    workspace, where the precise reason is known; this only rejects paths
-    that can never be valid, whatever the model meant.
-    """
-    if path.startswith("/"):
-        raise ValueError(
-            f"apply_patch: line {line_number}: path {path!r} must be "
-            "workspace-relative (no leading '/')")
-    normalized = posixpath.normpath(path)
-    if normalized == ".." or normalized.startswith("../"):
-        raise ValueError(
-            f"apply_patch: line {line_number}: path {path!r} escapes the "
-            "workspace ('..' not allowed)")
-
-
 def parse_patch(patch: str) -> _Patch:
     """Parse patch text into ordered blocks, validating the grammar."""
     lines = patch.splitlines()
@@ -147,7 +129,10 @@ def parse_patch(patch: str) -> _Patch:
                 raise fail(number,
                            f"expected {BEGIN} after file path {path!r}, "
                            f"got stray text")
-            _check_path(line.strip(), number)
+            # No legality check here: path containment is the workspace's
+            # job (_resolve), which knows the configured root. Parse only
+            # enforces grammar; unreadable/escaping paths fail later with
+            # the workspace's precise reason.
             path = line.strip()
     if section is not None:
         raise fail(len(lines) + 1,

@@ -22,6 +22,7 @@ class GrepSearchTests(unittest.IsolatedAsyncioTestCase):
     async def test_finds_matches_with_line_numbers(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             registry = make_registry(directory)
+            Path(directory, "src").mkdir(parents=True, exist_ok=True)
             await registry.execute("write_file", {
                 "path": "src/app.py",
                 "content": "def main():\n    return serve()\n"})
@@ -76,6 +77,7 @@ class GrepSearchTests(unittest.IsolatedAsyncioTestCase):
     async def test_skip_dirs_are_excluded(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             registry = make_registry(directory)
+            Path(directory, ".git").mkdir(parents=True, exist_ok=True)
             await registry.execute("write_file", {
                 "path": ".git/config", "content": "needle\n"})
             await registry.execute("write_file", {
@@ -110,6 +112,8 @@ class FindFilesTests(unittest.IsolatedAsyncioTestCase):
     async def test_recursive_pattern_matches_nested_and_root(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             registry = make_registry(directory)
+            Path(directory, "src", "models").mkdir(parents=True,
+                                                   exist_ok=True)
             for path in ("app.py", "src/models/user.py", "src/util.ts"):
                 await registry.execute("write_file", {"path": path,
                                                       "content": "x"})
@@ -123,6 +127,8 @@ class FindFilesTests(unittest.IsolatedAsyncioTestCase):
     async def test_star_matches_across_separators(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             registry = make_registry(directory)
+            Path(directory, "deep", "nested").mkdir(parents=True,
+                                                    exist_ok=True)
             for path in ("a.py", "deep/nested/b.py"):
                 await registry.execute("write_file", {"path": path,
                                                       "content": "x"})
@@ -134,6 +140,8 @@ class FindFilesTests(unittest.IsolatedAsyncioTestCase):
     async def test_bare_name_matches_anywhere(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             registry = make_registry(directory)
+            Path(directory, "src", "models").mkdir(parents=True,
+                                                   exist_ok=True)
             await registry.execute("write_file", {
                 "path": "src/models/user.py", "content": "x"})
 

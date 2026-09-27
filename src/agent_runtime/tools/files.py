@@ -24,7 +24,22 @@ DEFAULT_READ_LIMIT = 2000
 async def write_file(path: str, content: str, *,
                      workspace: Workspace | None = None) -> dict[str, Any]:
     """Create or overwrite a file with the given full content."""
-    return await (workspace or LocalWorkspace()).write_file(path, content)
+    ws = workspace or LocalWorkspace()
+    # Backends auto-create parent directories, so a typo'd path would
+    # otherwise land a garbage file with a success receipt. Creation under
+    # a missing directory is rejected here (backend-agnostic: both local
+    # and Harbor workspaces expose list_dir); overwrites always pass
+    # through untouched since their parent trivially exists. Root-level
+    # paths skip the extra round trip.
+    parent = str(PurePosixPath(path).parent)
+    if parent not in ("", "."):
+        listing = await ws.list_dir(parent)
+        if "error" in listing:
+            raise ValueError(
+                f"write_file: parent directory {parent!r} of new file "
+                f"{path!r} does not exist; check the path spelling, or "
+                "create the directory first (e.g. mkdir -p via run_command).")
+    return await ws.write_file(path, content)
 
 
 async def read_file(path: str, offset: int = 1, limit: int | None = DEFAULT_READ_LIMIT, *,

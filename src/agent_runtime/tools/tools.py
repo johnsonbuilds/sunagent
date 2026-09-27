@@ -99,13 +99,17 @@ def _write_file_spec(workspace: Workspace) -> ToolSpec:
     return ToolSpec("write_file",
                     "Create a new file or replace the entire content of an "
                     "existing file. Provide the complete intended file content "
-                    "in one call; parent directories are created automatically. "
+                    "in one call. The parent directory must already exist "
+                    "(create it first, e.g. mkdir -p via run_command); "
+                    "writing under a missing directory is rejected instead "
+                    "of silently landing elsewhere. "
                     "This tool is for scenarios where the whole file content "
                     "is being defined at once: new-file creation and full-file "
                     "rewrites.",
                     {"type": "object", "properties": {
                         "path": {"type": "string",
-                                 "description": "File path inside the workspace"},
+                                 "description": "File path inside the workspace "
+                                                "(parent directory must exist)"},
                         "content": {"type": "string",
                                     "description": "Complete file content"}},
                      "required": ["path", "content"]},

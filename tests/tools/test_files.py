@@ -30,6 +30,26 @@ class FileToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(written["bytes_written"], 6)
         self.assertEqual(read["content"], "x = 1\n")
 
+    async def test_write_in_missing_directory_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            registry = make_registry(directory)
+            with self.assertRaisesRegex(ValueError, "parent directory"):
+                await registry.execute("write_file", {
+                    "path": "nope/sub/new.py", "content": "x = 1\n"})
+
+        self.assertFalse((Path(directory) / "nope").exists())
+
+    async def test_write_in_existing_directory_still_works(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            registry = make_registry(directory)
+            Path(directory, "sub").mkdir()
+            await registry.execute("write_file", {
+                "path": "sub/keep.py", "content": "x = 1\n"})
+            written = await registry.execute("write_file", {
+                "path": "sub/new.py", "content": "y = 2\n"})
+
+        self.assertEqual(written["bytes_written"], 6)
+
     async def test_read_pages_with_explicit_limit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             registry = make_registry(directory)
@@ -111,6 +131,7 @@ class FileToolTests(unittest.IsolatedAsyncioTestCase):
     async def test_list_dir_through_registry(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             registry = make_registry(directory)
+            Path(directory, "sub").mkdir()
             await registry.execute("write_file", {"path": "sub/a.txt",
                                                   "content": "x"})
 

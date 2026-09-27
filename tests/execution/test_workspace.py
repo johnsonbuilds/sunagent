@@ -1,9 +1,11 @@
 import base64
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
@@ -182,6 +184,20 @@ class HarborWorkspaceTests(unittest.IsolatedAsyncioTestCase):
         await workspace.write_file("/etc/hostname", "x")
 
         self.assertIn("base64 -d > /etc/hostname", environment.commands[0])
+
+    async def test_root_defaults_to_workspace_env_var(self) -> None:
+        with mock.patch.dict(os.environ, {"AGENT_RUNTIME_WORKSPACE": "/work"}):
+            workspace = HarborWorkspace(ScriptedEnvironment())
+
+        self.assertEqual(workspace.root, "/work")
+        with self.assertRaisesRegex(ValueError, "escapes"):
+            await workspace.write_file("/etc/passwd", "x")
+
+    async def test_explicit_root_beats_env_var(self) -> None:
+        with mock.patch.dict(os.environ, {"AGENT_RUNTIME_WORKSPACE": "/work"}):
+            workspace = HarborWorkspace(ScriptedEnvironment(), root="/other")
+
+        self.assertEqual(workspace.root, "/other")
 
     async def test_list_dir_parses_find_output(self) -> None:
         environment = ScriptedEnvironment([

@@ -150,12 +150,24 @@ class ApplyPatchTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(ValueError, "unified diff"):
                 await registry.execute("apply_patch", {"patch": diff})
 
-    async def test_absolute_path_is_rejected(self) -> None:
+    async def test_absolute_path_outside_root_rejected_by_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             registry = make_registry(directory)
-            with self.assertRaisesRegex(ValueError, "workspace-relative"):
+            with self.assertRaisesRegex(ValueError, "escapes the workspace"):
                 await registry.execute("apply_patch", {
                     "patch": block("/etc/calc.py", "x", "y")})
+
+    async def test_absolute_path_inside_root_allowed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            registry = make_registry(directory)
+            target = str(Path(directory, "sub", "calc.py"))
+            Path(directory, "sub").mkdir()
+            await registry.execute("write_file", {"path": "sub/calc.py",
+                                                  "content": "x = 1\n"})
+            result = await registry.execute("apply_patch", {
+                "patch": block(target, "x = 1", "x = 2")})
+
+        self.assertEqual(result["files_updated"], [target])
 
     async def test_escaping_path_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -175,6 +187,7 @@ class ApplyPatchTests(unittest.IsolatedAsyncioTestCase):
     async def test_create_in_existing_directory_still_works(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             registry = make_registry(directory)
+            Path(directory, "sub").mkdir()
             await registry.execute("write_file", {"path": "sub/keep.py",
                                                   "content": "x = 1\n"})
             result = await registry.execute("apply_patch", {
