@@ -221,11 +221,7 @@ async def apply_patch(patch: str, *,
         if "error" in written:
             raise ValueError(
                 f"apply_patch: cannot write file {path!r}: "
-                f"{_error_text(written['error'])}. "
-                "The container refused the write (read-only or protected "
-                "file). Do not retry the identical write; check with "
-                f"`ls -l {path}`, then leave it alone — changelog/metadata "
-                "files are not part of the fix.")
+                f"{_error_text(written['error'])}")
         bytes_written += written.get("bytes_written", 0)
         (created if state.get("created") else updated).append(path)
 
