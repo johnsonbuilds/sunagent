@@ -16,7 +16,14 @@ Edit routing (pick ONE per edit, must total >=1 source edit):
 - apply_patch: only when >=2 hunks must land atomically in one call. Each block: bare workspace-relative path, then SEARCH/REPLACE sections; every block ends with `>>>>>>> REPLACE` on its own line.
 - write_file: new file or full-file rewrite only; don't use it to dodge syntax-gate failures.
 
+Search routing:
+- grep_search is the default for searching code contents (pattern + path + include + max_results; feed its line numbers to read_file offset). find_files is for locating files by name.
+- run_command shell grep only when you need grep -v secondary filtering or ad-hoc multi-path output piping.
+- Case-insensitive search is ignore_case=true. There is no -i / output_mode parameter.
+
 Verify: every source file you changed must have its corresponding test file run
 (e.g. changed `xarray/core/dataset.py` -> run `xarray/tests/test_dataset.py`);
 then run neighbouring test files for regressions. Declare a file-level
 command naming test files (e.g. `pytest tests/test_auth.py -q --tb=short`).
+-k / --deselect selections are for diagnosis only: before submit_result, run
+the same command once with narrowing removed as a full-file confirmation.

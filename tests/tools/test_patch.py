@@ -184,6 +184,28 @@ class ApplyPatchTests(unittest.IsolatedAsyncioTestCase):
                     "patch": block("nope/sub/new.py", "", "print('hi')\n")})
             self.assertFalse((Path(directory) / "nope").exists())
 
+    async def test_write_refused_names_action(self) -> None:
+        class RefusingWorkspace:
+            root = None
+
+            async def read_file(self, path, *args, **kwargs):
+                return {"path": path, "content": ORIGINAL}
+
+            async def write_file(self, path, content):
+                return {"path": path,
+                        "error": {"type": "CommandError",
+                                  "message": "exit code 1"}}
+
+            async def list_dir(self, path="."):
+                return {"path": path, "entries": []}
+
+        registry = create_default_registry(workspace=RefusingWorkspace(),
+                                           enabled=["apply_patch"])
+        with self.assertRaisesRegex(ValueError, "Do not retry"):
+            await registry.execute("apply_patch", {
+                "patch": block("CHANGES", "return a + b",
+                               "return a - b")})
+
     async def test_create_in_existing_directory_still_works(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             registry = make_registry(directory)

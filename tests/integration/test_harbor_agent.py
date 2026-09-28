@@ -53,7 +53,45 @@ def install_harbor_stubs() -> None:
 
 install_harbor_stubs()
 
-from agent_runtime.integrations.harbor import HarborAgent
+from agent_runtime.integrations.harbor import HarborAgent, _with_repo_context
+
+
+class FakeShell:
+    def __init__(self, stdout: str = "", fail: bool = False) -> None:
+        self.stdout = stdout
+        self.fail = fail
+        self.commands: list[str] = []
+
+    async def execute(self, command: str, timeout: float | None = None) -> dict[str, Any]:
+        self.commands.append(command)
+        if self.fail:
+            raise RuntimeError("container unreachable")
+        return {"stdout": self.stdout, "stderr": "", "exit_code": 0}
+
+
+class RepoContextTests(unittest.IsolatedAsyncioTestCase):
+    async def test_probe_result_is_appended(self) -> None:
+        shell = FakeShell("[git-log]\nabc1234 fix widgets\n"
+                          "[python]\nPython 3.11.2\n"
+                          "[pytest]\npytest 8.3.1\n")
+        instruction = await _with_repo_context("do the task", shell)
+
+        self.assertIn("<repo_context>", instruction)
+        self.assertIn("abc1234 fix widgets", instruction)
+        self.assertIn("pytest 8.3.1", instruction)
+        self.assertEqual(len(shell.commands), 1)
+
+    async def test_empty_probe_leaves_instruction_untouched(self) -> None:
+        shell = FakeShell("[git-log]\n[python]\n[pytest]\n")
+        instruction = await _with_repo_context("do the task", shell)
+
+        self.assertEqual(instruction, "do the task")
+
+    async def test_exec_failure_leaves_instruction_untouched(self) -> None:
+        shell = FakeShell(fail=True)
+        instruction = await _with_repo_context("do the task", shell)
+
+        self.assertEqual(instruction, "do the task")
 
 
 class FakeLLM:
@@ -113,7 +151,11 @@ class HarborAgentSmokeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(runtime["answer"], "completed")
             self.assertGreater(runtime["event_count"], 0)
             self.assertTrue(Path(runtime["trace_path"]).exists())
-            self.assertEqual(environment.commands, [("printf hello", None, 30)])
+            # One repo-context probe (single exec, empty result here so the
+            # instruction is unchanged) followed by the model's command.
+            self.assertEqual(len(environment.commands), 2)
+            self.assertIn("[git-log]", environment.commands[0][0])
+            self.assertEqual(environment.commands[1], ("printf hello", None, 30))
 
 
 if __name__ == "__main__":
