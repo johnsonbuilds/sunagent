@@ -7,9 +7,15 @@ exactly one trial, so it is safe to `docker rmi` it once that trial's
 `result.json` carries `finished_at`.
 
 Usage:
+    # Local dataset directory (passed to harbor as -p):
     uv run python scripts/run_with_image_gc.py \
         --dataset evaluation/swe_bench/dataset-smoke10 \
         --harness code-v6 --job-name my-run-01 -n 4
+
+    # Registry dataset (passed to harbor as -d, e.g. terminal-bench-2):
+    uv run python scripts/run_with_image_gc.py \
+        --dataset terminal-bench/terminal-bench-2 \
+        --harness meta-v10 --job-name tb2-run -n 4
 
 Only stdlib is used. Exit code mirrors the harbor process.
 """
@@ -31,19 +37,26 @@ def disk_free_gb(path: Path) -> float:
     total, used, free = shutil.disk_usage(path)
     return free / 1024**3
 
+# Harbor's PACKAGE_CACHE_DIR: where -d registry datasets are unpacked,
+# one directory per resolved content hash.
+PACKAGE_CACHE = Path("~/.cache/harbor/tasks/packages").expanduser()
 
-def read_finished_at(trial_dir: Path) -> str | None:
+
+def read_result(trial_dir: Path) -> dict | None:
     try:
-        payload = json.loads((trial_dir / "result.json").read_text())
+        return json.loads((trial_dir / "result.json").read_text())
     except (OSError, ValueError):
         return None
-    return payload.get("finished_at")
 
 
-def instance_id_of(trial_dir: Path) -> str | None:
-    try:
-        payload = json.loads((trial_dir / "result.json").read_text())
-    except (OSError, ValueError):
+def read_finished_at(trial_dir: Path) -> str | None:
+    payload = read_result(trial_dir)
+    return payload.get("finished_at") if payload else None
+
+
+def instance_id_of(trial_dir: Path, payload: dict | None = None) -> str | None:
+    payload = payload or read_result(trial_dir)
+    if not payload:
         return None
     task_path = (payload.get("task_id") or {}).get("path", "")
     if task_path:
@@ -54,13 +67,45 @@ def instance_id_of(trial_dir: Path) -> str | None:
     return name.rsplit("__", 1)[0] if "__" in name else None
 
 
-def image_of(dataset: Path, instance_id: str) -> str | None:
+def docker_image_of(task_toml: Path) -> str | None:
     try:
-        text = (dataset / instance_id / "task.toml").read_text()
+        text = task_toml.read_text()
     except OSError:
         return None
     match = re.search(r'^docker_image\s*=\s*"([^"]+)"', text, re.MULTILINE)
     return match.group(1) if match else None
+
+
+def image_of(trial_dir: Path, dataset: Path) -> str | None:
+    payload = read_result(trial_dir)
+    task_id = (payload or {}).get("task_id") or {}
+    candidates: list[Path] = []
+    # Local (or git) task ids carry the path to the unpacked task dir.
+    task_path = task_id.get("path")
+    if task_path:
+        candidates.append(Path(task_path) / "task.toml")
+    # Registry task ids ({org, name, ref: "sha256:<hash>"}) resolve to the
+    # harbor package cache, which outlives the run.
+    org, name = task_id.get("org"), task_id.get("name")
+    if org and name:
+        pkg_dir = PACKAGE_CACHE / org / name
+        ref = task_id.get("ref") or ""
+        if ref.startswith("sha256:"):
+            candidates.append(pkg_dir / ref.removeprefix("sha256:")
+                              / "task.toml")
+        elif pkg_dir.is_dir():
+            by_mtime = sorted(pkg_dir.glob("*/task.toml"),
+                              key=lambda p: p.stat().st_mtime, reverse=True)
+            candidates += by_mtime[:1]
+    for candidate in candidates:
+        image = docker_image_of(candidate)
+        if image:
+            return image
+    # Legacy fallback: local dataset dir + instance id.
+    iid = instance_id_of(trial_dir, payload)
+    if iid:
+        return docker_image_of(dataset / iid / "task.toml")
+    return None
 
 
 def containers_referencing(image: str, only_running: bool) -> list[str]:
@@ -98,8 +143,9 @@ def remove_image(image: str) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", required=True,
-                        help="Harbor dataset path, e.g. "
-                             "evaluation/swe_bench/dataset-smoke10")
+                        help="Harbor dataset: a local path (-p) or a "
+                             "registry name like "
+                             "'terminal-bench/terminal-bench-2' (-d)")
     parser.add_argument("--harness", default="code-v6",
                         help="AGENT_RUNTIME_HARNESS value (default: code-v6)")
     parser.add_argument("--job-name", default=None,
@@ -113,6 +159,7 @@ def main() -> int:
     args, extra = parser.parse_known_args()
 
     dataset = Path(args.dataset)
+    dataset_flag = "-p" if dataset.is_dir() else "-d"
     jobs_dir = Path(args.jobs_dir)
     env = dict(os.environ, AGENT_RUNTIME_HARNESS=args.harness)
     harbor_bin = shutil.which("harbor")
@@ -123,7 +170,7 @@ def main() -> int:
         cmd = ["uv", "run", "harbor", "run"]
     else:
         cmd = [sys.executable, "-m", "harbor", "run"]
-    cmd += ["-p", str(dataset),
+    cmd += [dataset_flag, str(dataset),
             "--agent", "agent_runtime.integrations.harbor:HarborAgent",
             "-n", str(args.n_concurrent)]
     if args.job_name:
@@ -168,8 +215,7 @@ def main() -> int:
             if args.no_gc:
                 print(f"[gc] done (kept): {trial.name}", flush=True)
                 continue
-            iid = instance_id_of(trial)
-            image = image_of(dataset, iid) if iid else None
+            image = image_of(trial, dataset)
             if not image:
                 print(f"[gc] done, no image found: {trial.name}", flush=True)
                 continue
@@ -190,8 +236,7 @@ def main() -> int:
         collected.add(trial.name)
         if args.no_gc:
             continue
-        iid = instance_id_of(trial)
-        image = image_of(dataset, iid) if iid else None
+        image = image_of(trial, dataset)
         if image and not image_in_use(image):
             status = remove_image(image)
             print(f"[gc] final sweep {status}: "
