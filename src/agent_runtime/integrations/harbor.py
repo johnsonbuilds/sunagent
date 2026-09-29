@@ -23,52 +23,6 @@ from agent_runtime.trace import RunEvent, RunTrace
 logger = logging.getLogger(__name__)
 
 
-# One exec that answers the environment questions models otherwise spend
-# iterations probing (git log, python/pytest versions). Best-effort and
-# self-gating: each section is included only when the probe returned
-# something, so non-git / non-python tasks (e.g. terminal-bench) simply get
-# a shorter context instead of noise. Never raises; trial startup must not
-# depend on it.
-_REPO_CONTEXT_COMMAND = (
-    "echo [git-log]; git log --oneline -5 2>/dev/null; "
-    "echo [python]; python -V 2>&1; "
-    "echo [pytest]; python -m pytest --version 2>&1 | head -1"
-)
-_REPO_CONTEXT_BUDGET = 800
-
-
-async def _with_repo_context(instruction: str, shell: HarborShellExecutor) -> str:
-    """Append observed container facts to the task instruction, if any."""
-    try:
-        outcome = await shell.execute(_REPO_CONTEXT_COMMAND, timeout=30.0)
-    except Exception:
-        return instruction
-    if not isinstance(outcome, dict) or outcome.get("error"):
-        return instruction
-    sections: list[str] = []
-    current: list[str] = []
-    label = ""
-    for line in str(outcome.get("stdout", "")).splitlines():
-        stripped = line.strip()
-        if stripped in ("[git-log]", "[python]", "[pytest]"):
-            if label and any(ln.strip() for ln in current):
-                sections.append(f"{label}:\n" + "\n".join(current).strip())
-            label = stripped.strip("[]")
-            current = []
-        else:
-            current.append(line)
-    if label and any(ln.strip() for ln in current):
-        sections.append(f"{label}:\n" + "\n".join(current).strip())
-    if not sections:
-        return instruction
-    context = "\n".join(sections)[:_REPO_CONTEXT_BUDGET]
-    return (
-        f"{instruction}\n\n<repo_context>\n"
-        f"Observed in the container (for reference only):\n{context}\n"
-        "</repo_context>"
-    )
-
-
 def _enable_runtime_logging() -> None:
     """Enable a small stderr logger without changing Harbor's logging setup."""
     if os.getenv("AGENT_RUNTIME_LOG_STREAM", "").lower() not in {"1", "true", "yes"}:
@@ -128,11 +82,9 @@ class HarborAgent(BaseAgent):
             sync_context()
 
         trace = RunTrace(output_path=trace_path, sink=record_event, harness=harness)
-        shell = HarborShellExecutor(environment)
-        tools = create_default_registry(shell,
+        tools = create_default_registry(HarborShellExecutor(environment),
                                         enabled=list(harness.tools.enabled),
                                         workspace=HarborWorkspace(environment))
-        instruction = await _with_repo_context(instruction, shell)
         runtime_metadata["status"] = "running"
         sync_context()
 
