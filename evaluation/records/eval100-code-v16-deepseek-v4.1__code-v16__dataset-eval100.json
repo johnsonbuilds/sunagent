@@ -1,0 +1,822 @@
+{
+  "record_id": "eval100-code-v16-deepseek-v4.1__code-v16__dataset-eval100",
+  "created_at": "2026-09-29T03:00:22",
+  "harness_id": "code-v16",
+  "genes_hash": "99aea98bc27bef4b",
+  "model": "deepseek-v4.1-flash",
+  "benchmark": "evaluation/swe_bench/dataset-eval100",
+  "job_dir": "jobs/eval100-code-v16-deepseek-v4.1",
+  "git_commit": "4ee829c",
+  "score": {
+    "passed": 68,
+    "failed": 31,
+    "errored": 1,
+    "cancelled": 0,
+    "unjudged_completed": 0,
+    "total": 100,
+    "rate": 0.6869
+  },
+  "tasks": [
+    {
+      "task": "astropy__astropy-13236",
+      "trial": "astropy__astropy-13236__VNEgeGh",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/astropy__astropy-13236__VNEgeGh/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "astropy__astropy-13398",
+      "trial": "astropy__astropy-13398__p9UD6KG",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/astropy__astropy-13398__p9UD6KG/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "astropy__astropy-13977",
+      "trial": "astropy__astropy-13977__kPso77a",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/astropy__astropy-13977__kPso77a/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "astropy__astropy-14309",
+      "trial": "astropy__astropy-14309__UdyxYkS",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/astropy__astropy-14309__UdyxYkS/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "astropy__astropy-14369",
+      "trial": "astropy__astropy-14369__KfExYAr",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/astropy__astropy-14369__KfExYAr/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "astropy__astropy-14508",
+      "trial": "astropy__astropy-14508__VwCZGG4",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/astropy__astropy-14508__VwCZGG4/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "astropy__astropy-14995",
+      "trial": "astropy__astropy-14995__xbDtihd",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/astropy__astropy-14995__xbDtihd/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "astropy__astropy-7166",
+      "trial": "astropy__astropy-7166__2xx9x92",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/astropy__astropy-7166__2xx9x92/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "astropy__astropy-7336",
+      "trial": "astropy__astropy-7336__SrLLMaL",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/astropy__astropy-7336__SrLLMaL/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "astropy__astropy-8872",
+      "trial": "astropy__astropy-8872__QKP8Ati",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/astropy__astropy-8872__QKP8Ati/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "django__django-11848",
+      "trial": "django__django-11848__kwGxjkS",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/django__django-11848__kwGxjkS/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "django__django-12209",
+      "trial": "django__django-12209__GdwzgrZ",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/django__django-12209__GdwzgrZ/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "django__django-12858",
+      "trial": "django__django-12858__GKUTrUE",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/django__django-12858__GKUTrUE/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "django__django-13212",
+      "trial": "django__django-13212__oYnrMGe",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/django__django-13212__oYnrMGe/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "django__django-13449",
+      "trial": "django__django-13449__EYQLNBL",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/django__django-13449__EYQLNBL/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "django__django-13568",
+      "trial": "django__django-13568__pxac5P8",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/django__django-13568__pxac5P8/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "django__django-14007",
+      "trial": "django__django-14007__RzT6hKP",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/django__django-14007__RzT6hKP/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "django__django-14725",
+      "trial": "django__django-14725__WB2YEes",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/django__django-14725__WB2YEes/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "django__django-15128",
+      "trial": "django__django-15128__Ufnpj4f",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/django__django-15128__Ufnpj4f/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "django__django-15161",
+      "trial": "django__django-15161__EtAXRAk",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/django__django-15161__EtAXRAk/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "matplotlib__matplotlib-22719",
+      "trial": "matplotlib__matplotlib-22719__9TKu6MB",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/matplotlib__matplotlib-22719__9TKu6MB/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "matplotlib__matplotlib-23476",
+      "trial": "matplotlib__matplotlib-23476__adiKMq7",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/matplotlib__matplotlib-23476__adiKMq7/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "matplotlib__matplotlib-24149",
+      "trial": "matplotlib__matplotlib-24149__24i97Md",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/matplotlib__matplotlib-24149__24i97Md/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "matplotlib__matplotlib-25332",
+      "trial": "matplotlib__matplotlib-25332__uwasev9",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/matplotlib__matplotlib-25332__uwasev9/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "matplotlib__matplotlib-25775",
+      "trial": "matplotlib__matplotlib-25775__jSYHEMS",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/matplotlib__matplotlib-25775__jSYHEMS/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "matplotlib__matplotlib-26113",
+      "trial": "matplotlib__matplotlib-26113__SsZEVYt",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/matplotlib__matplotlib-26113__SsZEVYt/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "matplotlib__matplotlib-26208",
+      "trial": "matplotlib__matplotlib-26208__hJDc3rW",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/matplotlib__matplotlib-26208__hJDc3rW/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "matplotlib__matplotlib-26342",
+      "trial": "matplotlib__matplotlib-26342__JRT4X39",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/matplotlib__matplotlib-26342__JRT4X39/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "mwaskom__seaborn-3069",
+      "trial": "mwaskom__seaborn-3069__U9pkcDk",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/mwaskom__seaborn-3069__U9pkcDk/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "mwaskom__seaborn-3187",
+      "trial": "mwaskom__seaborn-3187__SxerM4i",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/mwaskom__seaborn-3187__SxerM4i/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "pallets__flask-5014",
+      "trial": "pallets__flask-5014__KsiWLYA",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/pallets__flask-5014__KsiWLYA/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "psf__requests-1142",
+      "trial": "psf__requests-1142__3NDbzt5",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/psf__requests-1142__3NDbzt5/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "psf__requests-1724",
+      "trial": "psf__requests-1724__xDaz2Tv",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/psf__requests-1724__xDaz2Tv/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "psf__requests-1766",
+      "trial": "psf__requests-1766__JH4KdLi",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/psf__requests-1766__JH4KdLi/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "psf__requests-1921",
+      "trial": "psf__requests-1921__gDZh3CL",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/psf__requests-1921__gDZh3CL/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "psf__requests-2317",
+      "trial": "psf__requests-2317__PGGcLaC",
+      "status": "error",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/psf__requests-2317__PGGcLaC/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "psf__requests-2931",
+      "trial": "psf__requests-2931__SsTPuW6",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/psf__requests-2931__SsTPuW6/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "psf__requests-6028",
+      "trial": "psf__requests-6028__WBMn8no",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/psf__requests-6028__WBMn8no/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "pydata__xarray-3305",
+      "trial": "pydata__xarray-3305__sKeSCSS",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/pydata__xarray-3305__sKeSCSS/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "pydata__xarray-3993",
+      "trial": "pydata__xarray-3993__kGtpBMQ",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/pydata__xarray-3993__kGtpBMQ/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "pydata__xarray-4075",
+      "trial": "pydata__xarray-4075__7xwbb6Y",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/pydata__xarray-4075__7xwbb6Y/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "pydata__xarray-4094",
+      "trial": "pydata__xarray-4094__Wz7wXoN",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/pydata__xarray-4094__Wz7wXoN/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "pydata__xarray-4687",
+      "trial": "pydata__xarray-4687__GNWWFdP",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/pydata__xarray-4687__GNWWFdP/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "pydata__xarray-6599",
+      "trial": "pydata__xarray-6599__S9gLF84",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/pydata__xarray-6599__S9gLF84/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "pydata__xarray-6721",
+      "trial": "pydata__xarray-6721__85pNFfb",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/pydata__xarray-6721__85pNFfb/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "pydata__xarray-6744",
+      "trial": "pydata__xarray-6744__owQYEAe",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/pydata__xarray-6744__owQYEAe/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "pydata__xarray-6938",
+      "trial": "pydata__xarray-6938__XTR96wS",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/pydata__xarray-6938__XTR96wS/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "pydata__xarray-6992",
+      "trial": "pydata__xarray-6992__8B6oJN4",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/pydata__xarray-6992__8B6oJN4/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "pydata__xarray-7233",
+      "trial": "pydata__xarray-7233__BWXKmRj",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/pydata__xarray-7233__BWXKmRj/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "pylint-dev__pylint-4551",
+      "trial": "pylint-dev__pylint-4551__H8uUzRK",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/pylint-dev__pylint-4551__H8uUzRK/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "pylint-dev__pylint-4661",
+      "trial": "pylint-dev__pylint-4661__WsANPCH",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/pylint-dev__pylint-4661__WsANPCH/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "pylint-dev__pylint-4970",
+      "trial": "pylint-dev__pylint-4970__vUAuPwj",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/pylint-dev__pylint-4970__vUAuPwj/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "pylint-dev__pylint-6386",
+      "trial": "pylint-dev__pylint-6386__DyfVupP",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/pylint-dev__pylint-6386__DyfVupP/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "pylint-dev__pylint-6528",
+      "trial": "pylint-dev__pylint-6528__eSSYjCg",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/pylint-dev__pylint-6528__eSSYjCg/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "pylint-dev__pylint-6903",
+      "trial": "pylint-dev__pylint-6903__J8Dw7Zu",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/pylint-dev__pylint-6903__J8Dw7Zu/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "pylint-dev__pylint-7080",
+      "trial": "pylint-dev__pylint-7080__AeF4YZW",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/pylint-dev__pylint-7080__AeF4YZW/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "pylint-dev__pylint-7277",
+      "trial": "pylint-dev__pylint-7277__DmUFnZM",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/pylint-dev__pylint-7277__DmUFnZM/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "pylint-dev__pylint-8898",
+      "trial": "pylint-dev__pylint-8898__9B4baM2",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/pylint-dev__pylint-8898__9B4baM2/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "pytest-dev__pytest-10051",
+      "trial": "pytest-dev__pytest-10051__mhgzhXr",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/pytest-dev__pytest-10051__mhgzhXr/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "pytest-dev__pytest-10081",
+      "trial": "pytest-dev__pytest-10081__neEgeSa",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/pytest-dev__pytest-10081__neEgeSa/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "pytest-dev__pytest-5262",
+      "trial": "pytest-dev__pytest-5262__aRYTzbx",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/pytest-dev__pytest-5262__aRYTzbx/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "pytest-dev__pytest-5631",
+      "trial": "pytest-dev__pytest-5631__iGtJBss",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/pytest-dev__pytest-5631__iGtJBss/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "pytest-dev__pytest-5787",
+      "trial": "pytest-dev__pytest-5787__NRKqsZN",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/pytest-dev__pytest-5787__NRKqsZN/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "pytest-dev__pytest-5809",
+      "trial": "pytest-dev__pytest-5809__SxFjmmk",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/pytest-dev__pytest-5809__SxFjmmk/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "pytest-dev__pytest-5840",
+      "trial": "pytest-dev__pytest-5840__JZvsGPj",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/pytest-dev__pytest-5840__JZvsGPj/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "pytest-dev__pytest-6197",
+      "trial": "pytest-dev__pytest-6197__Z2SbYgh",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/pytest-dev__pytest-6197__Z2SbYgh/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "pytest-dev__pytest-6202",
+      "trial": "pytest-dev__pytest-6202__v6rqn2x",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/pytest-dev__pytest-6202__v6rqn2x/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "pytest-dev__pytest-7236",
+      "trial": "pytest-dev__pytest-7236__jCRdhLB",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/pytest-dev__pytest-7236__jCRdhLB/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "pytest-dev__pytest-7571",
+      "trial": "pytest-dev__pytest-7571__5kwmjva",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/pytest-dev__pytest-7571__5kwmjva/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "scikit-learn__scikit-learn-10297",
+      "trial": "scikit-learn__scikit-learn-10297__BSm2XmZ",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/scikit-learn__scikit-learn-10297__BSm2XmZ/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "scikit-learn__scikit-learn-11578",
+      "trial": "scikit-learn__scikit-learn-11578__Z7g77oF",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/scikit-learn__scikit-learn-11578__Z7g77oF/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "scikit-learn__scikit-learn-12973",
+      "trial": "scikit-learn__scikit-learn-12973__dnF6DAw",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/scikit-learn__scikit-learn-12973__dnF6DAw/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "scikit-learn__scikit-learn-13124",
+      "trial": "scikit-learn__scikit-learn-13124__2gqZ4VB",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/scikit-learn__scikit-learn-13124__2gqZ4VB/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "scikit-learn__scikit-learn-13439",
+      "trial": "scikit-learn__scikit-learn-13439__qoiiRFd",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/scikit-learn__scikit-learn-13439__qoiiRFd/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "scikit-learn__scikit-learn-14053",
+      "trial": "scikit-learn__scikit-learn-14053__scgBUif",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/scikit-learn__scikit-learn-14053__scgBUif/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "scikit-learn__scikit-learn-14087",
+      "trial": "scikit-learn__scikit-learn-14087__ZWBhuz9",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/scikit-learn__scikit-learn-14087__ZWBhuz9/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "scikit-learn__scikit-learn-14496",
+      "trial": "scikit-learn__scikit-learn-14496__g8aqq7L",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/scikit-learn__scikit-learn-14496__g8aqq7L/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "scikit-learn__scikit-learn-25102",
+      "trial": "scikit-learn__scikit-learn-25102__ybdYkgb",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/scikit-learn__scikit-learn-25102__ybdYkgb/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "scikit-learn__scikit-learn-25232",
+      "trial": "scikit-learn__scikit-learn-25232__HbEXbzA",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/scikit-learn__scikit-learn-25232__HbEXbzA/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "scikit-learn__scikit-learn-25973",
+      "trial": "scikit-learn__scikit-learn-25973__i4PpPQa",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/scikit-learn__scikit-learn-25973__i4PpPQa/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "sphinx-doc__sphinx-10449",
+      "trial": "sphinx-doc__sphinx-10449__KYx2aMs",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/sphinx-doc__sphinx-10449__KYx2aMs/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "sphinx-doc__sphinx-11510",
+      "trial": "sphinx-doc__sphinx-11510__uQmmy8W",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/sphinx-doc__sphinx-11510__uQmmy8W/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "sphinx-doc__sphinx-7590",
+      "trial": "sphinx-doc__sphinx-7590__r8AUJXp",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/sphinx-doc__sphinx-7590__r8AUJXp/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "sphinx-doc__sphinx-7910",
+      "trial": "sphinx-doc__sphinx-7910__rLeGaAi",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/sphinx-doc__sphinx-7910__rLeGaAi/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "sphinx-doc__sphinx-7985",
+      "trial": "sphinx-doc__sphinx-7985__6SyvX9f",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/sphinx-doc__sphinx-7985__6SyvX9f/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "sphinx-doc__sphinx-8120",
+      "trial": "sphinx-doc__sphinx-8120__raqCNiE",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/sphinx-doc__sphinx-8120__raqCNiE/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "sphinx-doc__sphinx-8595",
+      "trial": "sphinx-doc__sphinx-8595__jNpxnJE",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/sphinx-doc__sphinx-8595__jNpxnJE/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "sphinx-doc__sphinx-8621",
+      "trial": "sphinx-doc__sphinx-8621__aPseACs",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/sphinx-doc__sphinx-8621__aPseACs/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "sphinx-doc__sphinx-9229",
+      "trial": "sphinx-doc__sphinx-9229__FnnYgwj",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/sphinx-doc__sphinx-9229__FnnYgwj/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "sphinx-doc__sphinx-9591",
+      "trial": "sphinx-doc__sphinx-9591__kbp6Hi2",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/sphinx-doc__sphinx-9591__kbp6Hi2/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "sympy__sympy-12419",
+      "trial": "sympy__sympy-12419__k2xXNZ7",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/sympy__sympy-12419__k2xXNZ7/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "sympy__sympy-14248",
+      "trial": "sympy__sympy-14248__zB8XtPC",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/sympy__sympy-14248__zB8XtPC/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "sympy__sympy-14711",
+      "trial": "sympy__sympy-14711__u6exaBU",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/sympy__sympy-14711__u6exaBU/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "sympy__sympy-15599",
+      "trial": "sympy__sympy-15599__xeeX7pR",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/sympy__sympy-15599__xeeX7pR/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "sympy__sympy-16597",
+      "trial": "sympy__sympy-16597__RVXsVSE",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/sympy__sympy-16597__RVXsVSE/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "sympy__sympy-17630",
+      "trial": "sympy__sympy-17630__qnWaQCc",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/sympy__sympy-17630__qnWaQCc/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "sympy__sympy-18199",
+      "trial": "sympy__sympy-18199__UBQkV3V",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/sympy__sympy-18199__UBQkV3V/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "sympy__sympy-18698",
+      "trial": "sympy__sympy-18698__4FbVVR2",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/sympy__sympy-18698__4FbVVR2/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "sympy__sympy-19495",
+      "trial": "sympy__sympy-19495__zz8f34g",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/sympy__sympy-19495__zz8f34g/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "sympy__sympy-20154",
+      "trial": "sympy__sympy-20154__7mA2y8K",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/eval100-code-v16-deepseek-v4.1/sympy__sympy-20154__7mA2y8K/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    }
+  ],
+  "notes": "code v16, deepseek v4.1 flash"
+}
