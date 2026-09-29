@@ -6,6 +6,28 @@ from pathlib import Path
 from typing import Any, Protocol
 
 
+# Source-level output cap (chars per stream). Executors truncate
+# stdout/stderr here so a runaway print cannot OOM the process
+# before the transcript boundary spills to .outputs/.
+MAX_OUTPUT_CHARS = 32_000
+
+
+def _truncate_stream(text: str) -> tuple[str, bool]:
+    """Cap one output stream; returns (text, truncated)."""
+    if len(text) > MAX_OUTPUT_CHARS:
+        return text[:MAX_OUTPUT_CHARS] + "\n... (output truncated)", True
+    return text, False
+
+
+def truncate_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Apply the source-level cap to a shell result in place (by copy)."""
+    stdout, t1 = _truncate_stream(result.get("stdout") or "")
+    stderr, t2 = _truncate_stream(result.get("stderr") or "")
+    if not (t1 or t2):
+        return result
+    return {**result, "stdout": stdout, "stderr": stderr, "truncated": True}
+
+
 class ShellExecutor(Protocol):
     async def execute(
         self,

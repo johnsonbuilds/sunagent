@@ -342,9 +342,13 @@ def _execute_code_spec(executor: ShellExecutor, workspace: Workspace) -> ToolSpe
                     "in one step, returning exit code, stdout, and stderr. "
                     "Supports python (runs via python3 by default, "
                     "AGENT_RUNTIME_PYTHON override), bash (runs via bash), "
-                    "r (runs via Rscript), and node (runs via node); the "
-                    "interpreter for the chosen language must already be "
-                    "installed. Prefer this over run_command whenever the "
+                    "r (runs via Rscript), and node (runs via node). "
+                    "Missing interpreters are reported with an install hint; "
+                    "install the runtime via run_command and retry. "
+                    "Local execution has no sandbox (the command guard only "
+                    "catches mistakes, it is not a security boundary); "
+                    "untrusted code needs an externally hardened container. "
+                    "Prefer this over run_command whenever the "
                     "step needs loops, branches, multi-step data processing, "
                     "or error handling: keep intermediate data in files or "
                     "variables and print only the final result. Each script "
@@ -363,7 +367,8 @@ def _execute_code_spec(executor: ShellExecutor, workspace: Workspace) -> ToolSpe
                                                     "explicitly for anything else",
                                      "default": "python"},
                         "path": {"type": "string",
-                                 "description": "Script path inside the workspace; "
+                                 "description": "Script path inside the workspace, "
+                                                "must be under .scripts/; "
                                                 "defaults to .scripts/NNNN.ext"},
                         "timeout": {"type": "number",
                                     "description": "Timeout in seconds",

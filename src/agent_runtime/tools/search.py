@@ -22,6 +22,12 @@ SKIP_DIRS = frozenset({
     ".git", "node_modules", "__pycache__", ".venv", "venv", ".tox",
     ".mypy_cache", ".pytest_cache", ".ruff_cache", "dist", "build",
     "target", ".next",
+    # Agent working dirs: generated scripts and spilled observations are
+    # addressed directly (read_file / read_output), never discovered via
+    # a repo-wide search. Skipping them here (and in the Harbor rg/grep
+    # prune lists, which share this set) keeps results noise-free;
+    # an explicit path=".scripts" / path=".outputs" search still works.
+    ".scripts", ".outputs",
 })
 
 MAX_FILE_BYTES = 1_000_000

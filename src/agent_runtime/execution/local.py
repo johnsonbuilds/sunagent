@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .base import paginate_lines
+from .base import paginate_lines, truncate_result
 from .guard import CommandGuard, GuardDecision, guard_from_env
 
 
@@ -23,13 +23,13 @@ def _text(value: Any) -> str:
 
 def _error_result(started: float, exc: BaseException,
                   stdout: Any = "", stderr: Any = "") -> dict[str, Any]:
-    return {
+    return truncate_result({
         "stdout": _text(stdout),
         "stderr": _text(stderr),
         "exit_code": None,
         "duration": time.monotonic() - started,
         "error": {"type": type(exc).__name__, "message": str(exc)},
-    }
+    })
 
 
 class LocalShellExecutor:
@@ -86,12 +86,12 @@ class LocalShellExecutor:
         except (OSError, ValueError, TypeError) as exc:
             return _error_result(started, exc)
 
-        return {
+        return truncate_result({
             "stdout": completed.stdout,
             "stderr": completed.stderr,
             "exit_code": completed.returncode,
             "duration": time.monotonic() - started,
-        }
+        })
 
 
 __all__ = ["LocalShellExecutor", "LocalWorkspace"]

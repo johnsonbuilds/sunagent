@@ -12,7 +12,7 @@ import time
 from collections.abc import Awaitable
 from typing import Any, Protocol
 
-from .base import paginate_lines
+from .base import paginate_lines, truncate_result
 
 
 class HarborEnvironment(Protocol):
@@ -64,20 +64,20 @@ class HarborShellExecutor:
                 timeout_sec=timeout_sec,
             )
         except Exception as exc:
-            return {
+            return truncate_result({
                 "stdout": "",
                 "stderr": "",
                 "exit_code": None,
                 "duration": time.monotonic() - started,
                 "error": {"type": type(exc).__name__, "message": str(exc)},
-            }
+            })
 
-        return {
+        return truncate_result({
             "stdout": _text(result.stdout),
             "stderr": _text(result.stderr),
             "exit_code": result.return_code,
             "duration": time.monotonic() - started,
-        }
+        })
 
 
 __all__ = ["HarborEnvironment", "HarborShellExecutor", "HarborWorkspace"]

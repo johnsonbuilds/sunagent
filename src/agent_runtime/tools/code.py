@@ -5,14 +5,20 @@ trips (write file, run command, read output), the model ships one
 complete script per tool call.  Intermediate data stays in workspace
 files or in-memory variables; only what the script prints comes back.
 
-Results are returned raw: truncation and spill-to-``.outputs/`` are the
-transcript boundary's job (agent_runtime.agent.observations), so every
-tool's oversized output is handled uniformly.
+Results are returned with a source-level output cap applied by the
+executor (``MAX_OUTPUT_CHARS`` per stream, see
+``agent_runtime.execution.base``) so a runaway print cannot OOM the
+process; anything still oversized is spilled to ``.outputs/`` at the
+transcript boundary (agent_runtime.agent.observations), so every
+tool's bulky output is handled uniformly.
 """
 
 from __future__ import annotations
 
+import asyncio
+import ast
 import os
+import posixpath
 import re
 import shlex
 from typing import Any
@@ -46,6 +52,20 @@ DEFAULT_TIMEOUT = 120.0
 
 _SEQUENCE = re.compile(r"^(\d{4})\.")
 
+# Serializes auto-naming (list .scripts/ -> max+1 -> write) so concurrent
+# execute_code calls cannot claim the same NNNN number.
+_SCRIPT_LOCK = asyncio.Lock()
+
+# Python footgun guardrails (mistake-proofing, not a security boundary:
+# static AST checks are trivially bypassable by design — the real
+# containment is OS-level isolation, not this list). Mirrors the
+# labs-OO-Agents RestrictionsConfig subset that matters for scripts.
+_BLOCKED_PY_MODULES = frozenset({"subprocess", "socket"})
+_BLOCKED_PY_CALLS = frozenset({
+    "os.system", "os.popen", "os.execv", "os.execve", "os.execl",
+    "sys.exit", "os._exit", "os.abort", "os.kill",
+})
+
 
 def _interpreter_for(language: str) -> str:
     interpreter = LANGUAGE_SPECS[language]["interpreter"]
@@ -67,28 +87,92 @@ def _run_command_for(language: str, script: str) -> str:
     return f"{_interpreter_for(language)} {shlex.quote(script)}"
 
 
+def validate_script_path(path: str) -> str | None:
+    """Check an explicit ``execute_code(path=...)``; None means OK.
+
+    Scripts must live under ``.scripts/``: the auto-naming default
+    already does, and allowing arbitrary paths would let one tool call
+    silently overwrite workspace source files. Returns the rejection
+    reason, or None when the path is acceptable.
+    """
+    if not path or not path.strip():
+        return "path must not be empty"
+    norm = posixpath.normpath(path.strip().replace("\\", "/"))
+    if posixpath.isabs(path.strip()) or norm == ".." or norm.startswith("../"):
+        return f"path escapes the workspace: {path}"
+    if norm != SCRIPTS_DIR and not norm.startswith(SCRIPTS_DIR + "/"):
+        return (f"path must be under {SCRIPTS_DIR}/ "
+                f"(got {path!r}); the default .scripts/NNNN.ext is preferred")
+    return None
+
+
+def _check_python_footguns(code: str) -> str | None:
+    """Best-effort AST check for common Python footguns; None means OK.
+
+    Guardrail, not a jail: ``open()`` alone gives arbitrary file I/O,
+    so this list only catches what the model reaches for by mistake
+    (process spawning, socket use, interpreter suicide). Unparseable
+    code is left alone — the runtime will report the SyntaxError.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                top = (alias.name or "").split(".")[0]
+                if top in _BLOCKED_PY_MODULES:
+                    return (f"footgun: importing {alias.name!r} from a "
+                            f"script; use run_command for process/network "
+                            f"work instead")
+        elif isinstance(node, ast.ImportFrom):
+            top = (node.module or "").split(".")[0]
+            if top in _BLOCKED_PY_MODULES:
+                return (f"footgun: importing from {node.module!r} in a "
+                        f"script; use run_command for process/network "
+                        f"work instead")
+        elif isinstance(node, ast.Call):
+            func = node.func
+            dotted: str | None = None
+            if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+                dotted = f"{func.value.id}.{func.attr}"
+            if dotted in _BLOCKED_PY_CALLS:
+                return (f"footgun: {dotted}() in a script; "
+                        f"run it via run_command instead")
+    return None
+
+
 def _guard_decision(executor: ShellExecutor, script: str,
                     language: str) -> GuardDecision | None:
     """Check the script's own text against the executor's guard.
 
-    Only bash scripts are checked, line by line: the wrapper command
+    Bash scripts are checked line by line: the wrapper command
     (``bash .scripts/0001.sh``) is always harmless, so what needs
-    vetting is the script content.  Python is not textually guarded —
-    it is Turing-complete, so any check on its source is trivially
-    bypassed and would also block legitimate file work; the real
-    boundary for code is the execution environment (container vs
-    local).
+    vetting is the script content.  Python gets a best-effort AST
+    footgun check (blocked process/network calls) — still a
+    guardrail, not a security boundary: Python is Turing-complete,
+    so any check on its source is trivially bypassed and must not
+    block legitimate file work; the real boundary for code is the
+    execution environment (hardened container vs local process).
     """
     guard = getattr(executor, "guard", None)
-    if guard is None or language != "bash":
+    if language == "bash":
+        if guard is None:
+            return None
+        for line in script.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            decision = guard.check(stripped)
+            if not decision.allowed:
+                return decision
         return None
-    for line in script.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        decision = guard.check(stripped)
-        if not decision.allowed:
-            return decision
+    if language == "python":
+        reason = _check_python_footguns(script)
+        if reason is not None:
+            return GuardDecision(False, reason)
+        return None
     return None
 
 
@@ -128,11 +212,26 @@ async def execute_code(code: str, language: str = "python",
     ws = workspace or LocalWorkspace()
     ex = executor or LocalShellExecutor()
     if language not in LANGUAGES:
-        raise ValueError(f"unsupported language: {language!r} "
-                         f"(choose from {sorted(LANGUAGES)})")
+        return {"stdout": "", "stderr": "", "exit_code": None,
+                "duration": 0.0,
+                "error": {"type": "UnsupportedLanguage",
+                          "message": f"unsupported language: {language!r} "
+                                     f"(choose from {sorted(LANGUAGES)})"},
+                "language": language}
 
-    script = path or await _next_script_name(ws, LANGUAGES[language])
-    written = await ws.write_file(script, code)
+    if path is not None:
+        reason = validate_script_path(path)
+        if reason is not None:
+            return {"stdout": "", "stderr": "", "exit_code": None,
+                    "duration": 0.0,
+                    "error": {"type": "InvalidPath", "message": reason},
+                    "script_path": path, "language": language}
+        script = path
+        written = await ws.write_file(script, code)
+    else:
+        async with _SCRIPT_LOCK:
+            script = await _next_script_name(ws, LANGUAGES[language])
+            written = await ws.write_file(script, code)
     if "error" in written:
         return {**written, "script_path": script, "language": language}
 
@@ -148,14 +247,16 @@ async def execute_code(code: str, language: str = "python",
     result = await ex.execute(command, cwd=cwd, timeout=timeout)
     result = _with_interpreter_hint(result, language)
 
-    # No truncation or spilling here: oversized output is handled once at
-    # the transcript boundary (agent_runtime.agent.observations), which
-    # spills every tool's bulky results to .outputs/ uniformly.  Returning
-    # the raw result keeps tool handlers policy-free.
+    # Source-level truncation happens in the executor (MAX_OUTPUT_CHARS
+    # per stream); oversized output still reaching here is spilled to
+    # .outputs/ once at the transcript boundary
+    # (agent_runtime.agent.observations), which handles every tool's
+    # bulky results uniformly.  Returning the result as-is keeps tool
+    # handlers policy-free.
     return {**result, "script_path": script, "language": language}
 
 
 __all__ = [
     "DEFAULT_TIMEOUT", "LANGUAGES", "LANGUAGE_SPECS",
-    "OUTPUTS_DIR", "SCRIPTS_DIR", "execute_code",
+    "OUTPUTS_DIR", "SCRIPTS_DIR", "execute_code", "validate_script_path",
 ]

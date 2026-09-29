@@ -65,11 +65,46 @@ class ExecuteCodeTests(unittest.IsolatedAsyncioTestCase):
             registry = make_registry(directory)
 
             result = await registry.execute("execute_code", {
-                "code": "print('x')\n", "path": "analysis/run.py"})
-            saved = await registry.execute("read_file", {"path": "analysis/run.py"})
+                "code": "print('x')\n", "path": ".scripts/custom.py"})
+            saved = await registry.execute("read_file", {"path": ".scripts/custom.py"})
 
-        self.assertEqual(result["script_path"], "analysis/run.py")
+        self.assertEqual(result["script_path"], ".scripts/custom.py")
         self.assertEqual(saved["content"], "print('x')\n")
+
+    async def test_explicit_path_outside_scripts_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            registry = make_registry(directory)
+
+            result = await registry.execute("execute_code", {
+                "code": "print('x')\n", "path": "analysis/run.py"})
+
+        self.assertEqual(result["error"]["type"], "InvalidPath")
+        self.assertIn(".scripts/", result["error"]["message"])
+
+    async def test_python_footgun_import_is_blocked(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            registry = make_registry(directory)
+
+            result = await registry.execute("execute_code", {
+                "code": "import subprocess\nsubprocess.run(['ls'])\n"})
+
+        self.assertEqual(result["error"]["type"], "CommandBlocked")
+        self.assertIn("footgun", result["error"]["message"])
+
+    async def test_concurrent_calls_get_unique_names(self) -> None:
+        import asyncio
+
+        with tempfile.TemporaryDirectory() as directory:
+            registry = make_registry(directory)
+
+            results = await asyncio.gather(*[
+                registry.execute("execute_code", {"code": f"print({i})\n"})
+                for i in range(5)
+            ])
+
+        paths = sorted(r["script_path"] for r in results)
+        self.assertEqual(len(set(paths)), 5)
+        self.assertEqual(paths[0], ".scripts/0001.py")
 
     async def test_failing_script_returns_traceback(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -86,9 +121,27 @@ class ExecuteCodeTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             registry = make_registry(directory)
 
-            with self.assertRaisesRegex(ValueError, "unsupported language"):
-                await registry.execute("execute_code", {
-                    "code": "print('x')\n", "language": "cobol"})
+            result = await registry.execute("execute_code", {
+                "code": "print('x')\n", "language": "cobol"})
+
+        self.assertEqual(result["error"]["type"], "UnsupportedLanguage")
+        self.assertIn("unsupported language", result["error"]["message"])
+
+    async def test_oversized_stdout_is_capped_at_source(self) -> None:
+        # The executor caps each stream at MAX_OUTPUT_CHARS so a runaway
+        # print cannot OOM the process; the transcript boundary still
+        # spills what remains to .outputs/.
+        from agent_runtime.execution.base import MAX_OUTPUT_CHARS
+
+        with tempfile.TemporaryDirectory() as directory:
+            registry = make_registry(directory)
+
+            result = await registry.execute("execute_code", {
+                "code": f"print('x' * {MAX_OUTPUT_CHARS + 5000})\n"})
+
+        self.assertTrue(result.get("truncated"))
+        self.assertLessEqual(len(result["stdout"]), MAX_OUTPUT_CHARS + 100)
+        self.assertIn("output truncated", result["stdout"])
 
     async def test_r_language_runs_via_rscript(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
