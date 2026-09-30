@@ -79,7 +79,44 @@ class ExecuteCodeTests(unittest.IsolatedAsyncioTestCase):
                 "code": "print('x')\n", "path": "analysis/run.py"})
 
         self.assertEqual(result["error"]["type"], "InvalidPath")
-        self.assertIn(".scripts/", result["error"]["message"])
+        self.assertIn("must be under .scripts/", result["error"]["message"])
+        self.assertNotIn("escapes", result["error"]["message"])
+
+    async def test_absolute_path_inside_root_is_relativized(self) -> None:
+        import os
+
+        with tempfile.TemporaryDirectory() as directory:
+            registry = make_registry(directory)
+            absolute = os.path.join(directory, ".scripts", "abs.py")
+
+            result = await registry.execute("execute_code", {
+                "code": "print('abs')\n", "path": absolute})
+            saved = await registry.execute("read_file", {"path": ".scripts/abs.py"})
+
+        self.assertNotIn("error", result)
+        self.assertEqual(result["stdout"], "abs\n")
+        self.assertEqual(result["script_path"], ".scripts/abs.py")
+        self.assertEqual(saved["content"], "print('abs')\n")
+
+    async def test_absolute_path_outside_root_is_escape(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            registry = make_registry(directory)
+
+            result = await registry.execute("execute_code", {
+                "code": "print('x')\n", "path": "/etc/scripts/evil.py"})
+
+        self.assertEqual(result["error"]["type"], "InvalidPath")
+        self.assertIn("escapes the workspace", result["error"]["message"])
+
+    async def test_parent_escape_is_reported_as_escape(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            registry = make_registry(directory)
+
+            result = await registry.execute("execute_code", {
+                "code": "print('x')\n", "path": "../outside.py"})
+
+        self.assertEqual(result["error"]["type"], "InvalidPath")
+        self.assertIn("escapes the workspace", result["error"]["message"])
 
     async def test_python_footgun_import_is_blocked(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

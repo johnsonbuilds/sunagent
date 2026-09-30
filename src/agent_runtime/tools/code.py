@@ -87,23 +87,44 @@ def _run_command_for(language: str, script: str) -> str:
     return f"{_interpreter_for(language)} {shlex.quote(script)}"
 
 
-def validate_script_path(path: str) -> str | None:
-    """Check an explicit ``execute_code(path=...)``; None means OK.
+def validate_script_path(path: str, root: Any = None) -> tuple[str | None, str | None]:
+    """Check an explicit ``execute_code(path=...)``.
 
     Scripts must live under ``.scripts/``: the auto-naming default
     already does, and allowing arbitrary paths would let one tool call
-    silently overwrite workspace source files. Returns the rejection
-    reason, or None when the path is acceptable.
+    silently overwrite workspace source files.
+
+    Returns ``(script, reason)``: on success ``script`` is the
+    normalized workspace-relative path to write (an absolute path
+    inside a known workspace root is relativized, matching what
+    ``Workspace._resolve`` already accepts); on failure ``script`` is
+    None and ``reason`` distinguishes a true workspace escape from a
+    mere convention violation, so the model is not misled into
+    re-orienting itself when only the spelling was wrong.
     """
     if not path or not path.strip():
-        return "path must not be empty"
-    norm = posixpath.normpath(path.strip().replace("\\", "/"))
-    if posixpath.isabs(path.strip()) or norm == ".." or norm.startswith("../"):
-        return f"path escapes the workspace: {path}"
-    if norm != SCRIPTS_DIR and not norm.startswith(SCRIPTS_DIR + "/"):
-        return (f"path must be under {SCRIPTS_DIR}/ "
-                f"(got {path!r}); the default .scripts/NNNN.ext is preferred")
-    return None
+        return None, "path must not be empty"
+    raw = path.strip().replace("\\", "/")
+    candidate = posixpath.normpath(raw)
+    if posixpath.isabs(raw):
+        if root is None:
+            return None, (f"use a workspace-relative path under {SCRIPTS_DIR}/ "
+                           f"(got {path!r}); absolute paths are not accepted "
+                           f"without a workspace root")
+        norm_root = posixpath.normpath(str(root).replace("\\", "/"))
+        prefix = norm_root.rstrip("/") + "/"
+        if candidate != norm_root and not candidate.startswith(prefix):
+            return None, f"path escapes the workspace: {path}"
+        candidate = posixpath.relpath(candidate, norm_root)
+        if candidate == ".":
+            return None, (f"path must be under {SCRIPTS_DIR}/ "
+                           f"(got {path!r}); the default .scripts/NNNN.ext is preferred")
+    elif candidate == ".." or candidate.startswith("../"):
+        return None, f"path escapes the workspace: {path}"
+    if candidate != SCRIPTS_DIR and not candidate.startswith(SCRIPTS_DIR + "/"):
+        return None, (f"path must be under {SCRIPTS_DIR}/ "
+                       f"(got {path!r}); the default .scripts/NNNN.ext is preferred")
+    return candidate, None
 
 
 def _check_python_footguns(code: str) -> str | None:
@@ -220,13 +241,13 @@ async def execute_code(code: str, language: str = "python",
                 "language": language}
 
     if path is not None:
-        reason = validate_script_path(path)
-        if reason is not None:
+        script, reason = validate_script_path(path, ws.root)
+        if reason is not None or script is None:
             return {"stdout": "", "stderr": "", "exit_code": None,
                     "duration": 0.0,
-                    "error": {"type": "InvalidPath", "message": reason},
+                    "error": {"type": "InvalidPath",
+                              "message": reason or "invalid path"},
                     "script_path": path, "language": language}
-        script = path
         written = await ws.write_file(script, code)
     else:
         async with _SCRIPT_LOCK:
