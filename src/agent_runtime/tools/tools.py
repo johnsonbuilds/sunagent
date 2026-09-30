@@ -367,11 +367,9 @@ def _execute_code_spec(executor: ShellExecutor, workspace: Workspace) -> ToolSpe
                                                     "explicitly for anything else",
                                      "default": "python"},
                         "path": {"type": "string",
-                                 "description": "Script path inside the workspace, "
-                                                "must be under .scripts/ (use a "
-                                                "relative path; an absolute path "
-                                                "inside the workspace root is "
-                                                "relativized); "
+                                 "description": "Relative script path under "
+                                                ".scripts/ (in-root absolute "
+                                                "paths are relativized); "
                                                 "defaults to .scripts/NNNN.ext"},
                         "timeout": {"type": "number",
                                     "description": "Timeout in seconds",
