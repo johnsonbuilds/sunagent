@@ -1,7 +1,7 @@
 id: tb-v2
 parent: tb-v1
 mutation: 'enabled budget_reminder ,max_iterations 80-120, provider_error.max_retries 0-3,stream_idle_timeout.max_retries 0-5'
-reason: ''
+reason: 'improve pass rate'
 prompt:
   system: |
     You are a general-purpose autonomous AI agent. Follow the user's instructions
