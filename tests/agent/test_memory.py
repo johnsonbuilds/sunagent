@@ -1,8 +1,10 @@
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 
 sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
@@ -207,6 +209,133 @@ class CompactObservationsTests(unittest.TestCase):
 
         self.assertEqual(result[2]["tool_calls"][0]["function"]["arguments"],
                          arguments)
+
+    def test_reasoning_counts_toward_the_budget(self) -> None:
+        # Observations alone fit the budget; the assistant's chain of
+        # thought tips it over — and must when echo is on, since it rides
+        # the wire on every replay for echo-family providers.
+        messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "task"},
+            {"role": "assistant", "content": "",
+             "reasoning_content": "r" * 4_000,
+             "tool_calls": [{"id": "c1", "type": "function",
+                             "function": {"name": "run_command",
+                                          "arguments": "{}"}}]},
+            tool_message("c1", "x" * 500),
+        ]
+
+        with patch.dict(os.environ, {"AGENT_RUNTIME_REASONING_ECHO": "always"}):
+            result = compact_observations(messages, budget=2_000, window_rounds=0)
+
+        self.assertIn("observation compacted", result[3]["content"])
+
+    def test_reasoning_not_counted_when_echo_strips(self) -> None:
+        # The wire projection drops reasoning for non-echo endpoints, so
+        # budgeting it would compact observations far too early. Same
+        # messages as above: under "never" they fit the budget untouched.
+        messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "task"},
+            {"role": "assistant", "content": "",
+             "reasoning_content": "r" * 4_000,
+             "tool_calls": [{"id": "c1", "type": "function",
+                             "function": {"name": "run_command",
+                                          "arguments": "{}"}}]},
+            tool_message("c1", "x" * 500),
+        ]
+
+        with patch.dict(os.environ, {"AGENT_RUNTIME_REASONING_ECHO": "never"}):
+            result = compact_observations(messages, budget=2_000, window_rounds=0)
+
+        self.assertIs(result, messages)
+
+
+class StaleReasoningPadTests(unittest.TestCase):
+    def _rounds_with_reasoning(self, rounds: int, reasoning_chars: int
+                               ) -> list[dict[str, Any]]:
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "do the task"},
+        ]
+        for index in range(rounds):
+            call_id = f"call-{index}"
+            messages.append({
+                "role": "assistant", "content": f"step {index}",
+                "reasoning_content": f"think-{index} " + "r" * reasoning_chars,
+                "tool_calls": [{"id": call_id, "type": "function",
+                                "function": {"name": "run_command",
+                                             "arguments": "{}"}}],
+            })
+            messages.append(tool_message(call_id, "x" * 10))
+        return messages
+
+    def test_stale_reasoning_is_padded_to_one_space(self) -> None:
+        messages = self._rounds_with_reasoning(6, 3_000)
+
+        result = compact_observations(messages, budget=10, window_rounds=1)
+
+        old = result[2]
+        self.assertEqual(old["reasoning_content"], " ")
+
+    def test_recent_round_reasoning_is_left_intact(self) -> None:
+        messages = self._rounds_with_reasoning(6, 3_000)
+
+        result = compact_observations(messages, budget=10, window_rounds=1)
+
+        self.assertEqual(result[-2]["reasoning_content"],
+                         messages[-2]["reasoning_content"])
+
+    def test_reasoning_key_is_never_removed(self) -> None:
+        # Echo-family APIs (DeepSeek et al.) require reasoning_content
+        # present on assistant messages: pad to " ", never drop the key.
+        messages = self._rounds_with_reasoning(4, 3_000)
+
+        result = compact_observations(messages, budget=10, window_rounds=0)
+
+        for message in result:
+            if message["role"] == "assistant":
+                self.assertIn("reasoning_content", message)
+                self.assertTrue(message["reasoning_content"])
+
+    def test_short_reasoning_is_padded_too(self) -> None:
+        # No length threshold: a fragment of any size is either kept whole
+        # (recent rounds) or dropped wholesale. Truncation is never used.
+        messages = self._rounds_with_reasoning(20, 50)
+
+        result = compact_observations(messages, budget=1, window_rounds=6)
+
+        self.assertEqual(result[2]["reasoning_content"], " ")
+
+    def test_budget_pressure_pads_round_by_round(self) -> None:
+        # Comfort window 8 keeps rounds intact under pass 1; a tighter
+        # budget forces pass 2 to walk cutoff up and pad more.
+        messages = self._rounds_with_reasoning(10, 4_000)
+
+        result = compact_observations(messages, budget=20_000,
+                                      window_rounds=8, keep_recent_rounds=2)
+
+        padded = [m for m in result
+                  if m["role"] == "assistant"
+                  and m.get("reasoning_content") == " "]
+        self.assertGreaterEqual(len(padded), 6)
+        # The keep-recent core keeps full chain-of-thought.
+        self.assertEqual(result[-2]["reasoning_content"],
+                         messages[-2]["reasoning_content"])
+
+    def test_padding_is_idempotent(self) -> None:
+        # An already-padded message must not flip compacted_any, or
+        # pass 2 loops without shrinking anything.
+        messages = self._rounds_with_reasoning(4, 3_000)
+        for message in messages:
+            if message["role"] == "assistant":
+                message["reasoning_content"] = " "
+
+        result = compact_observations(messages, budget=10, window_rounds=0)
+
+        for message in result:
+            if message["role"] == "assistant":
+                self.assertEqual(message["reasoning_content"], " ")
 
 
 class ApplyMemoryStrategyTests(unittest.IsolatedAsyncioTestCase):

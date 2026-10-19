@@ -76,16 +76,37 @@ Use exactly these sections:
 - **Environment State**: ..."""
 
 
-def _message_chars(message: dict[str, Any]) -> int:
+def _reasoning_replayed() -> bool:
+    """Whether reasoning_content rides the wire for the configured endpoint.
+
+    Budget accounting must match the wire (providers/llm.py projection):
+    reasoning only counts toward the context budget when the echo policy
+    will actually replay it.  Lazy import matches ``_get_summary_llm``.
+    """
+    from agent_runtime.providers.llm import reasoning_echo_enabled
+    return reasoning_echo_enabled()
+
+
+def _message_chars(message: dict[str, Any],
+                   count_reasoning: bool = True) -> int:
+    # reasoning_content rides the wire on echo-family providers, so it
+    # must count toward the context budget there — otherwise
+    # long-thinking models outrun compaction without ever tripping it.
+    # When the echo policy strips it, counting it would overestimate the
+    # request and compact observations too early.
     total = len(message.get("content") or "")
+    if count_reasoning:
+        total += len(message.get("reasoning_content") or "")
     for call in message.get("tool_calls") or []:
         function = call.get("function") or {}
         total += len(function.get("arguments") or "")
     return total
 
 
-def _total_chars(messages: list[dict[str, Any]]) -> int:
-    return sum(_message_chars(message) for message in messages)
+def _total_chars(messages: list[dict[str, Any]],
+                 count_reasoning: bool = True) -> int:
+    return sum(_message_chars(message, count_reasoning)
+               for message in messages)
 
 
 def _round_starts(messages: list[dict[str, Any]]) -> list[int]:
@@ -105,6 +126,27 @@ def _round_starts(messages: list[dict[str, Any]]) -> list[int]:
             starts.append(index)
         previous_role = role
     return starts
+
+
+def _drop_stale_reasoning(message: dict[str, Any]) -> dict[str, Any]:
+    """Erase one assistant message's chain-of-thought for replay.
+
+    Old-round thinking is replayed whole to echo-family providers yet has
+    little reuse value for the model's next step — the visible content and
+    tool trail carry the decisions.  A truncated fragment has no
+    independent semantics and can mislead (a half-finished hypothesis
+    reads like a settled conclusion), so the text is dropped wholesale.
+    The key survives as a one-space pad: echo contracts like DeepSeek's
+    require ``reasoning_content`` present on assistant messages, and an
+    empty string 400s on some endpoints.  Idempotent — an already-padded
+    message returns unchanged so pass-2 progress stays honest.
+    """
+    reasoning = message.get("reasoning_content") or ""
+    if reasoning == " ":
+        return message
+    compacted = dict(message)
+    compacted["reasoning_content"] = " "
+    return compacted
 
 
 def _compact_tool_message(message: dict[str, Any], tool: str,
@@ -153,16 +195,23 @@ def compact_observations(messages: list[dict[str, Any]], *,
 
     1. Compact tool observations in rounds older than the last
        ``window_rounds`` rounds (the comfort zone that is normally kept
-       intact).
+       intact), and drop those rounds' assistant reasoning to a one-space
+       pad the same way (stale chain-of-thought is replayed whole yet
+       rarely reused; a truncated fragment would mislead, so it goes
+       wholesale — the key stays for echo contracts).
     2. If the request would still exceed ``budget``, keep compacting
        tool observations round by round from the oldest round still
        intact — but never inside the most recent ``keep_recent_rounds``
        rounds.  Those are the active working context; if they alone
        exceed the budget the budget yields, not the context.
 
-    Below budget the original list is returned unchanged.
+    Reasoning chars count toward ``budget`` only when the echo policy
+    will actually replay them on the wire (see :func:`_reasoning_replayed`
+    — the single source of truth).  Below budget the original list is
+    returned unchanged.
     """
-    if _total_chars(messages) <= budget:
+    count = _reasoning_replayed()
+    if _total_chars(messages, count) <= budget:
         return messages
     starts = _round_starts(messages)
     if not starts:
@@ -179,7 +228,7 @@ def compact_observations(messages: list[dict[str, Any]], *,
         return position
 
     def _compact_at(cutoff: int) -> tuple[list[dict[str, Any]], bool]:
-        """Compact tool messages in rounds 1..cutoff (inclusive)."""
+        """Compact tool messages and stale reasoning in rounds 1..cutoff."""
         result: list[dict[str, Any]] = []
         compacted_any = False
         for index, message in enumerate(messages):
@@ -187,6 +236,12 @@ def compact_observations(messages: list[dict[str, Any]], *,
             if role == "tool" and 0 < _round_of(index) <= cutoff:
                 tool = _tool_name_for(messages, index)
                 compacted = _compact_tool_message(message, tool, head_chars)
+                if compacted is not message:
+                    compacted_any = True
+                result.append(compacted)
+            elif (role == "assistant" and 0 < _round_of(index) <= cutoff
+                    and message.get("reasoning_content")):
+                compacted = _drop_stale_reasoning(message)
                 if compacted is not message:
                     compacted_any = True
                 result.append(compacted)
@@ -201,7 +256,8 @@ def compact_observations(messages: list[dict[str, Any]], *,
     # Pass 2: under budget pressure, shrink the window round by round
     # until the budget is met or only the keep-recent core remains.
     cutoff = window_cutoff
-    while _total_chars(result) > budget and cutoff < never_touch_from_round:
+    while (_total_chars(result, count) > budget
+           and cutoff < never_touch_from_round):
         cutoff += 1
         result, compacted_any = _compact_at(cutoff)
         if not compacted_any:
@@ -229,6 +285,9 @@ async def apply_memory_strategy(messages: list[dict[str, Any]], memory: MemoryGe
     When a re-compaction actually produces a new view, a ``memory.{strategy}``
     event is emitted on ``trace`` (if provided) so the caller stays free of
     strategy logic.
+
+    Reasoning chars are budgeted only when the echo policy will replay
+    them on the wire (see :func:`_reasoning_replayed`).
     """
     strategy = memory.strategy
     if strategy == STRATEGY_FULL_HISTORY:
@@ -236,9 +295,10 @@ async def apply_memory_strategy(messages: list[dict[str, Any]], memory: MemoryGe
     if strategy not in (STRATEGY_COMPACT_OBSERVATIONS, STRATEGY_LLM_SUMMARY):
         raise ValueError(f"unknown memory strategy: {strategy!r}")
 
+    count = _reasoning_replayed()
     budget = memory.context_budget
     working = compact_messages if compact_messages is not None else messages
-    if _total_chars(working) <= budget:
+    if _total_chars(working, count) <= budget:
         return working
 
     if strategy == STRATEGY_COMPACT_OBSERVATIONS:
@@ -255,8 +315,8 @@ async def apply_memory_strategy(messages: list[dict[str, Any]], memory: MemoryGe
 
     if trace is not None and result is not working and result is not messages:
         trace.emit(f"memory.{strategy}", iteration,
-                   original_chars=_total_chars(messages),
-                   request_chars=_total_chars(result),
+                   original_chars=_total_chars(messages, count),
+                   request_chars=_total_chars(result, count),
                    original_count=len(messages),
                    request_count=len(result))
     return result
@@ -373,13 +433,16 @@ async def summarize_history(messages: list[dict[str, Any]], *,
     list is returned unchanged. If the summarizer LLM call fails *or* produces
     an invalid summary (missing sections), the strategy falls back to the
     deterministic ``compact_observations`` so the turn still proceeds.
+    Reasoning chars are budgeted only when the echo policy will replay
+    them on the wire (see :func:`_reasoning_replayed`).
     """
     if budget is None:
         budget = DEFAULT_CONTEXT_BUDGET
     if tail_rounds is None:
         tail_rounds = DEFAULT_SUMMARY_TAIL_ROUNDS
+    count = _reasoning_replayed()
     llm = _get_summary_llm()
-    if _total_chars(messages) <= budget:
+    if _total_chars(messages, count) <= budget:
         return messages
     starts = _round_starts(messages)
     total_rounds = len(starts)

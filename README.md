@@ -199,6 +199,11 @@ documented in `.env.example`. The two most relevant to running:
 - `AGENT_RUNTIME_HARNESS` — default harness id when `--harness` is omitted
   (also used by the Harbor adapter and `scripts/run_with_image_gc.py`)
 - `AGENT_RUNTIME_STREAM` — set to `0` to disable streaming LLM consumption
+- `AGENT_RUNTIME_REASONING_ECHO` — how the model's `reasoning_content` is
+  replayed on history turns: `auto` (default; echo for thinking-mode families
+  like deepseek/glm/kimi/mimo/ling matched via `MODEL_ID`/`LLM_BASE_URL`, strip
+  for other endpoints), `always` (replay for every provider), `never` (strip
+  before every request — for strict providers that reject extra message fields)
 
 Keep your actual API keys strictly in your local `.env` file and do not commit them to Git.
 

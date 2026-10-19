@@ -15,6 +15,84 @@ def _reasoning_effort() -> str | None:
     return value or None
 
 
+def _reasoning_echo_mode() -> str:
+    """Outbound reasoning-replay policy: ``auto``, ``always``, or ``never``.
+
+    Read per request like :func:`_reasoning_effort`.  Unknown values fall
+    back to ``auto`` so a typo never strands the run on a wrong policy.
+    """
+    value = os.getenv("AGENT_RUNTIME_REASONING_ECHO", "auto").strip().lower()
+    return value if value in ("auto", "always", "never") else "auto"
+
+
+# Substring markers for "echo" families: thinking-mode APIs that expect
+# the assistant `reasoning_content` back on every replay (DeepSeek's
+# contract: "the reasoning_content in the thinking mode must be passed
+# back to the API").  Matched against MODEL_ID and LLM_BASE_URL.  A
+# gateway that proxies one of these under a neutral host is misclassified
+# — pin AGENT_RUNTIME_REASONING_ECHO=always|never for such setups.
+_ECHO_FAMILY_MARKERS: tuple[str, ...] = (
+    "deepseek", "glm", "zhipu", "bigmodel",
+    "kimi", "moonshot", "mimo", "xiaomi", "ling",
+)
+
+
+def _should_echo_reasoning(model: str, base_url: str | None,
+                           mode: str | None = None) -> bool:
+    """Whether assistant ``reasoning_content`` is replayed to the provider."""
+    if mode is None:
+        mode = _reasoning_echo_mode()
+    if mode == "always":
+        return True
+    if mode == "never":
+        return False
+    haystack = f"{model} {base_url or ''}".lower()
+    return any(marker in haystack for marker in _ECHO_FAMILY_MARKERS)
+
+
+_DEFAULT_MODEL = "glm-5.3"
+
+
+def reasoning_echo_enabled(model: str | None = None,
+                           base_url: str | None = None) -> bool:
+    """Echo decision for the configured endpoint (env-backed defaults).
+
+    The context-budget layer asks this so accounting matches the wire:
+    reasoning only counts toward the budget when it will actually be
+    replayed. ``model``/``base_url`` default to the same env resolution
+    as :class:`OpenAICompatibleLLM`.
+    """
+    return _should_echo_reasoning(
+        model if model is not None else os.getenv("MODEL_ID", _DEFAULT_MODEL),
+        base_url if base_url is not None else os.getenv("LLM_BASE_URL"))
+
+
+def _project_messages_for_wire(messages: Sequence[dict[str, Any]],
+                               echo: bool) -> list[dict[str, Any]]:
+    """Return the request-side projection of ``messages``.
+
+    Pure and non-mutating: conversation history and traces keep the full
+    turn (including chain-of-thought), only the wire copy is shaped.
+
+    - ``metadata`` (observation spill paths and other runtime side-channel
+      data) is stripped unconditionally — no provider understands it.
+    - ``reasoning_content`` is kept only when ``echo`` is true.  Where it
+      is stripped, a thinking-only assistant turn would collapse to an
+      empty message, so it gets a placeholder instead (the protocol
+      requires assistant messages to carry something).
+    """
+    projected: list[dict[str, Any]] = []
+    for message in messages:
+        out = dict(message)
+        out.pop("metadata", None)
+        if not echo and out.get("role") == "assistant":
+            out.pop("reasoning_content", None)
+            if not out.get("content") and not out.get("tool_calls"):
+                out["content"] = "(reasoning omitted)"
+        projected.append(out)
+    return projected
+
+
 class OpenAICompatibleLLM:
     def __init__(self, api_key: str | None = None, base_url: str | None = None,
                   model: str | None = None, **client_kwargs: Any) -> None:
@@ -22,16 +100,19 @@ class OpenAICompatibleLLM:
             from openai import AsyncOpenAI
         except ImportError as exc:
             raise RuntimeError("Install the openai package to use this provider") from exc
-        self.model = model or os.getenv("MODEL_ID", "glm-5.3")
+        self.model = model or os.getenv("MODEL_ID", _DEFAULT_MODEL)
+        self.base_url = base_url or os.getenv("LLM_BASE_URL")
         self.temperature = float(os.getenv("LLM_TEMPERATURE", 0.0))
         self.client = AsyncOpenAI(api_key=api_key or os.getenv("LLM_API_KEY"),
-                                  base_url=base_url or os.getenv("LLM_BASE_URL"),
+                                  base_url=self.base_url,
                                   **client_kwargs)
 
     async def chat(self, messages: Sequence[dict[str, Any]],
                    tools: list[dict[str, Any]] | None = None,
                    **request_kwargs: Any) -> dict[str, Any]:
-        kwargs = {"model": self.model, "messages": list(messages),
+        echo = _should_echo_reasoning(self.model, self.base_url)
+        kwargs = {"model": self.model,
+                  "messages": _project_messages_for_wire(messages, echo),
                   "temperature": self.temperature, **request_kwargs}
         effort = _reasoning_effort()
         if effort is not None:
@@ -57,8 +138,11 @@ class OpenAICompatibleLLM:
         terminated normally.  If the server cuts the stream without a
         finish marker, no such signal is emitted.
         """
-        kwargs = {"model": self.model, "messages": list(messages),
-                   "stream": True, "temperature": self.temperature, **request_kwargs}
+        echo = _should_echo_reasoning(self.model, self.base_url)
+        kwargs = {"model": self.model,
+                  "messages": _project_messages_for_wire(messages, echo),
+                  "stream": True, "temperature": self.temperature,
+                  **request_kwargs}
         effort = _reasoning_effort()
         if effort is not None:
             kwargs.setdefault("reasoning_effort", effort)
