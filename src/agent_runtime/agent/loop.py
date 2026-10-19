@@ -296,112 +296,173 @@ class AgentTurn:
                 history.append(assistant_message)
 
             if not tool_calls:
-                answer = response.get("content", "")
-                if self.harness.verification.mode == "off":
-                    logger.debug("agent.final iteration=%d answer_chars=%d",
-                                 iteration, len(answer))
-                    events.emit("agent.completed", iteration, iterations=iteration,
-                                answer=answer)
-                    return answer
-                # Labs-OO-Agents BenchAgent pattern: a bare message can
-                # never finish the turn — the model must submit via the
-                # submit_result tool, whose parameters are typed. Legacy
-                # return_contract prompts describe text sections, but the
-                # runtime no longer accepts them either.
-                if iteration >= self.max_iterations:
-                    # No budget left for a retry; accept as-is and record
-                    # the miss on the summary turn instead of overrunning.
-                    self.trace.emit("verification.failed", iteration,
-                                    missing=["submit_result"],
-                                    reasons={"submit_result":
-                                             "budget exhausted without a valid "
-                                             "submit_result call"})
-                    logger.debug("agent.final iteration=%d answer_chars=%d "
-                                 "unsubmitted", iteration, len(answer))
-                    events.emit("agent.completed", iteration, iterations=iteration,
-                                answer=answer)
-                    return answer
-                self._note_finish_violation(iteration)
-                gaps = {"submit_result": "plain-text answer cannot finish "
-                                         "the task — call submit_result"}
-                self.trace.emit("verification.failed", iteration,
-                                missing=sorted(gaps), reasons=gaps)
-                history.append({"role": "user", "content": submit_nudge()})
+                finished = self._answer_without_tools(response, iteration,
+                                                      history)
+                if finished is not None:
+                    return finished
                 continue
-            for outcome in outcomes:
-                if (submit_args is not None and outcome.validated is not None
-                        and outcome.validated.name == SUBMIT_TOOL):
-                    continue  # finish attempt, validated below
-                tool_call = outcome.tool_call
-                tool_meta = _tool_trace_metadata(tool_call)
-                logger.debug("tool.dispatch iteration=%d tool=%r tool_call_id=%r",
-                             iteration, tool_meta.get("tool"),
-                             tool_meta.get("tool_call_id"))
-                payload = _tool_call_payload(tool_call)
-                events.emit("tool.started", iteration, call_id=payload["call_id"],
-                            tool=payload["tool"], arguments=payload["arguments"])
-                tool_started = time.monotonic()
-                if outcome.rejection is not None:
-                    observation = self._reject_tool_call(outcome, iteration)
-                    history.append(observation)
-                    if payload["tool"] == SUBMIT_TOOL:
-                        # Malformed finish attempt, not work: no reset.
-                        self._note_finish_violation(iteration)
-                    stop = self._check_error_budget(
-                        error_budget, iteration,
-                        payload["tool"], outcome.rejection)
-                    if stop is not None:
-                        return stop
-                    continue
-                validated = outcome.validated
-                assert validated is not None
-                try:
-                    with trace.span("tool", iteration, **tool_meta) as span_meta:
-                        result = await tools.execute(validated.name,
-                                                     validated.arguments)
-                        span_meta.update(tool=validated.name,
-                                         tool_call_id=validated.id)
-                    logger.debug(
-                        "tool.result iteration=%d tool=%r result_chars=%d",
-                        iteration, validated.name, len(str(result)))
-                    events.emit("tool.completed", iteration, call_id=payload["call_id"],
-                                duration=round(time.monotonic() - tool_started, 3),
-                                **_tool_result_summary(result))
-                except Exception as exc:
-                    logger.error("tool.error iteration=%d tool=%r error=%s",
-                                 iteration, validated.name, exc)
-                    events.emit("tool.failed", iteration, call_id=payload["call_id"],
-                                tool=payload["tool"], error=str(exc))
-                    observation = harness.tool_error_observation(
-                        exc, tool=payload["tool"])
-                    history.append(_tool_observation_message(tool_call, observation))
-                    self._finish_violations = 0  # executed: new information
-                    stop = self._check_error_budget(
-                        error_budget, iteration, validated.name, exc)
-                    if stop is not None:
-                        return stop
-                    continue
-                rendered = await self.observations.render(result, validated.id)
-                metadata = ({"spill_path": rendered.spill_path}
-                            if rendered.spill_path else None)
-                history.append(_tool_observation_message(
-                    tool_call, rendered.text, metadata))
-                error_budget.note_success()
-                self._finish_violations = 0  # executed work resets the fuse
+            stop = await self._dispatch_tools(outcomes, submit_args, iteration,
+                                              history, error_budget)
+            if stop is not None:
+                return stop
 
             if submit_args is not None:
-                nudge = await self._validate_submission(
-                    submit_args, iteration, history.messages)
-                if nudge is not None:
-                    history.append({"role": "user", "content": nudge})
-                    continue
-                answer = render_submission(submit_args)
-                logger.debug("agent.final iteration=%d answer_chars=%d submit=True",
-                             iteration, len(answer))
-                events.emit("agent.completed", iteration, iterations=iteration,
-                            answer=answer)
-                return answer
+                finished = await self._finish_or_nudge(submit_args, iteration,
+                                                       history)
+                if finished is not None:
+                    return finished
+                continue
 
+        return await self._summary_turn(history, agent_meta)
+
+    def _answer_without_tools(self, response: dict[str, Any], iteration: int,
+                              history: TurnHistory) -> str | None:
+        """Handle an answer with no tool calls; ``None`` means nudge + continue.
+
+        Under ``verification.mode == "off"`` the plain answer ends the turn;
+        an enabled harness only accepts a typed submit_result call, so a bare
+        message is either the budget-exhausted fallback or a contract miss
+        worth one nudge.
+        """
+        events = self.events
+        answer = response.get("content", "")
+        if self.harness.verification.mode == "off":
+            logger.debug("agent.final iteration=%d answer_chars=%d",
+                         iteration, len(answer))
+            events.emit("agent.completed", iteration, iterations=iteration,
+                        answer=answer)
+            return answer
+        # Labs-OO-Agents BenchAgent pattern: a bare message can
+        # never finish the turn — the model must submit via the
+        # submit_result tool, whose parameters are typed. Legacy
+        # return_contract prompts describe text sections, but the
+        # runtime no longer accepts them either.
+        if iteration >= self.max_iterations:
+            # No budget left for a retry; accept as-is and record
+            # the miss on the summary turn instead of overrunning.
+            self.trace.emit("verification.failed", iteration,
+                            missing=["submit_result"],
+                            reasons={"submit_result":
+                                     "budget exhausted without a valid "
+                                     "submit_result call"})
+            logger.debug("agent.final iteration=%d answer_chars=%d "
+                         "unsubmitted", iteration, len(answer))
+            events.emit("agent.completed", iteration, iterations=iteration,
+                        answer=answer)
+            return answer
+        self._note_finish_violation(iteration)
+        gaps = {"submit_result": "plain-text answer cannot finish "
+                                 "the task — call submit_result"}
+        self.trace.emit("verification.failed", iteration,
+                        missing=sorted(gaps), reasons=gaps)
+        history.append({"role": "user", "content": submit_nudge()})
+        return None
+
+    async def _dispatch_tools(self, outcomes: list[ToolCallOutcome],
+                              submit_args: dict[str, Any] | None, iteration: int,
+                              history: TurnHistory,
+                              error_budget: SameToolErrorBudget) -> str | None:
+        """Execute this iteration's tool calls in order; ``None`` lets it on.
+
+        A validated submit_result call is skipped here — it is a finish
+        attempt, validated against the updated history afterwards. A
+        returned string is a guard stop (same-tool error budget) for the
+        caller to return as the turn's answer.
+        """
+        events, trace = self.events, self.trace
+        tools, harness = self.tools, self.harness
+        for outcome in outcomes:
+            if (submit_args is not None and outcome.validated is not None
+                    and outcome.validated.name == SUBMIT_TOOL):
+                continue  # finish attempt, validated below
+            tool_call = outcome.tool_call
+            tool_meta = _tool_trace_metadata(tool_call)
+            logger.debug("tool.dispatch iteration=%d tool=%r tool_call_id=%r",
+                         iteration, tool_meta.get("tool"),
+                         tool_meta.get("tool_call_id"))
+            payload = _tool_call_payload(tool_call)
+            events.emit("tool.started", iteration, call_id=payload["call_id"],
+                        tool=payload["tool"], arguments=payload["arguments"])
+            tool_started = time.monotonic()
+            if outcome.rejection is not None:
+                observation = self._reject_tool_call(outcome, iteration)
+                history.append(observation)
+                if payload["tool"] == SUBMIT_TOOL:
+                    # Malformed finish attempt, not work: no reset.
+                    self._note_finish_violation(iteration)
+                stop = self._check_error_budget(
+                    error_budget, iteration,
+                    payload["tool"], outcome.rejection)
+                if stop is not None:
+                    return stop
+                continue
+            validated = outcome.validated
+            assert validated is not None
+            try:
+                with trace.span("tool", iteration, **tool_meta) as span_meta:
+                    result = await tools.execute(validated.name,
+                                                 validated.arguments)
+                    span_meta.update(tool=validated.name,
+                                     tool_call_id=validated.id)
+                logger.debug(
+                    "tool.result iteration=%d tool=%r result_chars=%d",
+                    iteration, validated.name, len(str(result)))
+                events.emit("tool.completed", iteration, call_id=payload["call_id"],
+                            duration=round(time.monotonic() - tool_started, 3),
+                            **_tool_result_summary(result))
+            except Exception as exc:
+                logger.error("tool.error iteration=%d tool=%r error=%s",
+                             iteration, validated.name, exc)
+                events.emit("tool.failed", iteration, call_id=payload["call_id"],
+                            tool=payload["tool"], error=str(exc))
+                observation = harness.tool_error_observation(
+                    exc, tool=payload["tool"])
+                history.append(_tool_observation_message(tool_call, observation))
+                self._finish_violations = 0  # executed: new information
+                stop = self._check_error_budget(
+                    error_budget, iteration, validated.name, exc)
+                if stop is not None:
+                    return stop
+                continue
+            rendered = await self.observations.render(result, validated.id)
+            metadata = ({"spill_path": rendered.spill_path}
+                        if rendered.spill_path else None)
+            history.append(_tool_observation_message(
+                tool_call, rendered.text, metadata))
+            error_budget.note_success()
+            self._finish_violations = 0  # executed work resets the fuse
+        return None
+
+    async def _finish_or_nudge(self, submit_args: dict[str, Any], iteration: int,
+                               history: TurnHistory) -> str | None:
+        """Validate the turn's submit_result attempt; ``None`` means nudge.
+
+        The nudge is appended to the history and the loop continues; a
+        rendered submission is the final answer of the turn.
+        """
+        events = self.events
+        nudge = await self._validate_submission(
+            submit_args, iteration, history.messages)
+        if nudge is not None:
+            history.append({"role": "user", "content": nudge})
+            return None
+        answer = render_submission(submit_args)
+        logger.debug("agent.final iteration=%d answer_chars=%d submit=True",
+                     iteration, len(answer))
+        events.emit("agent.completed", iteration, iterations=iteration,
+                    answer=answer)
+        return answer
+
+    async def _summary_turn(self, history: TurnHistory,
+                            agent_meta: dict[str, Any]) -> str:
+        """Forced summary turn once the iteration budget is spent.
+
+        Appends the harness iteration-limit notice and asks one last time
+        with no tools, so the model can only summarise; the turn always
+        ends here, with the contract recorded as a miss.
+        """
+        events, trace = self.events, self.trace
+        harness = self.harness
         history.append({"role": "user", "content":
                         harness.prompt.iteration_limit_notice})
         iteration = self.max_iterations + 1
