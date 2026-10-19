@@ -134,6 +134,7 @@ events.subscribe(CLIRenderer())
 Sample output:
 
 ```
+⠙ Thinking · 2s                         ← waiting for the first token (erased)
 ▌ 先看一下测试情况                      ← reasoning delta, dim
 Running the tests first.                ← content delta, streamed inline
 
@@ -148,6 +149,10 @@ Running the tests first.                ← content delta, streamed inline
 
 Behavior:
 
+- `agent.started` / `assistant.started` show a one-line spinner with elapsed
+  time while waiting for the LLM (only on a TTY). It is erased as soon as
+  anything else is printed: the first `assistant.delta`, a tool line, an
+  error, …
 - `assistant.delta` prints inline without waiting for the full response.
 - `tool.started` prints the header and `$ command` at once, so the user sees
   what is running instead of waiting silently for a long command.
@@ -182,6 +187,7 @@ trace and the event emitter, and runs the LLM in streaming mode.
 | Variable | Default | Effect |
 |---|---|---|
 | `AGENT_RUNTIME_CLI_REASONING` | `1` | set to `0` to hide reasoning deltas |
+| `AGENT_RUNTIME_CLI_SPINNER` | `1` | set to `0` to disable the waiting spinner |
 | `AGENT_RUNTIME_STREAM_IDLE_TIMEOUT` | `120` | seconds before a silent stream fails |
 
 ## 7. Extending to Other Channels

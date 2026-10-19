@@ -1,13 +1,16 @@
 import sys
+import time
 import unittest
 from io import StringIO
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
 
 from agent_runtime.channels import CLIRenderer
+from agent_runtime.channels import cli as cli_module
 from agent_runtime.events import AgentEvent
 
 
@@ -22,6 +25,11 @@ def render(events: list[AgentEvent], **kwargs: Any) -> str:
     for item in events:
         renderer(item)
     return output.getvalue()
+
+
+class FakeTTY(StringIO):
+    def isatty(self) -> bool:
+        return True
 
 
 class CLIRendererTests(unittest.TestCase):
@@ -157,6 +165,59 @@ class CLIRendererTests(unittest.TestCase):
                                      "stdout_tail": "", "stderr_tail": ""}),
         ])
         self.assertNotIn("\x1b", output)
+
+    def test_spinner_is_silent_when_stream_is_not_a_tty(self) -> None:
+        output = render([
+            event("agent.started", {"message": "hi"}),
+            event("assistant.started", {}),
+            event("assistant.delta", {"content": "Hello", "reasoning": ""}),
+        ])
+        self.assertEqual(output, "Hello")
+
+    def test_spinner_shows_while_waiting_and_clears_on_first_delta(self) -> None:
+        output = FakeTTY()
+        renderer = CLIRenderer(output, color=False)
+        renderer(event("agent.started", {"message": "hi"}))
+        renderer(event("assistant.started", {}))
+        waiting = output.getvalue()
+        self.assertIn("Thinking", waiting)
+        renderer(event("assistant.delta", {"content": "Hello", "reasoning": ""}))
+        self.assertTrue(output.getvalue().endswith("\r\x1b[KHello"))
+        renderer.close()
+        self.assertTrue(output.getvalue().endswith("\r\x1b[KHello"))
+
+    def test_spinner_animates_over_time(self) -> None:
+        output = FakeTTY()
+        renderer = CLIRenderer(output, color=False)
+        with mock.patch.object(cli_module, "_SPINNER_INTERVAL", 0.01):
+            renderer(event("assistant.started", {}))
+            time.sleep(0.05)
+            renderer(event("assistant.completed", {"tool_calls": []}))
+        frames = output.getvalue().count("Thinking")
+        self.assertGreater(frames, 1)
+        renderer.close()
+
+    def test_spinner_stops_on_tool_and_restarts_for_next_llm_round(self) -> None:
+        output = FakeTTY()
+        renderer = CLIRenderer(output, color=False)
+        renderer(event("assistant.started", {}))
+        self.assertIn("Thinking", output.getvalue())
+        renderer(event("tool.started", {"tool": "run_command",
+                                        "arguments": {"command": "ls"}}))
+        tool_output = output.getvalue()
+        self.assertTrue(tool_output.endswith("  $ ls\n"))
+        renderer(event("assistant.started", {}))
+        self.assertIn("Thinking", output.getvalue()[len(tool_output):])
+        renderer(event("assistant.completed", {"tool_calls": []}))
+        renderer.close()
+
+    def test_spinner_can_be_disabled_with_env_var(self) -> None:
+        output = FakeTTY()
+        with mock.patch.dict("os.environ", {"AGENT_RUNTIME_CLI_SPINNER": "0"}):
+            renderer = CLIRenderer(output, color=False)
+        renderer(event("assistant.started", {}))
+        self.assertEqual(output.getvalue(), "")
+        renderer.close()
 
 
 if __name__ == "__main__":

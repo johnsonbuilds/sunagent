@@ -46,24 +46,28 @@ async def _run() -> None:
     trace = (RunTrace(output_path=args.trace, harness=harness) if args.trace
              else RunTrace(harness=harness))
     events = EventEmitter(run_id=trace.run_id)
-    events.subscribe(CLIRenderer())
+    renderer = CLIRenderer()
+    events.subscribe(renderer)
     use_stream = use_streaming()
     prompt = " ".join(args.prompt).strip()
 
-    while True:
-        if not prompt:
-            try:
-                prompt = input("> ").strip()
-            except EOFError:
-                print()
+    try:
+        while True:
+            if not prompt:
+                try:
+                    prompt = input("> ").strip()
+                except EOFError:
+                    print()
+                    break
+            if prompt.lower() in {"exit", "quit"}:
                 break
-        if prompt.lower() in {"exit", "quit"}:
-            break
-        if prompt:
-            await run_turn(prompt, llm, tools, conversation=conversation,
-                           harness=harness, stream=use_stream,
-                           trace=trace, events=events)
-        prompt = ""
+            if prompt:
+                await run_turn(prompt, llm, tools, conversation=conversation,
+                               harness=harness, stream=use_stream,
+                               trace=trace, events=events)
+            prompt = ""
+    finally:
+        renderer.close()
 
 
 def main() -> None:

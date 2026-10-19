@@ -23,8 +23,8 @@ MODEL_ID=your-model
 
 ```bash
 uv run python scripts/run_with_image_gc.py \
-  --dataset terminal-bench/terminal-bench-2 \
-  --harness tb-v1 --job-name terminal-bench-2-tb-v1 -n 4 \
+  --dataset terminal-bench/terminal-bench-2-1 \
+  --harness tb-v2 --job-name terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed -n 4 \
   --timeout-multiplier 3
 ```
 

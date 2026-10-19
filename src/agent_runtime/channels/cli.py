@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
+import time
 from typing import Any, TextIO
 
 from agent_runtime.events import AgentEvent
@@ -17,9 +19,17 @@ _STDOUT_LINES = 5
 _RESULT_LINES = 3
 _LINE_WIDTH = 100
 
+_SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+_SPINNER_INTERVAL = 0.1
+_CLEAR_LINE = "\r\x1b[K"
+
 
 def _reasoning_enabled_by_default() -> bool:
     return os.getenv("AGENT_RUNTIME_CLI_REASONING", "1") != "0"
+
+
+def _spinner_enabled_by_default() -> bool:
+    return os.getenv("AGENT_RUNTIME_CLI_SPINNER", "1") != "0"
 
 
 class CLIRenderer:
@@ -40,13 +50,65 @@ class CLIRenderer:
                                 if show_reasoning is None else show_reasoning)
         self._line_open = False
         self._mode: str | None = None
+        self._spinner_on = self._stream.isatty() and _spinner_enabled_by_default()
+        self._spinner_thread: threading.Thread | None = None
+        self._spinner_stop = threading.Event()
+        self._spinner_lock = threading.Lock()
+        self._spinner_visible = False
+        self._spinner_index = 0
+        self._spinner_started = 0.0
 
     def __call__(self, event: AgentEvent) -> None:
         handler = getattr(self, f"_on_{event.event_type.replace('.', '_')}", None)
         if handler is not None:
             handler(event)
 
+    def close(self) -> None:
+        """Stop any background animation (safe to call more than once)."""
+        self._stop_spinner()
+
+    def _start_spinner(self) -> None:
+        if not self._spinner_on or self._spinner_thread is not None:
+            return
+        self._spinner_stop = threading.Event()
+        self._spinner_index = 0
+        self._spinner_started = time.monotonic()
+        self._draw_spinner_frame()
+        thread = threading.Thread(target=self._spin, daemon=True)
+        self._spinner_thread = thread
+        thread.start()
+
+    def _spin(self) -> None:
+        while not self._spinner_stop.wait(_SPINNER_INTERVAL):
+            self._draw_spinner_frame()
+
+    def _draw_spinner_frame(self) -> None:
+        frame = _SPINNER_FRAMES[self._spinner_index % len(_SPINNER_FRAMES)]
+        self._spinner_index += 1
+        elapsed = time.monotonic() - self._spinner_started
+        text = self._paint(f"{frame} Thinking · {elapsed:.0f}s", _DIM)
+        with self._spinner_lock:
+            if self._spinner_stop.is_set():
+                return
+            self._stream.write(f"{_CLEAR_LINE}{text}")
+            self._stream.flush()
+            self._spinner_visible = True
+
+    def _stop_spinner(self) -> None:
+        thread = self._spinner_thread
+        if thread is None:
+            return
+        self._spinner_thread = None
+        self._spinner_stop.set()
+        thread.join(timeout=1.0)
+        with self._spinner_lock:
+            if self._spinner_visible:
+                self._stream.write(_CLEAR_LINE)
+                self._stream.flush()
+                self._spinner_visible = False
+
     def _write(self, text: str) -> None:
+        self._stop_spinner()
         print(text, file=self._stream, end="", flush=True)
 
     def _paint(self, text: str, *codes: str) -> str:
@@ -55,14 +117,21 @@ class CLIRenderer:
         return "".join(codes) + text + _RESET
 
     def _close_line(self) -> None:
+        self._stop_spinner()
         if self._line_open:
             self._write("\n")
         self._line_open = False
         self._mode = None
 
+    def _on_agent_started(self, event: AgentEvent) -> None:
+        self._start_spinner()
+
     def _on_agent_completed(self, event: AgentEvent) -> None:
         self._close_line()
         self._write("\n")
+
+    def _on_assistant_started(self, event: AgentEvent) -> None:
+        self._start_spinner()
 
     def _on_assistant_completed(self, event: AgentEvent) -> None:
         self._close_line()
