@@ -1,0 +1,734 @@
+{
+  "record_id": "terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed__tb-v2__terminal-bench-2-1",
+  "created_at": "2026-10-19T14:13:21",
+  "harness_id": "tb-v2",
+  "genes_hash": "55973dc1b6806efc",
+  "model": "mimo-2.6-pro-ultraspeed",
+  "benchmark": "terminal-bench/terminal-bench-2-1",
+  "job_dir": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed",
+  "git_commit": "8c7bb17",
+  "score": {
+    "passed": 63,
+    "failed": 23,
+    "errored": 3,
+    "cancelled": 0,
+    "unjudged_completed": 0,
+    "total": 89,
+    "rate": 0.7326
+  },
+  "tasks": [
+    {
+      "task": "terminal-bench/adaptive-rejection-sampler",
+      "trial": "adaptive-rejection-sampler__SWLvi8U",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/adaptive-rejection-sampler__SWLvi8U/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/bn-fit-modify",
+      "trial": "bn-fit-modify__a4UhwS9",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/bn-fit-modify__a4UhwS9/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/break-filter-js-from-html",
+      "trial": "break-filter-js-from-html__CvFwwVm",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/break-filter-js-from-html__CvFwwVm/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/build-cython-ext",
+      "trial": "build-cython-ext__RRMAWeu",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/build-cython-ext__RRMAWeu/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/build-pmars",
+      "trial": "build-pmars__h7qNd3e",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/build-pmars__h7qNd3e/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/build-pov-ray",
+      "trial": "build-pov-ray__Si8hs42",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/build-pov-ray__Si8hs42/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/caffe-cifar-10",
+      "trial": "caffe-cifar-10__fLRsUEZ",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/caffe-cifar-10__fLRsUEZ/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/cancel-async-tasks",
+      "trial": "cancel-async-tasks__RCsRrkK",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/cancel-async-tasks__RCsRrkK/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/chess-best-move",
+      "trial": "chess-best-move__85ChMyw",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/chess-best-move__85ChMyw/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/circuit-fibsqrt",
+      "trial": "circuit-fibsqrt__ZsKuD9e",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/circuit-fibsqrt__ZsKuD9e/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/cobol-modernization",
+      "trial": "cobol-modernization__pzuViSG",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/cobol-modernization__pzuViSG/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/code-from-image",
+      "trial": "code-from-image__CxUKMNX",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/code-from-image__CxUKMNX/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/compile-compcert",
+      "trial": "compile-compcert__TS3yWch",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/compile-compcert__TS3yWch/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/configure-git-webserver",
+      "trial": "configure-git-webserver__Chw67TS",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/configure-git-webserver__Chw67TS/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/constraints-scheduling",
+      "trial": "constraints-scheduling__EK4jkpu",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/constraints-scheduling__EK4jkpu/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/count-dataset-tokens",
+      "trial": "count-dataset-tokens__BUutQvy",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/count-dataset-tokens__BUutQvy/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/crack-7z-hash",
+      "trial": "crack-7z-hash__L2fn8Fq",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/crack-7z-hash__L2fn8Fq/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/custom-memory-heap-crash",
+      "trial": "custom-memory-heap-crash__NWzb2eZ",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/custom-memory-heap-crash__NWzb2eZ/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/db-wal-recovery",
+      "trial": "db-wal-recovery__HFWVLgB",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/db-wal-recovery__HFWVLgB/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/distribution-search",
+      "trial": "distribution-search__vHcTKxJ",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/distribution-search__vHcTKxJ/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/dna-assembly",
+      "trial": "dna-assembly__jUcHKUF",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/dna-assembly__jUcHKUF/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/dna-insert",
+      "trial": "dna-insert__UqTPC5D",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/dna-insert__UqTPC5D/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/extract-elf",
+      "trial": "extract-elf__6HnGGay",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/extract-elf__6HnGGay/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/extract-moves-from-video",
+      "trial": "extract-moves-from-video__6CzTcpU",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/extract-moves-from-video__6CzTcpU/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/feal-differential-cryptanalysis",
+      "trial": "feal-differential-cryptanalysis__abUZSg4",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/feal-differential-cryptanalysis__abUZSg4/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/feal-linear-cryptanalysis",
+      "trial": "feal-linear-cryptanalysis__a4uHSRV",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/feal-linear-cryptanalysis__a4uHSRV/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/filter-js-from-html",
+      "trial": "filter-js-from-html__v3vub4S",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/filter-js-from-html__v3vub4S/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/financial-document-processor",
+      "trial": "financial-document-processor__hRVbQzV",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/financial-document-processor__hRVbQzV/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/fix-code-vulnerability",
+      "trial": "fix-code-vulnerability__Y8Ke6aB",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/fix-code-vulnerability__Y8Ke6aB/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/fix-git",
+      "trial": "fix-git__X6uPdMX",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/fix-git__X6uPdMX/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/fix-ocaml-gc",
+      "trial": "fix-ocaml-gc__iJfjKzv",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/fix-ocaml-gc__iJfjKzv/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/gcode-to-text",
+      "trial": "gcode-to-text__SFz3b4M",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/gcode-to-text__SFz3b4M/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/git-leak-recovery",
+      "trial": "git-leak-recovery__Hciyo5R",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/git-leak-recovery__Hciyo5R/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/git-multibranch",
+      "trial": "git-multibranch__NZhBncg",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/git-multibranch__NZhBncg/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/gpt2-codegolf",
+      "trial": "gpt2-codegolf__69qFGRL",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/gpt2-codegolf__69qFGRL/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/headless-terminal",
+      "trial": "headless-terminal__mrA2JRj",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/headless-terminal__mrA2JRj/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/hf-model-inference",
+      "trial": "hf-model-inference__exG5pFS",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/hf-model-inference__exG5pFS/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/install-windows-3.11",
+      "trial": "install-windows-3.11__bWRpzMP",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/install-windows-3.11__bWRpzMP/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/kv-store-grpc",
+      "trial": "kv-store-grpc__Ufmjtbd",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/kv-store-grpc__Ufmjtbd/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/large-scale-text-editing",
+      "trial": "large-scale-text-editing__Pzj8iYi",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/large-scale-text-editing__Pzj8iYi/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/largest-eigenval",
+      "trial": "largest-eigenval__DtLUAxN",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/largest-eigenval__DtLUAxN/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/llm-inference-batching-scheduler",
+      "trial": "llm-inference-batching-scheduler__knexmhz",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/llm-inference-batching-scheduler__knexmhz/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/log-summary-date-ranges",
+      "trial": "log-summary-date-ranges__PaYNzG4",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/log-summary-date-ranges__PaYNzG4/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/mailman",
+      "trial": "mailman__Ebc94Cf",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/mailman__Ebc94Cf/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/make-doom-for-mips",
+      "trial": "make-doom-for-mips__XYY4BuS",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/make-doom-for-mips__XYY4BuS/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/make-mips-interpreter",
+      "trial": "make-mips-interpreter__Envp5nN",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/make-mips-interpreter__Envp5nN/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/mcmc-sampling-stan",
+      "trial": "mcmc-sampling-stan__AScVaDo",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/mcmc-sampling-stan__AScVaDo/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/merge-diff-arc-agi-task",
+      "trial": "merge-diff-arc-agi-task__nrcf4cA",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/merge-diff-arc-agi-task__nrcf4cA/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/model-extraction-relu-logits",
+      "trial": "model-extraction-relu-logits__YJUAtW5",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/model-extraction-relu-logits__YJUAtW5/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/modernize-scientific-stack",
+      "trial": "modernize-scientific-stack__6VaXZqc",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/modernize-scientific-stack__6VaXZqc/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/mteb-leaderboard",
+      "trial": "mteb-leaderboard__8SjwPwp",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/mteb-leaderboard__8SjwPwp/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/mteb-retrieve",
+      "trial": "mteb-retrieve__WSTTLZf",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/mteb-retrieve__WSTTLZf/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/multi-source-data-merger",
+      "trial": "multi-source-data-merger__V2f3wrx",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/multi-source-data-merger__V2f3wrx/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/nginx-request-logging",
+      "trial": "nginx-request-logging__9JKvWqH",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/nginx-request-logging__9JKvWqH/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/openssl-selfsigned-cert",
+      "trial": "openssl-selfsigned-cert__G79osu9",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/openssl-selfsigned-cert__G79osu9/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/overfull-hbox",
+      "trial": "overfull-hbox__PE45fMw",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/overfull-hbox__PE45fMw/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/password-recovery",
+      "trial": "password-recovery__CaU3aEN",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/password-recovery__CaU3aEN/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/path-tracing-reverse",
+      "trial": "path-tracing-reverse__MHUdEMF",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/path-tracing-reverse__MHUdEMF/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/path-tracing",
+      "trial": "path-tracing__i7Sq55v",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/path-tracing__i7Sq55v/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/polyglot-c-py",
+      "trial": "polyglot-c-py__RzJrgd3",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/polyglot-c-py__RzJrgd3/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/polyglot-rust-c",
+      "trial": "polyglot-rust-c__B4aKsVm",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/polyglot-rust-c__B4aKsVm/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/portfolio-optimization",
+      "trial": "portfolio-optimization__9g26gdC",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/portfolio-optimization__9g26gdC/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/protein-assembly",
+      "trial": "protein-assembly__nK5JS4G",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/protein-assembly__nK5JS4G/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/prove-plus-comm",
+      "trial": "prove-plus-comm__inpam9v",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/prove-plus-comm__inpam9v/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/pypi-server",
+      "trial": "pypi-server__3Xj7TtC",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/pypi-server__3Xj7TtC/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/pytorch-model-cli",
+      "trial": "pytorch-model-cli__nNycXmM",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/pytorch-model-cli__nNycXmM/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/pytorch-model-recovery",
+      "trial": "pytorch-model-recovery__toSj4Gp",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/pytorch-model-recovery__toSj4Gp/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/qemu-alpine-ssh",
+      "trial": "qemu-alpine-ssh__LvUiGBy",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/qemu-alpine-ssh__LvUiGBy/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/qemu-startup",
+      "trial": "qemu-startup__9fQAmAP",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/qemu-startup__9fQAmAP/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/query-optimize",
+      "trial": "query-optimize__mBH2YMY",
+      "status": "error",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/query-optimize__mBH2YMY/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/raman-fitting",
+      "trial": "raman-fitting__iQoQdrp",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/raman-fitting__iQoQdrp/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/regex-chess",
+      "trial": "regex-chess__XTgti5g",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/regex-chess__XTgti5g/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/regex-log",
+      "trial": "regex-log__Liy53Ue",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/regex-log__Liy53Ue/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/reshard-c4-data",
+      "trial": "reshard-c4-data__V2ksc7M",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/reshard-c4-data__V2ksc7M/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/rstan-to-pystan",
+      "trial": "rstan-to-pystan__yppu7LV",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/rstan-to-pystan__yppu7LV/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/sam-cell-seg",
+      "trial": "sam-cell-seg__yTLyNSD",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/sam-cell-seg__yTLyNSD/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/sanitize-git-repo",
+      "trial": "sanitize-git-repo__BFexBGR",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/sanitize-git-repo__BFexBGR/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/schemelike-metacircular-eval",
+      "trial": "schemelike-metacircular-eval__G7B6Xpi",
+      "status": "failed",
+      "reward": 0.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/schemelike-metacircular-eval__G7B6Xpi/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/sparql-university",
+      "trial": "sparql-university__uc39VJe",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/sparql-university__uc39VJe/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/sqlite-db-truncate",
+      "trial": "sqlite-db-truncate__9356c6m",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/sqlite-db-truncate__9356c6m/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/sqlite-with-gcov",
+      "trial": "sqlite-with-gcov__FMvTCy5",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/sqlite-with-gcov__FMvTCy5/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/torch-pipeline-parallelism",
+      "trial": "torch-pipeline-parallelism__iPsnako",
+      "status": "error",
+      "reward": 0.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/torch-pipeline-parallelism__iPsnako/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/torch-tensor-parallelism",
+      "trial": "torch-tensor-parallelism__W49Fgzk",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/torch-tensor-parallelism__W49Fgzk/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/train-fasttext",
+      "trial": "train-fasttext__TAQ8Tvh",
+      "status": "error",
+      "reward": 0.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/train-fasttext__TAQ8Tvh/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/tune-mjcf",
+      "trial": "tune-mjcf__aPpN3km",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/tune-mjcf__aPpN3km/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/video-processing",
+      "trial": "video-processing__MtHarnD",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/video-processing__MtHarnD/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/vulnerable-secret",
+      "trial": "vulnerable-secret__9GfEM9L",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/vulnerable-secret__9GfEM9L/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/winning-avg-corewars",
+      "trial": "winning-avg-corewars__gYV5cwH",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/winning-avg-corewars__gYV5cwH/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    },
+    {
+      "task": "terminal-bench/write-compressor",
+      "trial": "write-compressor__ok2D6kN",
+      "status": "passed",
+      "reward": 1.0,
+      "trace": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed/write-compressor__ok2D6kN/agent/agent-runtime.jsonl",
+      "failure_mode": null
+    }
+  ],
+  "notes": "terminal bench 2.1 by mimo-2.6-pro-ultraspeed"
+}
