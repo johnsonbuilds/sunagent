@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import os
+import readline
 import sys
 from pathlib import Path
 
