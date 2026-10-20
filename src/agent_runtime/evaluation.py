@@ -8,6 +8,12 @@ A record closes the loop ``harness -> benchmark -> trace -> score``:
 * annotated with failure modes during manual failure analysis,
 * aggregated by ``report`` into the family tree with deltas.
 
+The headline score follows the benchmark's own reward, so it is
+comparable with Harbor's dataset metric: ``score.rewards`` counts the
+trials whose verifier returned reward 1.0 and ``score.accuracy`` is
+that count over every trial.  ``score.errored`` stays a diagnostic
+subset (trials that raised) and may overlap with ``rewards``.
+
 Records are immutable: re-running the same benchmark produces a new
 record file; existing ones are never rewritten (except the failure
 mode annotation, which is its explicit purpose).
@@ -128,8 +134,20 @@ def extract_record(job_dir: str | Path, *, model: str | None = None,
     counts = {"passed": 0, "failed": 0, "error": 0, "cancelled": 0, "completed": 0}
     for task in tasks:
         counts[task["status"]] = counts.get(task["status"], 0) + 1
-    judged = counts["passed"] + counts["failed"]
-    rate = round(counts["passed"] / judged, 4) if judged else None
+
+    # The headline numbers follow the benchmark's own reward, not the
+    # local status label. Harbor scores a trial by the reward the task's
+    # test.sh wrote, and its dataset metric is the mean of those rewards
+    # over every trial — a trial that errored still counts, worth 0.
+    # ``_trial_status`` additionally reports "error" for trials that
+    # raised, so counting statuses would silently drop trials that
+    # earned a reward before dying (e.g. killed by the agent timeout
+    # after the solution was already on disk).
+    rewarded = [task for task in tasks
+                if task.get("reward") is not None and task["reward"] >= 1.0]
+    scored = [task for task in tasks if task.get("reward") is not None]
+    total = len(tasks)
+    accuracy = round(len(rewarded) / total, 4) if total else None
 
     agent_info = {}
     for trial in (_read_json(p / "result.json") for p in job_path.iterdir()
@@ -149,13 +167,13 @@ def extract_record(job_dir: str | Path, *, model: str | None = None,
         "job_dir": str(job_path),
         "git_commit": _git_commit(job_path),
         "score": {
-            "passed": counts["passed"],
-            "failed": counts["failed"],
+            "rewards": len(rewarded),
+            "failed": len(scored) - len(rewarded),
             "errored": counts["error"],
             "cancelled": counts["cancelled"],
             "unjudged_completed": counts["completed"],
-            "total": len(tasks),
-            "rate": rate,
+            "total": total,
+            "accuracy": accuracy,
         },
         "tasks": tasks,
         "notes": notes,
@@ -242,17 +260,36 @@ def annotate_record(reference: str, task: str, mode: str,
     return path
 
 
-def latest_rate_by_harness(records: list[dict[str, Any]]) -> dict[str, float | None]:
-    """Latest record's judged pass rate per harness id."""
-    rates: dict[str, float | None] = {}
+def _record_accuracy(record: dict[str, Any]) -> float | None:
+    """Accuracy of one record, recomputed from its per-task rewards.
+
+    Records written before the reward-aligned rename carry a ``score``
+    block with ``passed``/``rate``, where ``rate`` divided by the
+    *judged* trials only (errored ones excluded from the denominator).
+    Every record keeps the per-task rewards, so accuracy is recomputed
+    from them instead of reading that stale aggregate: the record files
+    stay immutable and every harness is compared on the same footing.
+    """
+    tasks = record.get("tasks") or []
+    if not tasks:
+        score = record.get("score") or {}
+        return score.get("accuracy", score.get("rate"))
+    rewarded = sum(1 for task in tasks
+                   if task.get("reward") is not None and task["reward"] >= 1.0)
+    return round(rewarded / len(tasks), 4)
+
+
+def latest_accuracy_by_harness(records: list[dict[str, Any]]) -> dict[str, float | None]:
+    """Latest record's accuracy per harness id."""
+    accuracies: dict[str, float | None] = {}
     for record in records:  # load_records sorts oldest first
-        rates[record.get("harness_id", "unknown")] = record.get("score", {}).get("rate")
-    return rates
+        accuracies[record.get("harness_id", "unknown")] = _record_accuracy(record)
+    return accuracies
 
 
 def build_report(specs_by_id: dict[str, Any], records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """One row per harness: latest score and delta vs parent."""
-    rates = latest_rate_by_harness(records)
+    accuracies = latest_accuracy_by_harness(records)
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
 
@@ -263,27 +300,27 @@ def build_report(specs_by_id: dict[str, Any], records: list[dict[str, Any]]) -> 
         if spec.parent:
             emit(spec.parent)
         seen.add(harness_id)
-        rate = rates.get(harness_id)
-        parent_rate = rates.get(spec.parent) if spec.parent else None
+        accuracy = accuracies.get(harness_id)
+        parent_accuracy = accuracies.get(spec.parent) if spec.parent else None
         delta = None
-        if rate is not None and parent_rate is not None:
-            delta = round(rate - parent_rate, 4)
+        if accuracy is not None and parent_accuracy is not None:
+            delta = round(accuracy - parent_accuracy, 4)
         rows.append({
             "id": harness_id,
             "parent": spec.parent,
             "mutation": spec.mutation,
-            "rate": rate,
+            "accuracy": accuracy,
             "delta": delta,
         })
 
     for harness_id in specs_by_id:
         emit(harness_id)
-    for harness_id in sorted(set(rates) - set(specs_by_id)):
+    for harness_id in sorted(set(accuracies) - set(specs_by_id)):
         rows.append({
             "id": harness_id,
             "parent": None,
             "mutation": "(manifest missing)",
-            "rate": rates[harness_id],
+            "accuracy": accuracies[harness_id],
             "delta": None,
         })
     return rows
@@ -294,24 +331,25 @@ def format_report(rows: list[dict[str, Any]]) -> str:
     id_width = max([len(row["id"]) for row in rows] + [len("ID")])
     mutation_width = max([len(row["mutation"] or "-") for row in rows] + [len("MUTATION")])
     header = (f"{'ID':<{id_width}}  {'PARENT':<{id_width}}  "
-              f"{'MUTATION':<{mutation_width}}  {'RATE':>5}  {'DELTA':>6}")
+              f"{'MUTATION':<{mutation_width}}  {'ACCURACY':>8}  {'DELTA':>6}")
     lines = [header, "-" * len(header)]
     for row in rows:
         parent = row["parent"] or "-"
         mutation = row["mutation"] or "-"
-        rate = f"{row['rate']:.0%}" if row["rate"] is not None else "-"
+        accuracy = (f"{row['accuracy']:.0%}" if row["accuracy"] is not None
+                    else "-")
         if row["delta"] is not None:
             delta = f"{row['delta']:+.0%}"
         else:
             delta = "-"
         lines.append(
             f"{row['id']:<{id_width}}  {parent:<{id_width}}  "
-            f"{mutation:<{mutation_width}}  {rate:>5}  {delta:>6}")
+            f"{mutation:<{mutation_width}}  {accuracy:>8}  {delta:>6}")
     return "\n".join(lines)
 
 
 __all__ = [
     "DEFAULT_JOBS_DIR", "DEFAULT_RECORDS_DIR", "annotate_record", "build_report",
-    "extract_record", "find_record", "format_report", "latest_rate_by_harness",
+    "extract_record", "find_record", "format_report", "latest_accuracy_by_harness",
     "load_records", "write_record",
 ]

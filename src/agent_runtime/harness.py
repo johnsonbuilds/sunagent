@@ -725,7 +725,8 @@ def _main(argv: list[str] | None = None) -> int:
         score = record["score"]
         print(f"wrote {path}")
         print(f"harness={record['harness_id']} benchmark={record['benchmark']} "
-              f"passed={score['passed']}/{score['total']} rate={score['rate']}")
+              f"rewards={score['rewards']}/{score['total']} "
+              f"accuracy={score['accuracy']}")
         return 0
 
     if args.command == "report":

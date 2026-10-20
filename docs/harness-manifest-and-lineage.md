@@ -149,6 +149,12 @@ The record is extracted from the job directory — never hand-typed:
 - per-task status comes from the job's `result.json` and reward stats
 - a job that mixes harnesses is rejected (one record = one harness)
 
+`score` follows the benchmark's own reward so it is comparable with
+Harbor's dataset metric: `rewards` counts the trials whose verifier
+returned reward 1.0, and `accuracy` is that count over every trial
+(errored trials included, worth 0). `errored` stays a diagnostic
+subset and may overlap with `rewards`.
+
 Output: one immutable JSON in `evaluation/records/`:
 
 ```json
@@ -158,7 +164,7 @@ Output: one immutable JSON in `evaluation/records/`:
   "genes_hash": "b6bc636c51d80d60",
   "model": "qwen3-coder",
   "benchmark": "terminal-bench/terminal-bench-2",
-  "score": {"passed": 1, "failed": 0, "total": 1, "rate": 1.0},
+  "score": {"rewards": 1, "failed": 0, "total": 1, "accuracy": 1.0},
   "tasks": [
     {"task": "terminal-bench/fix-git", "status": "passed",
      "trace": "jobs/.../agent/agent-runtime.jsonl",

@@ -15,7 +15,7 @@ from agent_runtime.evaluation import (
     extract_record,
     find_record,
     format_report,
-    latest_rate_by_harness,
+    latest_accuracy_by_harness,
     load_records,
     write_record,
 )
@@ -51,8 +51,10 @@ def make_job(root: Path, name: str, *, passed: bool, harness_id: str = "baseline
     top_result = {
         "stats": {"evals": {"sunagent__terminal-bench/terminal-bench-2": {
             "n_trials": 1, "n_errors": 1 if error else 0,
-            "reward_stats": {"reward": {str(reward): ["fix-git__TRIAL01"]}}
-                              if not error else {},
+            # The verifier can reward a trial even when the agent raised
+            # afterwards (e.g. killed by the timeout after the solution
+            # was already on disk), so the reward stays in the stats.
+            "reward_stats": {"reward": {str(reward): ["fix-git__TRIAL01"]}},
         }}},
     }
     (job_dir / "result.json").write_text(json.dumps(top_result))
@@ -78,10 +80,10 @@ class ExtractRecordTests(unittest.TestCase):
         self.assertEqual(record["genes_hash"], "abc123")
         self.assertEqual(record["model"], "qwen3-coder")
         self.assertEqual(record["benchmark"], "terminal-bench/terminal-bench-2")
-        self.assertEqual(record["score"]["passed"], 1)
+        self.assertEqual(record["score"]["rewards"], 1)
         self.assertEqual(record["score"]["failed"], 0)
         self.assertEqual(record["score"]["total"], 1)
-        self.assertEqual(record["score"]["rate"], 1.0)
+        self.assertEqual(record["score"]["accuracy"], 1.0)
         task = record["tasks"][0]
         self.assertEqual(task["task"], "terminal-bench/fix-git")
         self.assertEqual(task["status"], "passed")
@@ -93,13 +95,26 @@ class ExtractRecordTests(unittest.TestCase):
         job_dir = make_job(self.root, "2026-08-18__11-00-00", passed=False)
         record = extract_record(job_dir)
         self.assertEqual(record["tasks"][0]["status"], "failed")
-        self.assertEqual(record["score"]["rate"], 0.0)
+        self.assertEqual(record["score"]["accuracy"], 0.0)
 
     def test_errored_run_extraction(self) -> None:
         job_dir = make_job(self.root, "2026-08-18__12-00-00", passed=False, error=True)
         record = extract_record(job_dir)
         self.assertEqual(record["tasks"][0]["status"], "error")
-        self.assertIsNone(record["score"]["rate"])
+        # Harbor counts a trial that never reached the verifier as 0 in
+        # the dataset mean, so accuracy is 0.0 rather than undefined.
+        self.assertEqual(record["score"]["accuracy"], 0.0)
+        self.assertEqual(record["score"]["errored"], 1)
+        self.assertEqual(record["score"]["rewards"], 0)
+
+    def test_reward_survives_an_agent_error(self) -> None:
+        """A trial that earned a reward before raising still counts."""
+        job_dir = make_job(self.root, "2026-08-18__12-30-00", passed=True,
+                           error=True)
+        record = extract_record(job_dir)
+        self.assertEqual(record["tasks"][0]["status"], "error")
+        self.assertEqual(record["score"]["rewards"], 1)
+        self.assertEqual(record["score"]["accuracy"], 1.0)
 
     def test_record_id_uses_short_benchmark_slug(self) -> None:
         job_dir = make_job(self.root, "2026-08-18__13-00-00", passed=True)
@@ -186,23 +201,39 @@ class ReportTests(unittest.TestCase):
     def tearDown(self) -> None:
         self._tmp.cleanup()
 
-    def _record_for(self, harness_id: str, rate: float | None) -> dict:
+    def _record_for(self, harness_id: str, accuracy: float | None) -> dict:
         job = make_job(self.root, f"job-{harness_id}-{len(list(self.records_dir.glob('*.json')))}",
-                       passed=bool(rate), harness_id=harness_id,
+                       passed=bool(accuracy), harness_id=harness_id,
                        genes_hash=harness_id[::-1])
         record = extract_record(job)
-        if rate is not None:
+        if accuracy is not None:
             # Synthetic multi-task score: binary fixtures cannot express
-            # intermediate rates, so override the aggregate directly.
-            record["score"] = {"passed": rate * 10, "failed": (1 - rate) * 10,
-                               "total": 10, "rate": rate}
+            # intermediate accuracies, so override the aggregate directly.
+            record["score"] = {"rewards": accuracy * 10,
+                               "failed": (1 - accuracy) * 10,
+                               "total": 10, "accuracy": accuracy}
+            record["tasks"] = [
+                {"task": f"task-{i}", "trial": f"task-{i}", "status": "passed",
+                 "reward": 1.0 if i < accuracy * 10 else 0.0,
+                 "trace": "", "failure_mode": None}
+                for i in range(10)
+            ]
         return record
 
-    def test_latest_rate_wins(self) -> None:
+    def test_latest_accuracy_wins(self) -> None:
         write_record(self._record_for("baseline-v0", 0.4), self.records_dir)
         write_record(self._record_for("baseline-v0", 0.9), self.records_dir)
-        rates = latest_rate_by_harness(load_records(self.records_dir))
-        self.assertEqual(rates["baseline-v0"], 0.9)
+        accuracies = latest_accuracy_by_harness(load_records(self.records_dir))
+        self.assertEqual(accuracies["baseline-v0"], 0.9)
+
+    def test_accuracy_is_recomputed_for_legacy_records(self) -> None:
+        """Pre-rename records keep their old score block but still report
+        the reward-aligned accuracy."""
+        record = self._record_for("baseline-v0", 0.4)
+        record["score"] = {"passed": 4, "failed": 0, "errored": 6,
+                           "total": 10, "rate": 1.0}
+        accuracies = latest_accuracy_by_harness([record])
+        self.assertEqual(accuracies["baseline-v0"], 0.4)
 
     def test_report_rows_and_delta(self) -> None:
         specs = {"baseline-v0": from_dict({}),
@@ -211,7 +242,7 @@ class ReportTests(unittest.TestCase):
                    self._record_for("baseline-v1", 0.9)]
         rows = build_report(specs, records)
         by_id = {row["id"]: row for row in rows}
-        self.assertEqual(by_id["baseline-v0"]["rate"], 0.4)
+        self.assertEqual(by_id["baseline-v0"]["accuracy"], 0.4)
         self.assertIsNone(by_id["baseline-v0"]["delta"])
         self.assertEqual(by_id["baseline-v1"]["delta"], 0.5)
 
@@ -232,9 +263,9 @@ class ReportTests(unittest.TestCase):
     def test_format_report_renders_table(self) -> None:
         rows = [
             {"id": "baseline-v0", "parent": None, "mutation": None,
-             "rate": 0.4, "delta": None},
+             "accuracy": 0.4, "delta": None},
             {"id": "baseline-v1", "parent": "baseline-v0",
-             "mutation": "enable verification", "rate": 0.9, "delta": 0.5},
+             "mutation": "enable verification", "accuracy": 0.9, "delta": 0.5},
         ]
         text = format_report(rows)
         self.assertIn("baseline-v0", text)
