@@ -1,20 +1,20 @@
 {
   "record_id": "terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed__tb-v2__terminal-bench-2-1",
-  "created_at": "2026-10-19T14:13:21",
+  "created_at": "2026-10-20T14:36:16",
   "harness_id": "tb-v2",
   "genes_hash": "55973dc1b6806efc",
   "model": "mimo-2.6-pro-ultraspeed",
   "benchmark": "terminal-bench/terminal-bench-2-1",
   "job_dir": "jobs/terminal-bench-2-1-tb-v2-mimo-2.6-pro-ultraspeed",
-  "git_commit": "8c7bb17",
+  "git_commit": "c7e0d53",
   "score": {
-    "passed": 63,
-    "failed": 23,
+    "rewards": 64,
+    "failed": 25,
     "errored": 3,
     "cancelled": 0,
     "unjudged_completed": 0,
     "total": 89,
-    "rate": 0.7326
+    "accuracy": 0.7191
   },
   "tasks": [
     {
@@ -730,5 +730,5 @@
       "failure_mode": null
     }
   ],
-  "notes": "terminal bench 2.1 by mimo-2.6-pro-ultraspeed"
+  "notes": "terminal bench 2.1,tb v2"
 }
