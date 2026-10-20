@@ -196,9 +196,11 @@ A channel is anything that consumes `AgentEvent` via `subscribe()` or
 `stream()`. It decides its own presentation:
 
 - Web UI: forward events over a WebSocket and render deltas into a text buffer.
+  (Implemented in `src/agent_runtime/channels/webui.py` over SSE — see
+  `docs/webui.md`.)
 - Telegram: buffer `assistant.delta`, emit one chat message per
-  `tool.started` / `tool.completed`, and use `agent.completed.answer` for the
-  final summary.
+  `tool.started` / `tool.completed`, and use `agent.completed.answer` for
+  the final summary.
 - Discord: same pattern with a different presentation.
 
 Future shell streaming (`stdout.delta`) can be added between `tool.started`

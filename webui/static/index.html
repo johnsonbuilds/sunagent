@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>SunAgent</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='9' fill='%23c6ac8f'/></svg>">
+</head>
+<body>
+<div class="app">
+  <header class="titlebar">
+    <div class="titlebar-left">
+      <button class="icon-btn" id="btnSidebar" title="Toggle sidebar" aria-label="Toggle sidebar">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+      </button>
+      <span class="brand">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 3v5M16 24v5M3 16h5M24 16h5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <span class="brand-name">SunAgent</span>
+      </span>
+    </div>
+
+    <div class="titlebar-center">
+      <span class="titlebar-title" id="sessionTitle">New conversation</span>
+      <span class="status-badge" id="statusBadge" hidden></span>
+    </div>
+
+    <div class="titlebar-right">
+      <span class="meta-chip" id="modelChip" title="Model and harness"></span>
+      <button class="icon-btn" id="btnTheme" title="Toggle theme" aria-label="Toggle theme">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M19.1 4.9l-1.8 1.8M6.7 17.3l-1.8 1.8"/></svg>
+      </button>
+      <button class="icon-btn primary" id="btnNewChat" title="New conversation (Ctrl+K)" aria-label="New conversation">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-head">
+        <span class="sidebar-label">Conversations</span>
+        <button class="icon-btn small" id="btnNewChatSide" title="New conversation" aria-label="New conversation">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+      </div>
+      <div class="sidebar-search">
+        <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
+        <input id="sessionSearch" type="search" placeholder="Filter conversations…" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="session-list" id="sessionList"></div>
+      <div class="sidebar-foot">
+        <span id="sessionCount">0 conversations</span>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="messages" id="messages">
+        <div class="messages-inner" id="messagesInner">
+          <div class="empty-state" id="emptyState">
+            <div class="empty-mark">
+              <svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="9" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M16 3v5M16 24v5M3 16h5M24 16h5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+            </div>
+            <h2>What should we work on?</h2>
+            <p>SunAgent runs tools, reads files, and executes commands. Ask a question to get started.</p>
+            <div class="suggestion-grid" id="suggestions"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="composer-wrap">
+        <div class="composer-box" id="composerBox">
+          <textarea id="msgInput" rows="1" placeholder="Message SunAgent…" spellcheck="false"></textarea>
+          <div class="composer-footer">
+            <div class="composer-left">
+              <span class="composer-hint" id="composerHint">Enter sends · Shift+Enter adds a line</span>
+            </div>
+            <div class="composer-right">
+              <button class="send-btn" id="btnSend" title="Send" aria-label="Send">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <div class="toast" id="toast" hidden></div>
+</div>
+
+<script src="/static/markdown.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -12,15 +12,22 @@ dependencies = [
     "tree-sitter-python>=0.25.0",
 ]
 
+[project.optional-dependencies]
+web = [
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+]
+
 [project.scripts]
 agent-practice = "run_agent:main"
+sunagent-webui = "webui.__main__:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/agent_runtime"]
+packages = ["src/agent_runtime", "webui"]
 
 [dependency-groups]
 dev = [

@@ -37,7 +37,7 @@ This project aims to build a modular Agent Runtime from first principles, where 
 
 ### docs
 
-Contains usage guides for the main subsystems (harness manifest & lineage, user-facing events & CLI renderer).
+Contains usage guides for the main subsystems (harness manifest & lineage, user-facing events & CLI renderer, web UI).
 
 It explains the "why" behind the Agent Runtime design, including core concepts, implementation decisions, and engineering trade-offs.
 
@@ -45,7 +45,11 @@ It explains the "why" behind the Agent Runtime design, including core concepts, 
 
 Contains the core modular implementation of the Agent Runtime.
 
-Each component is designed as an independent and reusable module: agent loop (`agent/`), tools (`tools/`), harness manifests (`harness.py`), tracing (`trace.py`), user-facing events (`events.py`), CLI channel (`channels/`), executors (`execution/`), LLM providers (`providers/`), skills (`skills.py`), and benchmark integration (`integrations/`, `evaluation.py`).
+Each component is designed as an independent and reusable module: agent loop (`agent/`), tools (`tools/`), harness manifests (`harness.py`), tracing (`trace.py`), user-facing events (`events.py`), channels (`channels/`), executors (`execution/`), LLM providers (`providers/`), skills (`skills.py`), and benchmark integration (`integrations/`, `evaluation.py`).
+
+### webui
+
+Contains the browser front end: a FastAPI server, the session store, and the static client. It is a channel like the CLI — it consumes the same user-facing agent events and renders them in a browser. See `docs/webui.md`.
 
 ### harnesses
 
@@ -138,6 +142,22 @@ uv run harbor run \
 installed editable), so no `PYTHONPATH` prefix is needed. Full benchmark
 workflows (single-task smoke runs, image GC, job outputs) are documented in
 `evaluation/terminal_bench/readme.md` and `evaluation/swe_bench/readme.md`.
+
+
+## Web UI
+
+The agent can also be driven from a browser. The web UI is a channel: it
+consumes the same user-facing events as the CLI and renders them as a
+conversation with streaming text, thinking blocks, and tool cards.
+
+```bash
+uv sync --extra web
+uv run python -m webui --port 8000
+```
+
+Then open <http://127.0.0.1:8000>. Conversations are grouped in the sidebar
+and persisted under `runs/webui/`. The design and the HTTP API are
+documented in `docs/webui.md`.
 
 
 
