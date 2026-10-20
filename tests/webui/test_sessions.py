@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -107,12 +108,66 @@ class SessionStoreTests(unittest.TestCase):
         with TemporaryDirectory() as root:
             store = SessionStore(Path(root))
             session = store.create()
+            session.append_user_message("Hello there")
+            store.save(session)
             path = store.root / f"{session.id}.json"
             self.assertTrue(path.exists())
 
             self.assertTrue(store.delete(session.id))
             self.assertFalse(path.exists())
             self.assertIsNone(store.get(session.id))
+
+    def test_an_empty_session_is_never_persisted(self) -> None:
+        with TemporaryDirectory() as root:
+            store = SessionStore(Path(root))
+            session = store.create()
+
+            store.save(session)
+
+            self.assertFalse((store.root / f"{session.id}.json").exists())
+
+    def test_renaming_an_empty_session_does_not_create_a_file(self) -> None:
+        with TemporaryDirectory() as root:
+            store = SessionStore(Path(root))
+            session = store.create()
+
+            store.rename(session.id, "Not started yet")
+
+            self.assertFalse((store.root / f"{session.id}.json").exists())
+
+    def test_an_empty_session_is_not_listed(self) -> None:
+        with TemporaryDirectory() as root:
+            store = SessionStore(Path(root))
+            store.create()
+
+            self.assertEqual(store.list(), [])
+
+    def test_a_session_is_listed_once_it_holds_a_message(self) -> None:
+        with TemporaryDirectory() as root:
+            store = SessionStore(Path(root))
+            session = store.create()
+            session.append_user_message("Hello there")
+            store.save(session)
+
+            listed = store.list()
+
+            self.assertEqual([item.id for item in listed], [session.id])
+
+    def test_loading_skips_records_that_hold_no_conversation(self) -> None:
+        with TemporaryDirectory() as root:
+            store = SessionStore(Path(root))
+            empty = store.create()
+            (store.root / f"{empty.id}.json").write_text(
+                json.dumps({"id": empty.id, "title": "New conversation",
+                            "created_at": 0.0, "updated_at": 0.0,
+                            "segments": [], "messages": []}),
+                encoding="utf-8")
+
+            reloaded = SessionStore(Path(root))
+            reloaded.load()
+
+            self.assertIsNone(reloaded.get(empty.id))
+            self.assertEqual(reloaded.list(), [])
 
     def test_a_new_conversation_takes_its_title_from_the_first_message(self) -> None:
         with TemporaryDirectory() as root:
@@ -125,7 +180,11 @@ class SessionStoreTests(unittest.TestCase):
         with TemporaryDirectory() as root:
             store = SessionStore(Path(root))
             first = store.create()
+            first.append_user_message("First")
+            store.save(first)
             second = store.create()
+            second.append_user_message("Second")
+            store.save(second)
             second.updated_at = first.updated_at + 10
             listed = store.list()
             self.assertEqual(listed[0].id, second.id)

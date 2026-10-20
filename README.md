@@ -37,7 +37,7 @@ This project aims to build a modular Agent Runtime from first principles, where 
 
 ### docs
 
-Contains usage guides for the main subsystems (harness manifest & lineage, user-facing events & CLI renderer, web UI).
+Contains usage guides for the main subsystems (harness manifest & lineage, user-facing events & CLI renderer, web UI, storage layout).
 
 It explains the "why" behind the Agent Runtime design, including core concepts, implementation decisions, and engineering trade-offs.
 
@@ -45,7 +45,7 @@ It explains the "why" behind the Agent Runtime design, including core concepts, 
 
 Contains the core modular implementation of the Agent Runtime.
 
-Each component is designed as an independent and reusable module: agent loop (`agent/`), tools (`tools/`), harness manifests (`harness.py`), tracing (`trace.py`), user-facing events (`events.py`), channels (`channels/`), executors (`execution/`), LLM providers (`providers/`), skills (`skills.py`), and benchmark integration (`integrations/`, `evaluation.py`).
+Each component is designed as an independent and reusable module: agent loop (`agent/`), tools (`tools/`), harness manifests (`harness.py`), tracing (`trace.py`), user-facing events (`events.py`), channels (`channels/`), executors (`execution/`), LLM providers (`providers/`), skills (`skills.py`), storage layout (`storage.py`), and benchmark integration (`integrations/`, `evaluation.py`).
 
 ### webui
 
@@ -157,7 +157,7 @@ uv run webui --port 8000
 ```
 
 Then open <http://127.0.0.1:8000>. Conversations are grouped in the sidebar
-and persisted under `runs/webui/`. The design and the HTTP API are
+and persisted under `workspace/sessions/`. The design and the HTTP API are
 documented in `docs/webui.md`.
 
 
@@ -170,7 +170,7 @@ in memory for tests, or append it as JSONL:
 ```python
 from agent_runtime.agent import RunTrace, run_turn
 
-trace = RunTrace(run_id="run-001", output_path="runs/run-001.jsonl")
+trace = RunTrace(run_id="run-001", output_path="workspace/traces/run-001.jsonl")
 answer = await run_turn("What's the weather in Singapore?", llm, tools, trace=trace)
 ```
 

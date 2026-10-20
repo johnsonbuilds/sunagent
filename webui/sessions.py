@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from agent_runtime import storage
 from agent_runtime.agent import Conversation
 
 
@@ -38,13 +39,15 @@ STREAM_STOP: Any = object()
 def default_sessions_root() -> Path:
     """Where sessions live when ``AGENT_RUNTIME_WEBUI_SESSIONS_DIR`` is unset.
 
-    The default sits under ``runs/`` because that directory is already
-    git-ignored and is where the project keeps run artifacts.
+    The default is the runtime home's ``sessions/`` directory — the one
+    place the project persists anything (see
+    :mod:`agent_runtime.storage`).  The env var still wins, so an
+    existing deployment keeps its files where they are.
     """
     raw = os.getenv("AGENT_RUNTIME_WEBUI_SESSIONS_DIR")
     if raw:
         return Path(raw).expanduser()
-    return Path(__file__).resolve().parents[1] / "runs" / "webui"
+    return storage.sessions_dir()
 
 
 class FrameBus:
@@ -120,6 +123,18 @@ class Session:
     busy: bool = False
     task: Any = None
 
+    @property
+    def is_empty(self) -> bool:
+        """Whether this session has never held a conversation.
+
+        A session is created empty and only becomes real once the first
+        message arrives.  Empty sessions are kept in memory (the browser
+        needs one to type into) but are never persisted and never listed:
+        otherwise every "new chat" click would leave a stub file behind
+        and the sidebar would fill up with blank conversations.
+        """
+        return not self.segments and not self.messages
+
     def append_segment(self, segment: dict[str, Any]) -> None:
         """Add one transcript block and stamp the session as changed."""
         self.segments.append(segment)
@@ -166,7 +181,13 @@ class SessionStore:
         return self._root
 
     def load(self) -> None:
-        """Read every persisted session from disk."""
+        """Read every persisted session from disk.
+
+        Records that never held a conversation are skipped: they are
+        leftovers from an older build that wrote a file per "new chat"
+        click, and loading them would resurrect the empty conversations
+        the sidebar is meant to hide.
+        """
         if not self._root.is_dir():
             return
         for path in sorted(self._root.glob("*.json")):
@@ -177,11 +198,22 @@ class SessionStore:
                                path, exc)
                 continue
             session = _session_from_record(record)
-            if session is not None:
-                self._sessions[session.id] = session
+            if session is None:
+                continue
+            if session.is_empty:
+                logger.debug("webui.session.load_skipped_empty path=%s", path)
+                continue
+            self._sessions[session.id] = session
 
     def list(self) -> list[Session]:
-        return sorted(self._sessions.values(),
+        """The sessions worth showing, newest first.
+
+        Empty sessions are excluded: they exist only so the browser has
+        somewhere to type, and listing them would fill the sidebar with
+        blank conversations.
+        """
+        return sorted((session for session in self._sessions.values()
+                       if not session.is_empty),
                       key=lambda session: session.updated_at, reverse=True)
 
     def shutdown(self) -> None:
@@ -201,12 +233,16 @@ class SessionStore:
         return self._sessions.get(session_id)
 
     def create(self, title: str | None = None) -> Session:
+        """Start a session in memory.
+
+        Nothing is written to disk yet: the session earns its file the
+        moment it holds a conversation (see :meth:`save`).
+        """
         now = time.time()
         session = Session(id=f"sess-{uuid4().hex[:12]}",
                           title=title or "New conversation",
                           created_at=now, updated_at=now)
         self._sessions[session.id] = session
-        self.save(session)
         return session
 
     def delete(self, session_id: str) -> bool:
@@ -233,8 +269,15 @@ class SessionStore:
         return session
 
     def save(self, session: Session) -> None:
-        """Persist one session, ignoring filesystem failures."""
+        """Persist one session, ignoring filesystem failures.
+
+        An empty session is not persisted at all.  It has no history
+        worth keeping, and writing it would litter the sessions
+        directory with one stub file per "new chat" click.
+        """
         session.sync_messages()
+        if session.is_empty:
+            return
         path = self._path(session.id)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)

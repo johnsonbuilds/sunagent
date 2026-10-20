@@ -326,11 +326,13 @@
         break;
       case "run.completed":
         setBusy(false);
+        refreshSessions();
         break;
       case "run.error":
         setBusy(false);
         setStatus("error", "error");
         showToast(frame.error || "The run failed");
+        refreshSessions();
         break;
       default:
         break;

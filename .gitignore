@@ -6,7 +6,13 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 *.egg-info/
+# Runtime state.  Everything the runtime persists lives under
+# workspace/ (see agent_runtime.storage): sessions/, traces/, memory/.
+workspace/
+# Legacy runtime state, kept ignored while the last files age out.
 runs/
+memory/
 jobs/
+# Agent sandbox: spilled observations and generated scripts.
 .outputs/
-
+.scripts/

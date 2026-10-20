@@ -28,6 +28,9 @@ SKIP_DIRS = frozenset({
     # prune lists, which share this set) keeps results noise-free;
     # an explicit path=".scripts" / path=".outputs" search still works.
     ".scripts", ".outputs",
+    # The runtime's own state (sessions, traces, summaries) is written by
+    # the runtime, not by the model, and is noise in a repo-wide search.
+    "workspace",
 })
 
 MAX_FILE_BYTES = 1_000_000

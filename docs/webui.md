@@ -60,9 +60,16 @@ A session owns two things:
   turns.
 
 Both are persisted as one JSON document per session under
-`runs/webui/` (override with `AGENT_RUNTIME_WEBUI_SESSIONS_DIR`). The
-runtime trace of each turn is written next to it as
-`runs/webui/traces/<run_id>.jsonl`.
+`workspace/sessions/` (override with `AGENT_RUNTIME_WEBUI_SESSIONS_DIR`).
+The runtime trace of each turn is written next to it, under
+`workspace/traces/<run_id>.jsonl`.
+
+A session that never received a message is never written to disk and
+never listed: the browser keeps it in memory (there has to be
+somewhere to type), and it earns a file the moment the first message
+arrives.  Otherwise every "new chat" click would leave a stub behind
+and the sidebar would fill up with blank conversations.  See
+[storage.md](storage.md) for the full map of what the project writes.
 
 ## 4. HTTP API
 
@@ -111,7 +118,8 @@ front end, not a prerequisite. The two share the same `.env`
 | `AGENT_RUNTIME_WEBUI_HOST` | `127.0.0.1` | interface to bind |
 | `AGENT_RUNTIME_WEBUI_PORT` | `8000` | port to bind |
 | `AGENT_RUNTIME_WEBUI_REASONING` | `1` | set to `0` to hide thinking blocks |
-| `AGENT_RUNTIME_WEBUI_SESSIONS_DIR` | `runs/webui` | where sessions and traces are stored |
+| `AGENT_RUNTIME_WEBUI_SESSIONS_DIR` | `workspace/sessions` | where sessions are stored |
+| `AGENT_RUNTIME_HOME` | `workspace` | the root of all runtime state (sessions, traces, summaries) |
 
 ### Stopping the server
 

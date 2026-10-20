@@ -24,6 +24,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from agent_runtime import storage
 from agent_runtime.harness import (
     DEFAULT_CONTEXT_BUDGET,
     DEFAULT_HEAD_CHARS,
@@ -349,11 +350,11 @@ def _get_summary_llm() -> Any:
 def _session_memory_path() -> Path | None:
     """Default on-disk location for the latest session summary.
 
-    ``AGENT_RUNTIME_WORKSPACE`` selects the root; the summary is written as
-    ``<workspace>/memory/session_memory.md`` (one file per task, overwritten).
+    The summary is runtime state, so it lives under the runtime home
+    (see :mod:`agent_runtime.storage`) — one file per run, overwritten
+    by each new summary.
     """
-    workspace = os.getenv("AGENT_RUNTIME_WORKSPACE") or "."
-    return Path(workspace) / "memory" / "session_memory.md"
+    return storage.session_memory_path()
 
 
 def _write_session_memory(content: str, path: Path) -> None:

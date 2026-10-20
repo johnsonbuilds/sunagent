@@ -175,8 +175,8 @@ uv run python run_agent.py "运行 ls -la 并告诉我当前目录有什么"
 # interactive REPL
 uv run python run_agent.py
 
-# also dump an internal trace
-uv run python run_agent.py --trace runs/demo.jsonl "运行 pytest 看看测试状态"
+# also dump an internal trace (the default goes to workspace/traces/)
+uv run python run_agent.py --trace workspace/traces/demo.jsonl "运行 pytest 看看测试状态"
 ```
 
 `run_agent.py` subscribes the CLI renderer, shares one `run_id` between the

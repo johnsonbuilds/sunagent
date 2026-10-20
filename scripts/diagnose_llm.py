@@ -70,6 +70,7 @@ async def main():
             fields = {k: v for k, v in {
                 "content": delta.content,
                 "reasoning_content": getattr(delta, "reasoning_content", None),
+                "reasoning": getattr(delta, "reasoning", None),
             }.items() if v}
             for field in fields:
                 counts[field] = counts.get(field, 0) + 1
@@ -99,7 +100,8 @@ async def main():
             if delta.content:
                 kinds["content"] = kinds.get("content", 0) + 1
                 timeline.append((round(time.monotonic() - started, 1), "content"))
-            if getattr(delta, "reasoning_content", None):
+            if getattr(delta, "reasoning_content", None) or \
+                    getattr(delta, "reasoning", None):
                 kinds["reasoning"] = kinds.get("reasoning", 0) + 1
                 timeline.append((round(time.monotonic() - started, 1), "reasoning"))
             if delta.tool_calls:

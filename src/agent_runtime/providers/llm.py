@@ -36,6 +36,30 @@ _ECHO_FAMILY_MARKERS: tuple[str, ...] = (
     "kimi", "moonshot", "mimo", "xiaomi", "ling",
 )
 
+# Hosts that proxy other providers.  A gateway drops the assistant
+# turn's reasoning fields before the request reaches the upstream
+# model, so replaying them is a no-op: measured against OpenRouter,
+# 6400 chars of replayed reasoning cost 0 extra prompt tokens and the
+# model never saw the text (the same 6400 chars in ``content`` cost
+# +1202 tokens).  Model-name matching cannot catch this — OpenRouter
+# serves ``deepseek/...`` models, so the family heuristic above would
+# replay reasoning the gateway is about to drop, and the context-budget
+# layer would then charge for tokens that are never sent.
+_GATEWAY_HOST_MARKERS: tuple[str, ...] = ("openrouter.ai",)
+
+
+def _endpoint_replays_reasoning(base_url: str | None) -> bool | None:
+    """Whether the endpoint honours a replayed chain of thought.
+
+    ``True``/``False`` for a host we know the behaviour of, ``None``
+    when the host is unknown (the caller then falls back to the
+    model-family heuristic).
+    """
+    host = (base_url or "").lower()
+    if any(marker in host for marker in _GATEWAY_HOST_MARKERS):
+        return False
+    return None
+
 
 def _should_echo_reasoning(model: str, base_url: str | None,
                            mode: str | None = None) -> bool:
@@ -46,6 +70,9 @@ def _should_echo_reasoning(model: str, base_url: str | None,
         return True
     if mode == "never":
         return False
+    verdict = _endpoint_replays_reasoning(base_url)
+    if verdict is not None:
+        return verdict
     haystack = f"{model} {base_url or ''}".lower()
     return any(marker in haystack for marker in _ECHO_FAMILY_MARKERS)
 
@@ -65,6 +92,33 @@ def reasoning_echo_enabled(model: str | None = None,
     return _should_echo_reasoning(
         model if model is not None else os.getenv("MODEL_ID", _DEFAULT_MODEL),
         base_url if base_url is not None else os.getenv("LLM_BASE_URL"))
+
+
+def _reasoning_text(message: Any) -> str:
+    """Read a provider's chain of thought off a response or a delta.
+
+    The field name is not standardised: DeepSeek-native APIs expose
+    ``reasoning_content``, OpenRouter and other OpenAI-compatible
+    gateways expose ``reasoning`` (plus a structured ``reasoning_details``
+    array).  All of them are normalised into the runtime's single
+    ``reasoning_content`` field so nothing downstream has to know which
+    provider answered.
+
+    An empty string means the provider sent no reasoning at all — the
+    caller must treat that as "not a thinking model", not as "thinking
+    with nothing to say".
+    """
+    for field in ("reasoning_content", "reasoning"):
+        value = getattr(message, field, None)
+        if isinstance(value, str) and value:
+            return value
+    details = getattr(message, "reasoning_details", None)
+    if isinstance(details, (list, tuple)):
+        parts = [entry.get("text") for entry in details
+                 if isinstance(entry, dict) and entry.get("text")]
+        if parts:
+            return "".join(parts)
+    return ""
 
 
 def _project_messages_for_wire(messages: Sequence[dict[str, Any]],
@@ -123,7 +177,7 @@ class OpenAICompatibleLLM:
         message = response.choices[0].message
         calls = [call.model_dump(exclude_none=True) for call in (message.tool_calls or [])]
         result = {"content": message.content or "", "tool_calls": calls}
-        reasoning = getattr(message, "reasoning_content", None)
+        reasoning = _reasoning_text(message)
         if reasoning:
             result["reasoning_content"] = reasoning
         return result
@@ -159,7 +213,7 @@ class OpenAICompatibleLLM:
             delta = choice.delta
             if choice.finish_reason:
                 finish_reason = choice.finish_reason
-            reasoning = getattr(delta, "reasoning_content", None) or ""
+            reasoning = _reasoning_text(delta)
             data: dict[str, Any] = {"content": delta.content or "",
                                     "reasoning_content": reasoning}
             calls = []

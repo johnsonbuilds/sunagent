@@ -43,6 +43,7 @@ from pydantic import BaseModel, Field
 
 from dotenv import load_dotenv
 
+from agent_runtime import storage
 from agent_runtime.agent import RunTrace, run_turn, use_streaming
 from agent_runtime.channels.webui import WebUIChannel
 from agent_runtime.events import EventEmitter
@@ -276,7 +277,7 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
 
         run_id = f"run-{uuid4().hex[:12]}"
         trace = RunTrace(run_id=run_id,
-                         output_path=_trace_path(sessions, run_id),
+                         output_path=_trace_path(run_id),
                          harness=runner.harness)
         events = EventEmitter(run_id=trace.run_id)
         channel = WebUIChannel(sink=_session_sink(session))
@@ -372,8 +373,13 @@ def _last_event_id(request: Request) -> int:
         return 0
 
 
-def _trace_path(store: SessionStore, run_id: str) -> Path:
-    return store.root / "traces" / f"{run_id}.jsonl"
+def _trace_path(run_id: str) -> Path:
+    """Where the trace of one turn is written.
+
+    Traces are a sibling of the sessions, not a child of them: both
+    live under the runtime home (see :mod:`agent_runtime.storage`).
+    """
+    return storage.trace_path(run_id)
 
 
 __all__ = ["AgentRunner", "create_app"]

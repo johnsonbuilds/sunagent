@@ -6,6 +6,7 @@ import os
 import readline
 import sys
 from pathlib import Path
+from uuid import uuid4
 
 
 SOURCE_DIR = Path(__file__).resolve().parent / "src"
@@ -13,6 +14,7 @@ sys.path.insert(0, str(SOURCE_DIR))
 
 from dotenv import load_dotenv
 
+from agent_runtime import storage
 from agent_runtime.agent import Conversation, RunTrace, run_turn, use_streaming
 from agent_runtime.channels import CLIRenderer
 from agent_runtime.events import EventEmitter
@@ -43,8 +45,11 @@ async def _run() -> None:
     llm = OpenAICompatibleLLM()
     tools = create_default_registry(enabled=list(harness.tools.enabled))
     conversation = Conversation()
-    trace = (RunTrace(output_path=args.trace, harness=harness) if args.trace
-             else RunTrace(harness=harness))
+    # Traces are runtime state, so they land in the one place the
+    # project persists things (see agent_runtime.storage).  An explicit
+    # --trace still wins.
+    trace = RunTrace(output_path=args.trace or storage.trace_path(f"run-{uuid4().hex[:12]}"),
+                     harness=harness)
     events = EventEmitter(run_id=trace.run_id)
     renderer = CLIRenderer()
     events.subscribe(renderer)
