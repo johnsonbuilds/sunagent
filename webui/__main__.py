@@ -7,6 +7,9 @@ import asyncio
 import os
 from typing import Any
 
+from dotenv import load_dotenv
+
+from .auth import AuthNotConfigured, require_credentials
 from .server import create_app
 
 
@@ -55,9 +58,20 @@ def main() -> None:
     except ImportError as exc:  # pragma: no cover - dependency guard
         raise SystemExit("The web UI needs uvicorn: pip install fastapi uvicorn") from exc
 
+    # The web UI runs shell commands, so it never starts open. The
+    # password is checked here too, so that --reload fails with the
+    # same message instead of a traceback in the child process.
+    load_dotenv()
+    try:
+        credentials = require_credentials()
+    except AuthNotConfigured as exc:
+        raise SystemExit(str(exc)) from exc
+    print(f"webui: authentication enabled (user={credentials.username})")
+
     # With --reload the child process builds the app from the import
     # string, so the parent does not need one.
     app = None if args.reload else create_app()
+
     try:
         asyncio.run(_serve(app, args.host, args.port, args.log_level,
                            args.reload))

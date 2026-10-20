@@ -19,6 +19,9 @@ Endpoints:
     POST   /api/sessions/{id}/messages  send a message, start a turn
     POST   /api/sessions/{id}/cancel    stop the running turn
     GET    /api/sessions/{id}/events    SSE stream of frames
+
+Every route sits behind HTTP basic authentication: the web UI refuses
+to start without a password (see :mod:`webui.auth`).
 """
 
 from __future__ import annotations
@@ -51,6 +54,7 @@ from agent_runtime.harness import HarnessError, resolve_harness
 from agent_runtime.providers import OpenAICompatibleLLM
 from agent_runtime.tools import create_default_registry
 
+from .auth import BasicAuthMiddleware, require_credentials
 from .sessions import STREAM_STOP, Session, SessionStore
 
 
@@ -194,6 +198,10 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
     # `uvicorn webui.server:create_app --factory` -- sees the same
     # provider configuration.
     load_dotenv()
+    # Fail before anything is loaded: the web UI can run shell commands,
+    # so it never starts open. The password covers the pages, the API,
+    # and the event stream alike.
+    credentials = require_credentials()
     sessions = store if store is not None else SessionStore()
     sessions.load()
     runner = AgentRunner()
@@ -211,6 +219,9 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
     app.state.sessions = sessions
     app.state.runner = runner
     _APPS.add(app)
+
+    app.add_middleware(BasicAuthMiddleware, credentials=credentials)
+    logger.info("webui.auth.enabled user=%s", credentials.username)
 
     if STATIC_ROOT.is_dir():
         app.mount("/static", StaticFiles(directory=str(STATIC_ROOT)),

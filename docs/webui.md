@@ -120,6 +120,37 @@ front end, not a prerequisite. The two share the same `.env`
 | `AGENT_RUNTIME_WEBUI_REASONING` | `1` | set to `0` to hide thinking blocks |
 | `AGENT_RUNTIME_WEBUI_SESSIONS_DIR` | `workspace/sessions` | where sessions are stored |
 | `AGENT_RUNTIME_HOME` | `workspace` | the root of all runtime state (sessions, traces, summaries) |
+| `AGENT_RUNTIME_WEBUI_AUTH_USER` | `admin` | the user name the web UI asks for |
+| `AGENT_RUNTIME_WEBUI_AUTH_PASSWORD` | *(required)* | the password; the web UI refuses to start without it |
+
+### Access control
+
+The web UI runs an agent with shell and file tools, so it is never
+served open — not even on localhost. The server refuses to start until
+a password is configured in `.env`:
+
+```bash
+# .env
+AGENT_RUNTIME_WEBUI_AUTH_USER=admin
+AGENT_RUNTIME_WEBUI_AUTH_PASSWORD=<a long random string>
+```
+
+Every request — the page, the API, and the event stream — then requires
+HTTP basic authentication. The browser asks for the user name and the
+password once, caches them for the origin, and sends them with every
+later request. The client code does not know that authentication
+exists.
+
+Basic authentication is only base64, not encryption. Keep the server on
+localhost and reach it through an SSH tunnel
+(`ssh -L 8000:127.0.0.1:8000 <host>`), or put it behind a reverse
+proxy that terminates TLS, before anyone else can reach the port.
+
+Generate a password with:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(24))"
+```
 
 ### Stopping the server
 
