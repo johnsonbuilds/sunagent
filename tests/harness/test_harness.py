@@ -10,15 +10,18 @@ from textwrap import dedent
 sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
 
 from agent_runtime.harness import (
-    DEFAULT_HARNESS,
+    BUILTIN_HARNESS,
+    DEFAULT_HARNESS_ID,
     ControlGenome,
     HarnessError,
     HarnessSpec,
     LLM_RETRY_CATEGORIES,
     LLMRetryPolicy,
     RecoveryGenome,
+    default_harness,
     from_dict,
     load_harness,
+    load_named_harness,
     resolve_harness,
 )
 from agent_runtime.trace import RunTrace
@@ -26,13 +29,22 @@ from agent_runtime.trace import RunTrace
 
 REPO_ROOT = Path(__file__).parents[2]
 BASELINE_YAML = REPO_ROOT / "harnesses" / "baseline-v0.yaml"
+COMMON_YAML = REPO_ROOT / "harnesses" / "common-v0.yaml"
 
 
 class HarnessDefaultTests(unittest.TestCase):
-    def test_repo_manifest_stays_in_sync_with_builtin_default(self) -> None:
+    def test_builtin_default_stays_in_sync_with_baseline_manifest(self) -> None:
         loaded = load_harness(BASELINE_YAML)
-        self.assertEqual(loaded.id, DEFAULT_HARNESS.id)
-        self.assertEqual(loaded.genes_hash, DEFAULT_HARNESS.genes_hash)
+        self.assertEqual(loaded.id, BUILTIN_HARNESS.id)
+        self.assertEqual(loaded.genes_hash, BUILTIN_HARNESS.genes_hash)
+
+    def test_default_harness_is_the_manifest_common_v0(self) -> None:
+        self.assertEqual(DEFAULT_HARNESS_ID, "common-v0")
+        spec = default_harness()
+        self.assertEqual(spec.id, "common-v0")
+        self.assertEqual(Path(spec.source or "").resolve(), COMMON_YAML.resolve())
+        self.assertEqual(spec.genes_hash,
+                         load_named_harness("common-v0").genes_hash)
 
     def test_genes_hash_ignores_lineage_metadata(self) -> None:
         base = HarnessSpec()
@@ -44,7 +56,7 @@ class HarnessDefaultTests(unittest.TestCase):
 
     def test_genes_hash_changes_when_a_gene_changes(self) -> None:
         mutated = HarnessSpec(control=ControlGenome(max_iterations=20))
-        self.assertNotEqual(DEFAULT_HARNESS.genes_hash, mutated.genes_hash)
+        self.assertNotEqual(BUILTIN_HARNESS.genes_hash, mutated.genes_hash)
 
     def test_to_dict_roundtrips_through_from_dict(self) -> None:
         spec = HarnessSpec(id="h1", parent="baseline-v0",
@@ -60,13 +72,13 @@ class TranscriptEconomicsGenesTests(unittest.TestCase):
     """The observation/memory sizing knobs live on the genome."""
 
     def test_genome_defaults_match_runtime_invariants(self) -> None:
-        self.assertEqual(DEFAULT_HARNESS.memory.head_chars, 200)
-        self.assertEqual(DEFAULT_HARNESS.memory.context_budget, 60_000)
-        self.assertEqual(DEFAULT_HARNESS.memory.window_rounds, 12)
-        self.assertEqual(DEFAULT_HARNESS.memory.keep_recent_rounds, 2)
-        self.assertEqual(DEFAULT_HARNESS.memory.summary_tail_rounds, 2)
-        self.assertEqual(DEFAULT_HARNESS.control.max_observation_chars, 16_000)
-        self.assertEqual(DEFAULT_HARNESS.control.spill_preview_chars, 4_000)
+        self.assertEqual(BUILTIN_HARNESS.memory.head_chars, 200)
+        self.assertEqual(BUILTIN_HARNESS.memory.context_budget, 60_000)
+        self.assertEqual(BUILTIN_HARNESS.memory.window_rounds, 12)
+        self.assertEqual(BUILTIN_HARNESS.memory.keep_recent_rounds, 2)
+        self.assertEqual(BUILTIN_HARNESS.memory.summary_tail_rounds, 2)
+        self.assertEqual(BUILTIN_HARNESS.control.max_observation_chars, 16_000)
+        self.assertEqual(BUILTIN_HARNESS.control.spill_preview_chars, 4_000)
 
     def test_yaml_parses_new_gene_keys(self) -> None:
         spec = from_dict({
@@ -191,9 +203,10 @@ class HarnessValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(HarnessError, "no-such-harness"):
             resolve_harness("no-such-harness")
 
-    def test_resolve_none_returns_builtin_default(self) -> None:
-        self.assertIs(resolve_harness(None), DEFAULT_HARNESS)
-        self.assertIs(resolve_harness(""), DEFAULT_HARNESS)
+    def test_resolve_none_returns_the_default_harness(self) -> None:
+        self.assertIs(resolve_harness(None), default_harness())
+        self.assertIs(resolve_harness(""), default_harness())
+        self.assertEqual(resolve_harness(None).id, "common-v0")
 
 
 class HarnessResolveTests(unittest.TestCase):
@@ -201,6 +214,11 @@ class HarnessResolveTests(unittest.TestCase):
         spec = resolve_harness("baseline-v0")
         self.assertEqual(spec.id, "baseline-v0")
         self.assertEqual(Path(spec.source).resolve(), BASELINE_YAML.resolve())
+
+    def test_resolve_by_id_finds_the_default_manifest(self) -> None:
+        spec = resolve_harness("common-v0")
+        self.assertEqual(spec.id, "common-v0")
+        self.assertEqual(Path(spec.source).resolve(), COMMON_YAML.resolve())
 
     def test_resolve_by_path_loads_file(self) -> None:
         self.assertEqual(resolve_harness(str(BASELINE_YAML)).id, "baseline-v0")

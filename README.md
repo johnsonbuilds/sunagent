@@ -116,7 +116,8 @@ uv run python run_agent.py "List the files in the current directory"
 
 `run_agent.py` is interactive when no prompt is given. Use `--harness` to run
 a manifest from `harnesses/` (file path or id) and `--trace PATH` to append the
-run's events as JSONL. If another project's virtual environment is active, use
+run's events as JSONL. Without `--harness` the run uses the default harness
+`common-v0`. If another project's virtual environment is active, use
 `uv run --active` or activate this project's `.venv` first — the
 `VIRTUAL_ENV` warning comes from uv, not the agent runtime.
 
@@ -216,8 +217,9 @@ Supports OpenAI as well as model providers offering compatible interfaces.
 Optional knobs (temperature, workspace root, output caps, command guard) are
 documented in `.env.example`. The two most relevant to running:
 
-- `AGENT_RUNTIME_HARNESS` — default harness id when `--harness` is omitted
-  (also used by the Harbor adapter and `scripts/run_with_image_gc.py`)
+- `AGENT_RUNTIME_HARNESS` — harness id to run when `--harness` is omitted
+  (also used by the Harbor adapter and `scripts/run_with_image_gc.py`);
+  unset means the default harness `common-v0`
 - `AGENT_RUNTIME_STREAM` — set to `0` to disable streaming LLM consumption
 - `AGENT_RUNTIME_REASONING_ECHO` — how the model's `reasoning_content` is
   replayed on history turns: `auto` (default; echo for thinking-mode families

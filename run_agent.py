@@ -34,7 +34,7 @@ async def _run() -> None:
         metavar="PATH_OR_ID",
         default=os.getenv("AGENT_RUNTIME_HARNESS"),
         help="harness manifest to run (file path, id under harnesses/, "
-             "or omit for the built-in baseline)",
+             "or omit for the default harness, common-v0)",
     )
     parser.add_argument("prompt", nargs="*", help="prompt to send; omit for interactive mode")
     args = parser.parse_args()

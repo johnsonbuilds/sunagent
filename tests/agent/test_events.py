@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
 
 from agent_runtime.agent.loop import run_turn
 from agent_runtime.events import AgentEvent, EventEmitter
+from agent_runtime.harness import HarnessSpec
 from agent_runtime.tools.tools import ToolRegistry, ToolSpec
 
 
@@ -195,7 +196,8 @@ class UserEventSequenceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             await run_turn("hello", FakeLLM(error=RuntimeError("network down")),
-                           make_registry(), events=events),
+                           make_registry(), events=events,
+                           harness=HarnessSpec()),
             "LLM error: network down")
         self.assertEqual([event.event_type for event in events.events],
                          ["agent.started", "assistant.started", "runtime.error"])

@@ -10,6 +10,8 @@ be diffed, compared, and later mutated one gene at a time:
 
 Every run records its harness id and a content hash of the genes, so a
 trace can always be traced back to the exact harness that produced it.
+The harness used when none is requested is ``common-v0``, the generic
+task base loaded from ``harnesses/common-v0.yaml``.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ import hashlib
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +35,15 @@ ITERATION_LIMIT_NOTICE = (
     "Iteration limit reached. Summarize the progress and give the "
     "best possible final answer. Do not call tools."
 )
+
+# The harness a run gets when nothing is requested: the generic
+# task base that fits code, analysis, lookup and chat tasks alike.
+DEFAULT_HARNESS_ID = "common-v0"
+
+# The manifests live beside the package source, not inside it, so they
+# are also looked up relative to the repository root: the package can
+# run from a directory other than the project root.
+REPO_HARNESSES_DIR = Path(__file__).resolve().parents[2] / "harnesses"
 
 
 def feed_error_and_continue(exc: Exception, *, tool: str | None = None) -> str:
@@ -233,6 +245,7 @@ def _hash_genes(genes: Mapping[str, Any]) -> str:
 class HarnessSpec:
     """One harness version: lineage metadata plus seven genes."""
 
+    # The neutral built-in genome mirrors harnesses/baseline-v0.yaml.
     id: str = "baseline-v0"
     parent: str | None = None
     mutation: str | None = None
@@ -284,12 +297,23 @@ class HarnessSpec:
         return strategy(exc, **context)
 
 
-DEFAULT_HARNESS = HarnessSpec()
+# The neutral built-in genome (the dataclass defaults). It mirrors
+# harnesses/baseline-v0.yaml and is the fallback used when no manifest
+# can be found; the harness a run actually gets by default is common-v0.
+BUILTIN_HARNESS = HarnessSpec()
 
 
+@lru_cache(maxsize=1)
 def default_harness() -> HarnessSpec:
-    """The built-in baseline; mirrors harnesses/baseline-v0.yaml."""
-    return DEFAULT_HARNESS
+    """The default harness: ``harnesses/common-v0.yaml``.
+
+    Falls back to the built-in neutral genome (baseline-v0) when the
+    manifest is unavailable, e.g. a wheel install without the repo.
+    """
+    try:
+        return load_named_harness(DEFAULT_HARNESS_ID)
+    except HarnessError:
+        return BUILTIN_HARNESS
 
 
 def _check_keys(section: Mapping[str, Any], allowed: set[str], where: str) -> None:
@@ -556,22 +580,41 @@ def load_harness(path: str | Path) -> HarnessSpec:
     return spec
 
 
+def manifest_candidates(harness_id: str) -> list[Path]:
+    """Where a harness id may live: the working directory's ``harnesses/``
+    first, then the repository's own ``harnesses/``."""
+    return [Path("harnesses") / f"{harness_id}.yaml",
+            REPO_HARNESSES_DIR / f"{harness_id}.yaml"]
+
+
+def load_named_harness(harness_id: str) -> HarnessSpec:
+    """Load a harness by id from the ``harnesses/`` directory."""
+    candidates = manifest_candidates(harness_id)
+    for path in candidates:
+        if path.is_file():
+            return load_harness(path)
+    raise HarnessError(
+        f"harness {harness_id!r} not found in "
+        + " or ".join(str(path) for path in candidates))
+
+
 def resolve_harness(value: str | None) -> HarnessSpec:
     """Resolve a CLI/env harness reference to a spec.
 
     Accepts a file path or a bare id resolved against ``harnesses/``;
-    falls back to the built-in baseline when nothing is given.
+    falls back to the default harness (common-v0) when nothing is given.
     """
     if not value:
-        return DEFAULT_HARNESS
+        return default_harness()
     direct = Path(value)
     if direct.is_file():
         return load_harness(direct)
-    as_id = Path("harnesses") / f"{value}.yaml"
-    if as_id.is_file():
-        return load_harness(as_id)
-    raise HarnessError(
-        f"harness {value!r} not found as a file or as {as_id}")
+    try:
+        return load_named_harness(value)
+    except HarnessError as exc:
+        raise HarnessError(
+            f"harness {value!r} not found as a file or as "
+            f"{Path('harnesses') / f'{value}.yaml'}") from exc
 
 
 def _main(argv: list[str] | None = None) -> int:
@@ -712,11 +755,13 @@ if __name__ == "__main__":
 
 
 __all__ = [
-    "DEFAULT_HARNESS", "HarnessError", "HarnessSpec", "ITERATION_LIMIT_NOTICE",
+    "BUILTIN_HARNESS", "DEFAULT_HARNESS_ID", "REPO_HARNESSES_DIR",
+    "HarnessError", "HarnessSpec", "ITERATION_LIMIT_NOTICE",
     "PromptGenome", "ToolGenome", "BudgetReminder", "ControlGenome", "MemoryGenome",
     "RecoveryGenome", "VerificationGenome", "DEFAULT_VERIFICATION_REQUIRE",
     "VERIFICATION_MODES", "TOOL_ERROR_STRATEGIES",
     "LLM_RETRY_CATEGORIES", "LLMRetryPolicy", "BACKOFF_POLICIES",
     "MEMORY_STRATEGIES", "default_harness", "feed_error_and_continue",
-    "from_dict", "load_harness", "resolve_harness", "_main",
+    "from_dict", "load_harness", "load_named_harness", "manifest_candidates",
+    "resolve_harness", "_main",
 ]

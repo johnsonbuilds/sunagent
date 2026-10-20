@@ -49,8 +49,13 @@ python run_agent.py --harness harnesses/baseline-v0.yaml
 export AGENT_RUNTIME_HARNESS=baseline-v0
 ```
 
-Unset means the built-in default (`baseline-v0`). A test enforces that
-`harnesses/baseline-v0.yaml` and the built-in default stay in sync.
+Unset means the default harness (`common-v0`), loaded from
+`harnesses/common-v0.yaml`: the generic task base that fits code,
+analysis, lookup and chat tasks alike. The built-in genome
+(`BUILTIN_HARNESS`, the dataclass defaults) mirrors
+`harnesses/baseline-v0.yaml` and is only the fallback used when no
+manifest can be found; a test keeps the built-in genome and the
+baseline manifest in sync.
 
 Every run's trace now leads with a harness header (the first JSONL
 line), so any trace file can always be traced back to the exact genome

@@ -20,9 +20,16 @@ from agent_runtime.harness import (
     LLMRetryPolicy,
     PromptGenome,
     RecoveryGenome,
+    default_harness,
 )
 from agent_runtime.trace import RunTrace
 from agent_runtime.tools.tools import ToolRegistry, ToolSpec
+
+
+# The runtime-mechanics tests pin the neutral built-in genome: they
+# exercise the loop, not the default manifest, so they must not drift
+# when harnesses/common-v0.yaml changes.
+NEUTRAL_HARNESS = HarnessSpec()
 
 
 WEATHER_SCHEMA = {
@@ -91,7 +98,7 @@ class AgentLoopErrorHandlingTests(unittest.IsolatedAsyncioTestCase):
         trace = RunTrace(run_id="streaming")
 
         self.assertEqual(await run_turn("weather", llm, make_registry(), stream=True,
-                                        trace=trace),
+                                        trace=trace, harness=NEUTRAL_HARNESS),
                          "It is sunny")
         self.assertEqual(
             [event.event_type for event in trace.events],
@@ -138,7 +145,8 @@ class AgentLoopErrorHandlingTests(unittest.IsolatedAsyncioTestCase):
             [{"content": "", "reasoning_content": "thinking very long",
               "tool_calls": []}],
         ])
-        answer = await run_turn("weather", llm, make_registry(), stream=True)
+        answer = await run_turn("weather", llm, make_registry(), stream=True,
+                                harness=NEUTRAL_HARNESS)
         self.assertIn("finish_reason", answer)
         self.assertIn("LLM error", answer)
 
@@ -146,7 +154,8 @@ class AgentLoopErrorHandlingTests(unittest.IsolatedAsyncioTestCase):
         llm = StreamingLLM([
             [{"finish_reason": "stop"}],
         ])
-        answer = await run_turn("weather", llm, make_registry(), stream=True)
+        answer = await run_turn("weather", llm, make_registry(), stream=True,
+                                harness=NEUTRAL_HARNESS)
         self.assertIn("without any content, reasoning, or tool calls", answer)
         self.assertIn("LLM error", answer)
 
@@ -423,7 +432,8 @@ class AgentLoopErrorHandlingTests(unittest.IsolatedAsyncioTestCase):
         trace = RunTrace(run_id="r1")
         self.assertEqual(
             await run_turn("hello", FakeLLM(error=RuntimeError("network down")),
-                           make_registry(), trace=trace),
+                           make_registry(), trace=trace,
+                           harness=NEUTRAL_HARNESS),
             "LLM error: network down",
         )
         self.assertEqual(
@@ -460,12 +470,14 @@ class AgentLoopErrorHandlingTests(unittest.IsolatedAsyncioTestCase):
 
 
 class HarnessIntegrationTests(unittest.IsolatedAsyncioTestCase):
-    async def test_default_harness_sends_no_system_message(self) -> None:
+    async def test_default_harness_sends_its_system_prompt(self) -> None:
         llm = FakeLLM([{"content": "hi", "tool_calls": []}])
 
         await run_turn("hello", llm, make_registry())
 
-        self.assertEqual(llm.messages[0][0]["role"], "user")
+        self.assertEqual(llm.messages[0][0]["role"], "system")
+        self.assertEqual(llm.messages[0][0]["content"],
+                         default_harness().prompt.system)
 
     async def test_system_prompt_gene_is_injected_before_user_message(self) -> None:
         llm = FakeLLM([{"content": "hi", "tool_calls": []},

@@ -1,4 +1,4 @@
-id: comman-v0
+id: common-v0
 parent: tb-v2
 mutation: 'generic task base: relax task-type assumptions (verification off, no budget
   reminder or finish fuse, drop submit_result)'
