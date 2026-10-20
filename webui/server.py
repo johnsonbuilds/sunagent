@@ -27,7 +27,11 @@ import asyncio
 import json
 import logging
 import os
+import signal
 import time
+import weakref
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
@@ -37,6 +41,8 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from dotenv import load_dotenv
+
 from agent_runtime.agent import RunTrace, run_turn, use_streaming
 from agent_runtime.channels.webui import WebUIChannel
 from agent_runtime.events import EventEmitter
@@ -44,7 +50,7 @@ from agent_runtime.harness import HarnessError, resolve_harness
 from agent_runtime.providers import OpenAICompatibleLLM
 from agent_runtime.tools import create_default_registry
 
-from .sessions import Session, SessionStore
+from .sessions import STREAM_STOP, Session, SessionStore
 
 
 logger = logging.getLogger(__name__)
@@ -52,6 +58,50 @@ logger = logging.getLogger(__name__)
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
 
 _KEEPALIVE_SECONDS = 15.0
+
+# Every application built in this process, so the shutdown path can
+# reach the session store no matter how the app was started.
+_APPS: "weakref.WeakSet[FastAPI]" = weakref.WeakSet()
+
+
+def shutdown_active_sessions() -> None:
+    """Close the event streams and stop the running turns of every app.
+
+    Server-sent events never end on their own, and uvicorn waits for
+    open connections before it finishes shutting down. Closing them
+    here is what makes Ctrl+C return immediately.
+    """
+    for app in list(_APPS):
+        store = getattr(app.state, "sessions", None)
+        if store is not None:
+            store.shutdown()
+
+
+def _install_exit_handlers() -> None:
+    """Close the event streams when the process is asked to stop.
+
+    The handler runs before the server's own: it closes the streams and
+    then hands the signal on, so the normal graceful shutdown still
+    happens. Installing it from the application (rather than from the
+    entry point) covers every way the server can be started.
+    """
+    previous: dict[int, Any] = {}
+
+    def handle(signum: int, frame: Any) -> None:
+        shutdown_active_sessions()
+        handler = previous.get(signum)
+        if handler not in (None, signal.SIG_DFL, signal.SIG_IGN):
+            handler(signum, frame)
+        elif signum == signal.SIGINT:
+            raise KeyboardInterrupt
+
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        try:
+            previous[signum] = signal.getsignal(signum)
+            signal.signal(signum, handle)
+        except (OSError, ValueError):  # pragma: no cover - not the main thread
+            previous.pop(signum, None)
+
 
 
 class MessageRequest(BaseModel):
@@ -138,14 +188,28 @@ def _sse(frame: dict[str, Any]) -> str:
 
 def create_app(store: SessionStore | None = None) -> FastAPI:
     """Build the web UI application."""
+    # The CLI loads .env in its entry point. The server loads it here so
+    # every launch path -- the console script, `python -m webui`, and
+    # `uvicorn webui.server:create_app --factory` -- sees the same
+    # provider configuration.
+    load_dotenv()
     sessions = store if store is not None else SessionStore()
     sessions.load()
     runner = AgentRunner()
 
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        _install_exit_handlers()
+        yield
+        # Backstop for the paths that do not run the entry point: the
+        # streams are closed even if the server was stopped abruptly.
+        shutdown_active_sessions()
+
     app = FastAPI(title="SunAgent Web UI", docs_url="/api/docs",
-                  redoc_url=None)
+                  redoc_url=None, lifespan=lifespan)
     app.state.sessions = sessions
     app.state.runner = runner
+    _APPS.add(app)
 
     if STATIC_ROOT.is_dir():
         app.mount("/static", StaticFiles(directory=str(STATIC_ROOT)),
@@ -253,6 +317,8 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
                     except asyncio.TimeoutError:
                         yield ": keepalive\n\n"
                         continue
+                    if frame is STREAM_STOP:
+                        break
                     yield _sse(frame)
             finally:
                 session.bus.unsubscribe(queue)

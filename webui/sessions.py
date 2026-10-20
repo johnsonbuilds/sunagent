@@ -30,6 +30,11 @@ from agent_runtime.agent import Conversation
 logger = logging.getLogger(__name__)
 
 
+# Sentinel pushed into a subscriber queue to tell the stream to finish.
+# It never reaches a browser: the stream stops before it is rendered.
+STREAM_STOP: Any = object()
+
+
 def default_sessions_root() -> Path:
     """Where sessions live when ``AGENT_RUNTIME_WEBUI_SESSIONS_DIR`` is unset.
 
@@ -55,7 +60,7 @@ class FrameBus:
         self._seq = 0
         self._history: list[dict[str, Any]] = []
         self._history_limit = history
-        self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
+        self._subscribers: set[asyncio.Queue[Any]] = set()
 
     @property
     def seq(self) -> int:
@@ -74,17 +79,30 @@ class FrameBus:
             except asyncio.QueueFull:  # pragma: no cover - unbounded queue
                 pass
 
-    def subscribe(self) -> "asyncio.Queue[dict[str, Any]]":
-        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    def subscribe(self) -> "asyncio.Queue[Any]":
+        queue: asyncio.Queue[Any] = asyncio.Queue()
         self._subscribers.add(queue)
         return queue
 
-    def unsubscribe(self, queue: "asyncio.Queue[dict[str, Any]]") -> None:
+    def unsubscribe(self, queue: "asyncio.Queue[Any]") -> None:
         self._subscribers.discard(queue)
 
     def replay(self, after: int = 0) -> list[dict[str, Any]]:
         """Frames newer than ``after``, oldest first."""
         return [frame for frame in self._history if frame.get("seq", 0) > after]
+
+    def stop(self) -> None:
+        """Close every open stream.
+
+        Server-sent events never end on their own, so a browser that is
+        still connected would keep uvicorn waiting during shutdown.
+        The sentinel tells the stream to finish.
+        """
+        for queue in list(self._subscribers):
+            try:
+                queue.put_nowait(STREAM_STOP)
+            except asyncio.QueueFull:  # pragma: no cover - unbounded queue
+                pass
 
 
 @dataclass
@@ -165,6 +183,19 @@ class SessionStore:
     def list(self) -> list[Session]:
         return sorted(self._sessions.values(),
                       key=lambda session: session.updated_at, reverse=True)
+
+    def shutdown(self) -> None:
+        """Close every event stream and stop every running turn.
+
+        Called when the server is asked to exit: the event streams are
+        long-lived by design, so they have to be closed explicitly or
+        the process waits for them forever.
+        """
+        for session in self._sessions.values():
+            session.bus.stop()
+            task = session.task
+            if task is not None and not task.done():
+                task.cancel()
 
     def get(self, session_id: str) -> Session | None:
         return self._sessions.get(session_id)

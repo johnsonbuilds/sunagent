@@ -1,8 +1,8 @@
+import asyncio
 import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-
 
 
 sys.path.insert(0, str(Path(__file__).parents[2]))
@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
 from agent_runtime.channels.webui import WebUIChannel
 from agent_runtime.events import AgentEvent
 
-from webui.sessions import SessionStore
+from webui.sessions import STREAM_STOP, SessionStore
 
 
 class FrameBusTests(unittest.IsolatedAsyncioTestCase):
@@ -42,6 +42,32 @@ class FrameBusTests(unittest.IsolatedAsyncioTestCase):
         session.bus.unsubscribe(queue)
         session.bus.publish({"type": "run.started"})
         self.assertTrue(queue.empty())
+
+    async def test_stop_closes_open_streams(self) -> None:
+        store = SessionStore(Path("/tmp/does-not-matter"))
+        session = store.create()
+        queue = session.bus.subscribe()
+
+        session.bus.stop()
+
+        # The sentinel tells the stream to finish; it is never rendered.
+        self.assertIs(queue.get_nowait(), STREAM_STOP)
+
+    async def test_shutdown_stops_streams_and_running_turns(self) -> None:
+        store = SessionStore(Path("/tmp/does-not-matter"))
+        session = store.create()
+        queue = session.bus.subscribe()
+
+        async def forever() -> None:
+            await asyncio.sleep(60)
+
+        session.task = asyncio.ensure_future(forever())
+
+        store.shutdown()
+
+        self.assertIs(queue.get_nowait(), STREAM_STOP)
+        await asyncio.sleep(0)
+        self.assertTrue(session.task.cancelled() or session.task.done())
 
 
 class SessionStoreTests(unittest.TestCase):

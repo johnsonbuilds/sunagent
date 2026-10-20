@@ -10,17 +10,13 @@ dependencies = [
     "pyyaml>=6.0.3",
     "tree-sitter>=0.26.0",
     "tree-sitter-python>=0.25.0",
-]
-
-[project.optional-dependencies]
-web = [
     "fastapi>=0.115.0",
     "uvicorn>=0.30.0",
 ]
 
 [project.scripts]
-agent-practice = "run_agent:main"
-sunagent-webui = "webui.__main__:main"
+agent = "run_agent:main"
+webui = "webui.__main__:main"
 
 [build-system]
 requires = ["hatchling"]

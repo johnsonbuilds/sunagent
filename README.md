@@ -152,8 +152,8 @@ consumes the same user-facing events as the CLI and renders them as a
 conversation with streaming text, thinking blocks, and tool cards.
 
 ```bash
-uv sync --extra web
-uv run python -m webui --port 8000
+uv sync
+uv run webui --port 8000
 ```
 
 Then open <http://127.0.0.1:8000>. Conversations are grouped in the sidebar

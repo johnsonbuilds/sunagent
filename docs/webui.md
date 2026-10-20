@@ -87,18 +87,22 @@ resumes where it left off instead of starting from a blank transcript.
 ## 5. Running It
 
 ```bash
-# dependencies (FastAPI + uvicorn)
-uv sync --extra web
+# dependencies (FastAPI + uvicorn ship with the runtime)
+uv sync
 
 # start the server
-uv run python -m webui --port 8000
+uv run webui --port 8000
 ```
 
 Then open <http://127.0.0.1:8000>.
 
-The web UI reads the same `.env` as the CLI (`LLM_API_KEY`, `LLM_BASE_URL`,
-`MODEL_ID`), and honours `AGENT_RUNTIME_HARNESS` so both channels run the
-same agent configuration.
+The web UI **is** the agent host: the FastAPI process holds the LLM, the
+tools, and the harness, and every message runs `run_turn` as a background
+task inside it. There is no second process to start and no separate agent
+to keep in sync — `uv run agent` (the CLI channel) is an alternative
+front end, not a prerequisite. The two share the same `.env`
+(`LLM_API_KEY`, `LLM_BASE_URL`, `MODEL_ID`) and the same
+`AGENT_RUNTIME_HARNESS`, but each keeps its own conversations.
 
 ### Environment variables
 
@@ -108,6 +112,15 @@ same agent configuration.
 | `AGENT_RUNTIME_WEBUI_PORT` | `8000` | port to bind |
 | `AGENT_RUNTIME_WEBUI_REASONING` | `1` | set to `0` to hide thinking blocks |
 | `AGENT_RUNTIME_WEBUI_SESSIONS_DIR` | `runs/webui` | where sessions and traces are stored |
+
+### Stopping the server
+
+`Ctrl+C` returns immediately, even with browser tabs still connected.
+Server-sent events never end on their own, and uvicorn waits for open
+connections before it finishes shutting down, so the application closes
+every stream itself when the process is asked to stop — and then hands
+the signal on so the normal graceful shutdown still happens. Running
+turns are cancelled at the same time and their sessions are saved.
 
 ## 6. The Frontend
 
