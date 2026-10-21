@@ -11,8 +11,10 @@ comparison. The browser shows its own prompt and caches the
 credentials for the origin, so the static page, the JSON API, and the
 SSE stream all work without the client knowing anything about auth.
 
-Authentication is not optional: the web UI refuses to start without a
-password, because it can run shell commands and "only on localhost" is
+Authentication is optional, and off by default: the web UI is a local
+tool, and a tool that asks for a password on every start is a tool
+people leave running without one. When it is off, the launcher says so,
+because the web UI can run shell commands and "only on localhost" is
 not a property a server keeps by itself.
 """
 
@@ -44,36 +46,37 @@ class Credentials(NamedTuple):
 def credentials_from_env() -> Credentials | None:
     """Read the credentials from the environment.
 
-    ``None`` means no password is configured. The password is read
-    verbatim: no trimming, no defaults, and a password that is only
-    whitespace still counts as a password.
+    Both variables are needed, and the user name is the switch: set
+    ``AGENT_RUNTIME_WEBUI_AUTH_USER`` to ``admin`` (or any other
+    name) together with a password, and every request has to carry
+    them. Leave the user name out and the web UI is open.
+
+    The password is read verbatim: no trimming, no defaults, and a
+    password that is only whitespace still counts as a password.
     """
+    user = os.getenv(USER_ENV, "").strip()
     password = os.getenv(PASSWORD_ENV)
-    if not password:
+    if not user or not password:
         return None
-    return Credentials(username=os.getenv(USER_ENV) or DEFAULT_USER,
-                       password=password)
+    return Credentials(username=user, password=password)
 
 
-class AuthNotConfigured(RuntimeError):
-    """Raised when the web UI is started without a password."""
+def auth_warning() -> str | None:
+    """Why the web UI is served without a password, or ``None``.
 
-
-def require_credentials() -> Credentials:
-    """The credentials the web UI refuses to start without.
-
-    The web UI can run shell commands, so it is never served open --
-    not even on localhost. A missing password is a configuration
-    mistake, not a mode to fall back to.
+    The launcher prints this so that an open web UI is never a silent
+    accident: it can run shell commands, so everyone who can reach the
+    port can drive the agent.
     """
-    credentials = credentials_from_env()
-    if credentials is None:
-        raise AuthNotConfigured(
-            f"The web UI needs a password. Set {PASSWORD_ENV} in .env "
-            f"(and optionally {USER_ENV}), for example:\n"
-            f'  {PASSWORD_ENV}="$(python -c "import secrets; '
-            f'print(secrets.token_urlsafe(24))")"')
-    return credentials
+    if credentials_from_env() is not None:
+        return None
+    user = os.getenv(USER_ENV, "").strip()
+    password = os.getenv(PASSWORD_ENV)
+    if user and not password:
+        return f"{USER_ENV} is set but {PASSWORD_ENV} is not"
+    if password and not user:
+        return f"{PASSWORD_ENV} is set but {USER_ENV} is not"
+    return "neither a user name nor a password is configured"
 
 
 class BasicAuthMiddleware:
@@ -137,5 +140,6 @@ __all__ = [
     "USER_ENV",
     "BasicAuthMiddleware",
     "Credentials",
+    "auth_warning",
     "credentials_from_env",
 ]

@@ -5,11 +5,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import sys
 from typing import Any
 
 from dotenv import load_dotenv
 
-from .auth import AuthNotConfigured, require_credentials
+from .auth import DEFAULT_USER, PASSWORD_ENV, USER_ENV, auth_warning
 from .server import create_app
 
 
@@ -58,15 +59,18 @@ def main() -> None:
     except ImportError as exc:  # pragma: no cover - dependency guard
         raise SystemExit("The web UI needs uvicorn: pip install fastapi uvicorn") from exc
 
-    # The web UI runs shell commands, so it never starts open. The
-    # password is checked here too, so that --reload fails with the
-    # same message instead of a traceback in the child process.
+    # An open web UI is an open shell. Say so, without stopping the
+    # server: the web UI is a local tool first, and the password is
+    # there for the day it is reachable from somewhere else.
     load_dotenv()
-    try:
-        credentials = require_credentials()
-    except AuthNotConfigured as exc:
-        raise SystemExit(str(exc)) from exc
-    print(f"webui: authentication enabled (user={credentials.username})")
+    warning = auth_warning()
+    if warning is None:
+        print("webui: authentication enabled")
+    else:
+        print(f"webui: no authentication ({warning}). Anyone who can reach "
+              f"this port can run the agent. Set {USER_ENV}={DEFAULT_USER} "
+              f"and {PASSWORD_ENV} in .env to lock it down.",
+              file=sys.stderr)
 
     # With --reload the child process builds the app from the import
     # string, so the parent does not need one.

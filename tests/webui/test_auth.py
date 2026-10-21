@@ -13,8 +13,8 @@ from starlette.responses import PlainTextResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from webui.auth import (AuthNotConfigured, BasicAuthMiddleware, Credentials,
-                         credentials_from_env, require_credentials)
+from webui.auth import (BasicAuthMiddleware, Credentials, auth_warning,
+                         credentials_from_env)
 
 
 async def hello(_request):
@@ -79,33 +79,46 @@ class CredentialsFromEnvTests(unittest.TestCase):
             else:
                 os.environ[name] = value
 
-    def test_no_password_means_no_credentials(self) -> None:
+    def test_nothing_configured_means_no_credentials(self) -> None:
         self.assertIsNone(credentials_from_env())
 
-    def test_password_enables_authentication(self) -> None:
+    def test_password_alone_does_not_enable_authentication(self) -> None:
         os.environ["AGENT_RUNTIME_WEBUI_AUTH_PASSWORD"] = "secret"
-        credentials = credentials_from_env()
-        self.assertIsNotNone(credentials)
-        self.assertEqual(credentials.username, "admin")
-        self.assertEqual(credentials.password, "secret")
+        self.assertIsNone(credentials_from_env())
 
-    def test_user_name_can_be_overridden(self) -> None:
-        os.environ["AGENT_RUNTIME_WEBUI_AUTH_PASSWORD"] = "secret"
+    def test_user_name_alone_does_not_enable_authentication(self) -> None:
+        os.environ["AGENT_RUNTIME_WEBUI_AUTH_USER"] = "admin"
+        self.assertIsNone(credentials_from_env())
+
+    def test_user_name_and_password_enable_authentication(self) -> None:
         os.environ["AGENT_RUNTIME_WEBUI_AUTH_USER"] = "jun"
+        os.environ["AGENT_RUNTIME_WEBUI_AUTH_PASSWORD"] = "secret"
         credentials = credentials_from_env()
         self.assertIsNotNone(credentials)
         self.assertEqual(credentials.username, "jun")
-
-    def test_required_credentials_refuse_to_start_without_a_password(
-            self) -> None:
-        with self.assertRaises(AuthNotConfigured):
-            require_credentials()
-
-    def test_required_credentials_return_the_configured_pair(self) -> None:
-        os.environ["AGENT_RUNTIME_WEBUI_AUTH_PASSWORD"] = "secret"
-        credentials = require_credentials()
-        self.assertEqual(credentials.username, "admin")
         self.assertEqual(credentials.password, "secret")
+
+    def test_no_warning_when_authentication_is_on(self) -> None:
+        os.environ["AGENT_RUNTIME_WEBUI_AUTH_USER"] = "jun"
+        os.environ["AGENT_RUNTIME_WEBUI_AUTH_PASSWORD"] = "secret"
+        self.assertIsNone(auth_warning())
+
+    def test_warning_when_nothing_is_configured(self) -> None:
+        warning = auth_warning()
+        self.assertIsNotNone(warning)
+        self.assertIn("neither", warning)
+
+    def test_warning_names_the_missing_password(self) -> None:
+        os.environ["AGENT_RUNTIME_WEBUI_AUTH_USER"] = "jun"
+        warning = auth_warning()
+        self.assertIsNotNone(warning)
+        self.assertIn("AGENT_RUNTIME_WEBUI_AUTH_PASSWORD", warning)
+
+    def test_warning_names_the_missing_user_name(self) -> None:
+        os.environ["AGENT_RUNTIME_WEBUI_AUTH_PASSWORD"] = "secret"
+        warning = auth_warning()
+        self.assertIsNotNone(warning)
+        self.assertIn("AGENT_RUNTIME_WEBUI_AUTH_USER", warning)
 
 
 if __name__ == "__main__":

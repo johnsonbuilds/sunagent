@@ -20,8 +20,8 @@ Endpoints:
     POST   /api/sessions/{id}/cancel    stop the running turn
     GET    /api/sessions/{id}/events    SSE stream of frames
 
-Every route sits behind HTTP basic authentication: the web UI refuses
-to start without a password (see :mod:`webui.auth`).
+Every route sits behind HTTP basic authentication when a user name and
+a password are configured (see :mod:`webui.auth`).
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ from agent_runtime.harness import HarnessError, resolve_harness
 from agent_runtime.providers import OpenAICompatibleLLM
 from agent_runtime.tools import create_default_registry
 
-from .auth import BasicAuthMiddleware, require_credentials
+from .auth import BasicAuthMiddleware, credentials_from_env
 from .sessions import STREAM_STOP, Session, SessionStore
 
 
@@ -198,10 +198,10 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
     # `uvicorn webui.server:create_app --factory` -- sees the same
     # provider configuration.
     load_dotenv()
-    # Fail before anything is loaded: the web UI can run shell commands,
-    # so it never starts open. The password covers the pages, the API,
-    # and the event stream alike.
-    credentials = require_credentials()
+    # The web UI can run shell commands, so it is worth a password.
+    # Authentication is on when the user name and the password are
+    # configured, and off -- with a warning -- when they are not.
+    credentials = credentials_from_env()
     sessions = store if store is not None else SessionStore()
     sessions.load()
     runner = AgentRunner()
@@ -220,8 +220,13 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
     app.state.runner = runner
     _APPS.add(app)
 
-    app.add_middleware(BasicAuthMiddleware, credentials=credentials)
-    logger.info("webui.auth.enabled user=%s", credentials.username)
+    if credentials is not None:
+        # The password covers the pages, the API, and the event stream
+        # alike.
+        app.add_middleware(BasicAuthMiddleware, credentials=credentials)
+        logger.info("webui.auth.enabled user=%s", credentials.username)
+    else:
+        logger.info("webui.auth.disabled")
 
     if STATIC_ROOT.is_dir():
         app.mount("/static", StaticFiles(directory=str(STATIC_ROOT)),
