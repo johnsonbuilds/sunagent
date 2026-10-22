@@ -271,4 +271,4 @@ By decomposing complex agent systems into independent modules, developers can:
 
 ## License
 
-MIT
+Apache 2.0
