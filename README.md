@@ -79,10 +79,6 @@ harness for refactors, and log/trace stats analysis.
 Named markdown skill bundles injected into the system prompt via the
 harness's `skills` gene (e.g. `coder`).
 
-### memory
-
-Session memory artifact (`session_memory.md`) written by the `llm_summary`
-memory strategy into the workspace.
 
 ### jobs
 
@@ -241,12 +237,6 @@ Implemented so far:
 * Memory, session summaries, and skill injection
 * Observability, evaluation, and debugging (RunTrace, user-facing events, Harbor benchmarks)
 
-Still to explore:
-
-* Multi-agent collaboration
-* Retrieval augmentation
-* Task planning and state machines
-* External tool protocols such as MCP
 
 ## Project Philosophy
 
@@ -268,6 +258,25 @@ By decomposing complex agent systems into independent modules, developers can:
 - Developers building custom agent systems
 - Researchers exploring agent runtime design
 - Anyone interested in reliable autonomous AI systems
+
+## AGENTS
+
+This repository is maintained by both humans and AI coding agents.
+
+All coding agents Should follow below rules and principles.
+
+### 1. Rules
+
+must comply with:
+
+- do not modify exist harnesses yaml, always derive new version if need.
+
+### 2. Engineering Principles
+
+- Simplicity: prefer the simplest and safe solution that meets the requirements.
+- Consistency: follow existing project patterns and conventions.
+- Maintainability: make code easy to understand and extend.
+- Reliability: handle expected failures and edge cases explicitly.
 
 ## License
 
