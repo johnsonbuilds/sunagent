@@ -64,6 +64,27 @@ class TurnHistory:
         self.messages.append(message)
         self.view.append(message)
 
+    def append_to_view(self, message: dict[str, Any]) -> None:
+        """Append a transient notice to the request view only.
+
+        Mirror receipts and similar meta-notices must not pollute
+        ``messages`` (the audit/verification record); they ride the next
+        LLM request and are dropped on the next view replacement.
+        """
+        self.view.append(message)
+
+    def replace_view(self, new_view: list[dict[str, Any]],
+                     protect: int = 0) -> None:
+        """Swap the request view after a mirror sync (L2 self-managed ctx).
+
+        ``messages`` is never touched.  The protected prefix must still
+        match, so a corrupted mirror cannot rewrite the system/task prompt.
+        """
+        safe = max(0, min(int(protect), len(self.messages), len(new_view)))
+        if new_view[:safe] != self.messages[:safe]:
+            raise ValueError("mirror sync refused: protected prefix changed")
+        self.view = new_view
+
     async def refresh_view(self, memory: MemoryGenome, *, trace: Any = None,
                            iteration: int | None = None) -> None:
         """Rebuild the request view via the memory genome's strategy."""

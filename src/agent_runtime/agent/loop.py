@@ -185,6 +185,12 @@ class AgentTurn:
         # (plain-text finishes, invalid submissions). At the limit the
         # turn aborts instead of burning the iteration budget on prose.
         self._finish_violations = 0
+        # Mirror text rendered at the start of the current iteration.  The
+        # read-back diff must use THIS as the baseline: the workspace file
+        # is intentionally stale after tool calls append to the view, and
+        # diffing against a fresh render would mistake that lag for a model
+        # edit (every tool would "sync" and roll back its own observation).
+        self._last_rendered: str | None = None
 
     async def run(self) -> str:
         """Execute the turn and always flush the trace."""
@@ -228,6 +234,7 @@ class AgentTurn:
             try:
                 await history.refresh_view(harness.memory,
                                            trace=trace, iteration=iteration)
+                await self._render_mirror(history)
                 logger.debug(
                     "llm.request.start iteration=%d messages=%d tools=%d stream=%s",
                     iteration, len(history.messages), len(tools.schemas), self.stream)
@@ -431,6 +438,114 @@ class AgentTurn:
                 tool_call, rendered.text, metadata))
             error_budget.note_success()
             self._finish_violations = 0  # executed work resets the fuse
+            receipt = await self._maybe_sync_mirror(history, iteration)
+            if receipt is not None:
+                # View-only: receipts are transient meta-notices.  Dual-write
+                # would inject one user message per tool call into `messages`
+                # (the audit record) and drown the model in self-noise.
+                history.append_to_view({"role": "user", "content": receipt,
+                                        "metadata": {"source": "mirror"}})
+        return None
+
+    def _selfctx_enabled(self) -> bool:
+        return (self.harness.memory.strategy == "self_managed_file"
+                and getattr(self.tools, "workspace", None) is not None)
+
+    async def _render_mirror(self, history: TurnHistory) -> str | None:
+        """Write the request view to the workspace mirror; return its text."""
+        if not self._selfctx_enabled():
+            return None
+        from agent_runtime.agent.context_mirror import render_mirror
+        memory = self.harness.memory
+        try:
+            text = render_mirror(history.view, protect=memory.protect_turns,
+                                 limit_chars=memory.context_budget)
+        except Exception as exc:
+            logger.warning("mirror.render.failed iteration=%s error=%s",
+                           "?", exc)
+            return None
+        workspace = self.tools.workspace
+        try:
+            saved = await workspace.write_file(memory.mirror_path, text)
+        except Exception as exc:
+            logger.warning("mirror.write.failed error=%s", exc)
+            return None
+        if isinstance(saved, dict) and "error" in saved:
+            logger.warning("mirror.write.failed error=%s", saved["error"])
+            return None
+        self._last_rendered = text
+        return text
+
+    async def _maybe_sync_mirror(self, history: TurnHistory,
+                                 iteration: int) -> str | None:
+        """Read the mirror back after a tool ran; replace the view on edit.
+
+        Returns a one-line receipt for the observation stream, or ``None``
+        when the mirror is disabled/unchanged.  ``messages`` is never
+        mutated here — only ``history.view`` is swapped via
+        :meth:`TurnHistory.replace_view`.
+        """
+        if not self._selfctx_enabled():
+            return None
+        memory = self.harness.memory
+        from agent_runtime.agent.context_mirror import (
+            TRIVIAL_SYNC_CHARS, _strip_metadata, apply_mirror)
+        baseline = self._last_rendered
+        try:
+            outcome = await self.tools.workspace.read_file(memory.mirror_path)
+        except Exception as exc:
+            logger.warning("mirror.read.failed iteration=%d error=%s",
+                           iteration, exc)
+            return None
+        if not isinstance(outcome, dict) or "error" in outcome:
+            return None
+        edited = outcome.get("content", "")
+        # Diff against the turn-start render, not a fresh one: the view
+        # legitimately grew since (assistant call + observation), and the
+        # file is supposed to lag by exactly that.  Only `## turn`
+        # sections count; `#` metadata (waterline) is ignored.
+        if baseline is None or not isinstance(edited, str):
+            return None
+        if _strip_metadata(edited) == _strip_metadata(baseline):
+            return None
+        result = apply_mirror(
+            edited, messages=history.messages, view=history.view,
+            protect=memory.protect_turns,
+            limit_chars=(memory.context_budget - memory.reserve_chars
+                         if memory.context_budget > memory.reserve_chars
+                         else memory.context_budget),
+            edit_gate=memory.edit_gate)
+        if result.status == "applied" and result.new_view is not None:
+            try:
+                history.replace_view(result.new_view,
+                                     protect=memory.protect_turns)
+            except ValueError:
+                return ("[context mirror: edit ignored — protected prefix "
+                        "changed; view unchanged]")
+            self.trace.emit("context.mirror_sync", iteration,
+                            before_chars=result.before_chars,
+                            after_chars=result.after_chars,
+                            turns=result.turns)
+            # Re-baseline: the view changed, so the turn-start render is
+            # stale for subsequent tool calls in this same iteration.
+            from agent_runtime.agent.context_mirror import render_mirror
+            try:
+                self._last_rendered = render_mirror(
+                    history.view, protect=memory.protect_turns,
+                    limit_chars=memory.context_budget)
+            except Exception:
+                self._last_rendered = None
+            # Denoise: a round-trip-sized delta is mirror bookkeeping, not
+            # a model edit — no receipt, so the history isn't spammed.
+            if abs(result.before_chars - result.after_chars) < TRIVIAL_SYNC_CHARS:
+                return None
+            return (f"[context mirror: synced — "
+                    f"{result.before_chars}->{result.after_chars} chars, "
+                    f"{result.turns} turns]")
+        if result.status == "rejected_grew":
+            return (f"[context mirror: {result.note}; view unchanged]")
+        if result.status == "rejected_broke_pairing":
+            return (f"[context mirror: {result.note}; view unchanged]")
         return None
 
     async def _finish_or_nudge(self, submit_args: dict[str, Any], iteration: int,

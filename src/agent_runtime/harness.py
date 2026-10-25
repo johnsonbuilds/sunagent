@@ -118,7 +118,7 @@ def _default_llm_errors() -> dict[str, LLMRetryPolicy]:
     return {category: LLMRetryPolicy() for category in LLM_RETRY_CATEGORIES}
 
 MEMORY_STRATEGIES: tuple[str, ...] = (
-    "full_history", "compact_observations", "llm_summary")
+    "full_history", "compact_observations", "llm_summary", "self_managed_file")
 
 # Transcript-economics defaults: declared once here and consumed by the
 # memory strategies (agent.memory) and the observation boundary
@@ -129,9 +129,19 @@ DEFAULT_HEAD_CHARS = 200                 # memory: compaction keeps this much of
 DEFAULT_CONTEXT_BUDGET = 60_000          # memory: request-view char budget that triggers compaction
 DEFAULT_WINDOW_ROUNDS = 12               # memory: compaction comfort window
 DEFAULT_KEEP_RECENT_ROUNDS = 2           # memory: rounds never compacted under budget pressure
-DEFAULT_SUMMARY_TAIL_ROUNDS = 2          # memory: llm_summary verbatim tail
+DEFAULT_SUMMARY_TAIL_ROUNDS = 2              # memory: llm_summary verbatim tail
 DEFAULT_MAX_OBSERVATION_CHARS = 16_000   # control: inline observation budget before windowing
 DEFAULT_SPILL_PREVIEW_CHARS = 4_000      # control: head/tail window half-size
+# Self-managed context (strategy self_managed_file): the request view is
+# rendered to a workspace mirror file the model may compress.
+DEFAULT_RESERVE_CHARS = 12_000           # memory: budget headroom (strict = budget - reserve)
+DEFAULT_MIRROR_PATH = ".live_ctx/LIVE_CTX_MAIN.md"
+DEFAULT_PROTECT_TURNS = 2
+DEFAULT_NUDGE_RATIOS: tuple[float, ...] = (0.25, 0.5, 0.75)
+DEFAULT_URGENT_MULT = 2.0
+DEFAULT_RETRY_MARGIN_CHARS = 6_000
+DEFAULT_MAX_ROLLBACK_RETRIES = 8
+DEFAULT_EDIT_GATE = "fit"                # fit|shrink
 
 
 def _positive_int(value: Any, label: str, default: int) -> int:
@@ -180,6 +190,15 @@ class MemoryGenome:
     window_rounds: int = DEFAULT_WINDOW_ROUNDS
     keep_recent_rounds: int = DEFAULT_KEEP_RECENT_ROUNDS
     summary_tail_rounds: int = DEFAULT_SUMMARY_TAIL_ROUNDS
+    # Self-managed-file knobs (only read when strategy == self_managed_file).
+    reserve_chars: int = DEFAULT_RESERVE_CHARS
+    mirror_path: str = DEFAULT_MIRROR_PATH
+    protect_turns: int = DEFAULT_PROTECT_TURNS
+    nudge_ratios: tuple[float, ...] = DEFAULT_NUDGE_RATIOS
+    urgent_mult: float = DEFAULT_URGENT_MULT
+    retry_margin_chars: int = DEFAULT_RETRY_MARGIN_CHARS
+    max_rollback_retries: int = DEFAULT_MAX_ROLLBACK_RETRIES
+    edit_gate: str = DEFAULT_EDIT_GATE
 
 
 @dataclass(frozen=True)
@@ -426,12 +445,18 @@ def _memory_genome(data: Mapping[str, Any]) -> MemoryGenome:
         raise HarnessError("memory must be a mapping")
     _check_keys(section, {"strategy", "head_chars", "context_budget",
                           "window_rounds", "keep_recent_rounds",
-                          "summary_tail_rounds"}, "memory")
+                          "summary_tail_rounds", "reserve_chars",
+                          "mirror_path", "protect_turns", "nudge_ratios",
+                          "urgent_mult", "retry_margin_chars",
+                          "max_rollback_retries", "edit_gate"}, "memory")
     strategy = _required_text(section, "strategy", "memory", "full_history")
     if strategy not in MEMORY_STRATEGIES:
         raise HarnessError(
             f"memory.strategy must be one of {list(MEMORY_STRATEGIES)}, "
             f"got {strategy!r}")
+    edit_gate = section.get("edit_gate", DEFAULT_EDIT_GATE)
+    if not isinstance(edit_gate, str) or edit_gate not in ("fit", "shrink"):
+        raise HarnessError('memory.edit_gate must be "fit" or "shrink"')
     return MemoryGenome(
         strategy=strategy,
         head_chars=_positive_int(section.get("head_chars"),
@@ -447,7 +472,66 @@ def _memory_genome(data: Mapping[str, Any]) -> MemoryGenome:
                                          DEFAULT_KEEP_RECENT_ROUNDS),
         summary_tail_rounds=_positive_int(section.get("summary_tail_rounds"),
                                           "memory.summary_tail_rounds",
-                                          DEFAULT_SUMMARY_TAIL_ROUNDS))
+                                          DEFAULT_SUMMARY_TAIL_ROUNDS),
+        reserve_chars=_positive_int(section.get("reserve_chars"),
+                                    "memory.reserve_chars",
+                                    DEFAULT_RESERVE_CHARS),
+        mirror_path=_non_empty_text(section.get("mirror_path"),
+                                    "memory.mirror_path", DEFAULT_MIRROR_PATH),
+        protect_turns=_non_negative_int(section.get("protect_turns"),
+                                        "memory.protect_turns",
+                                        DEFAULT_PROTECT_TURNS),
+        nudge_ratios=_ratio_tuple(section.get("nudge_ratios"),
+                                  "memory.nudge_ratios", DEFAULT_NUDGE_RATIOS),
+        urgent_mult=_positive_float(section.get("urgent_mult"),
+                                    "memory.urgent_mult", DEFAULT_URGENT_MULT),
+        retry_margin_chars=_positive_int(
+            section.get("retry_margin_chars"), "memory.retry_margin_chars",
+            DEFAULT_RETRY_MARGIN_CHARS),
+        max_rollback_retries=_non_negative_int(
+            section.get("max_rollback_retries"),
+            "memory.max_rollback_retries", DEFAULT_MAX_ROLLBACK_RETRIES),
+        edit_gate=edit_gate)
+
+
+def _non_empty_text(value: Any, label: str, default: str) -> str:
+    if value is None:
+        return default
+    if not isinstance(value, str) or not value.strip():
+        raise HarnessError(f"{label} must be non-empty text")
+    return value
+
+
+def _non_negative_int(value: Any, label: str, default: int) -> int:
+    if value is None:
+        return default
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise HarnessError(f"{label} must be an integer >= 0")
+    return value
+
+
+def _positive_float(value: Any, label: str, default: float) -> float:
+    if value is None:
+        return default
+    if (not isinstance(value, (int, float)) or isinstance(value, bool)
+            or value <= 0):
+        raise HarnessError(f"{label} must be a number > 0")
+    return float(value)
+
+
+def _ratio_tuple(value: Any, label: str,
+                 default: tuple[float, ...]) -> tuple[float, ...]:
+    if value is None:
+        return default
+    if not isinstance(value, (list, tuple)) or not value:
+        raise HarnessError(f"{label} must be a non-empty list")
+    ratios: list[float] = []
+    for item in value:
+        if not isinstance(item, (int, float)) or isinstance(item, bool) \
+                or not 0 < item < 1:
+            raise HarnessError(f"{label} entries must be in (0, 1)")
+        ratios.append(float(item))
+    return tuple(sorted(ratios))
 
 
 def _recovery_genome(data: Mapping[str, Any]) -> RecoveryGenome:
