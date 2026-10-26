@@ -235,16 +235,11 @@ def compact_observations(messages: list[dict[str, Any]], *,
         for index, message in enumerate(messages):
             role = message.get("role")
             if role == "tool" and 0 < _round_of(index) <= cutoff:
-                # Mirror bookkeeping is infrastructure, not task content:
-                # never compact the mirror's own read/write receipts.
-                if (message.get("metadata") or {}).get("source") == "mirror":
-                    result.append(message)
-                else:
-                    tool = _tool_name_for(messages, index)
-                    compacted = _compact_tool_message(message, tool, head_chars)
-                    if compacted is not message:
-                        compacted_any = True
-                    result.append(compacted)
+                tool = _tool_name_for(messages, index)
+                compacted = _compact_tool_message(message, tool, head_chars)
+                if compacted is not message:
+                    compacted_any = True
+                result.append(compacted)
             elif (role == "assistant" and 0 < _round_of(index) <= cutoff
                     and message.get("reasoning_content")):
                 compacted = _drop_stale_reasoning(message)
@@ -298,47 +293,6 @@ async def apply_memory_strategy(messages: list[dict[str, Any]], memory: MemoryGe
     strategy = memory.strategy
     if strategy == STRATEGY_FULL_HISTORY:
         return messages
-    if strategy == "self_managed_file":
-        # L2 self-managed context: the view is owned by the mirror sync
-        # (loop.py render/read-back); here we only enforce the budget gate
-        # (nudge/rollback notices) without legacy compaction.
-        from agent_runtime.agent.context_budget import ContextBudget
-        from agent_runtime.agent.context_mirror import total_chars
-        gate = ContextBudget(
-            limit_chars=memory.context_budget,
-            reserve_chars=memory.reserve_chars,
-            nudge_ratios=tuple(memory.nudge_ratios),
-            urgent_mult=memory.urgent_mult,
-            retry_margin_chars=memory.retry_margin_chars,
-            max_rollback_retries=memory.max_rollback_retries,
-            protect=memory.protect_turns)
-        working_view = (compact_messages if compact_messages is not None
-                        else messages)
-        decision = gate.evaluate(list(working_view))
-        if decision.messages:
-            view = list(working_view) + [dict(m) for m in decision.messages]
-            if trace is not None:
-                trace.emit(f"memory.{strategy}", iteration,
-                           original_chars=total_chars(messages),
-                           request_chars=total_chars(view),
-                           original_count=len(messages),
-                           request_count=len(view))
-            if decision.action == "rollback":
-                kept = list(working_view)
-                dropped, after = gate.rollback_to_margin(kept)
-                ledger = gate.ledger_message(dropped, after)
-                view = kept[:gate.protect] + [ledger] + kept[gate.protect:]
-                if trace is not None:
-                    trace.emit("budget.rollback", iteration,
-                               dropped=len(dropped), after_chars=after)
-            return view
-        if decision.action in ("rollback", "final_turn", "stop"):
-            # Overflow with no notice attached (should not happen via
-            # evaluate, but stay fail-safe): surface the final-turn notice.
-            notice = {"role": "user",
-                      "content": gate.final_message(decision.used_chars)}
-            return list(working_view) + [notice]
-        return working_view
     if strategy not in (STRATEGY_COMPACT_OBSERVATIONS, STRATEGY_LLM_SUMMARY):
         raise ValueError(f"unknown memory strategy: {strategy!r}")
 
