@@ -32,8 +32,7 @@ class RuntimeHomeTests(unittest.TestCase):
     def test_every_artifact_lands_under_the_same_home(self) -> None:
         with patch.dict(os.environ, {"AGENT_RUNTIME_HOME": "/tmp/elsewhere"}):
             paths = [storage.sessions_dir(), storage.traces_dir(),
-                     storage.memory_dir(), storage.session_memory_path(),
-                     storage.trace_path("run-1")]
+                     storage.memory_dir(), storage.trace_path("run-1")]
 
         for path in paths:
             self.assertTrue(str(path).startswith("/tmp/elsewhere"), path)
@@ -44,13 +43,6 @@ class RuntimeHomeTests(unittest.TestCase):
 
         self.assertEqual(path.name, "run-abc123.jsonl")
         self.assertEqual(path.parent.name, "traces")
-
-    def test_the_summary_is_a_single_file_under_memory(self) -> None:
-        with patch.dict(os.environ, {"AGENT_RUNTIME_HOME": "/tmp/elsewhere"}):
-            path = storage.session_memory_path()
-
-        self.assertEqual(path.name, "session_memory.md")
-        self.assertEqual(path.parent.name, "memory")
 
 
 if __name__ == "__main__":
