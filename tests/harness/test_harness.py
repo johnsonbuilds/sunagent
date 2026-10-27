@@ -273,7 +273,8 @@ class RecoveryLLMErrorsParsingTests(unittest.TestCase):
         untouched = [p.max_retries for category, p
                      in spec.recovery.llm_errors.items()
                      if category != "stream_truncated"]
-        self.assertEqual(untouched, [0, 0, 0])
+        # One zero-retry entry per LLM_RETRY_CATEGORIES member.
+        self.assertEqual(untouched, [0] * (len(LLM_RETRY_CATEGORIES) - 1))
 
     def test_explicit_entry_roundtrips_all_fields(self) -> None:
         spec = from_dict({"recovery": {"tool_error": "feed_error_and_continue",
