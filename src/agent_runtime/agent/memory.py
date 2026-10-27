@@ -106,7 +106,7 @@ def _reasoning_replayed() -> bool:
 
     Budget accounting must match the wire (providers/llm.py projection):
     reasoning only counts toward the context budget when the echo policy
-    will actually replay it.  Lazy import matches ``_get_summary_llm``.
+    will actually replay it.  Lazy import matches ``_get_summary_llm_async``.
     """
     from agent_runtime.providers.llm import reasoning_echo_enabled
     return reasoning_echo_enabled()
@@ -436,6 +436,29 @@ async def apply_memory_strategy(messages: list[dict[str, Any]], memory: MemoryGe
             prompt=options.get("prompt"), trace=trace,
             iteration=iteration)
 
+    if (force_budget is not None and result is not working
+            and result is not messages
+            and _view_size(result, count, unit, usage_anchor)
+            >= _view_size(working, count, unit, usage_anchor)):
+        # Hard gate with no shrinkage: resending this view would be
+        # rejected again, burning a retry. Last resort is the
+        # deterministic compactor (it folds tool observations the summary
+        # path kept verbatim in its tail); if even that cannot shrink,
+        # the refresh hook reports no-progress by size.
+        logger.warning("memory.force_budget.no_shrink falling back to "
+                       "compact_observations")
+        if unit == "tokens":
+            force_chars = max(1, int(force_budget
+                                     * _anchor_chars_per_token(usage_anchor)))
+        else:
+            force_chars = force_budget
+        result = compact_observations(
+            messages, budget=force_chars,
+            window_rounds=memory.window_rounds,
+            keep_recent_rounds=memory.keep_recent_rounds,
+            head_chars=memory.head_chars,
+            exempt_tools=memory.retrieval_exempt_tools)
+
     if trace is not None and result is not working and result is not messages:
         trace.emit(f"memory.{strategy}", iteration,
                    original_chars=_total_chars(messages, count),
@@ -458,21 +481,6 @@ def set_summary_llm(llm: Any) -> None:
     """Override the summarizer LLM (used by tests and custom wiring)."""
     global _summary_llm
     _summary_llm = llm
-
-
-def _get_summary_llm() -> Any:
-    """Lazily build the summarizer LLM used by ``llm_summary``.
-
-    A dedicated model can be selected via ``AGENT_RUNTIME_SUMMARY_MODEL`` so
-    summarization can run on a different (e.g. cheaper/faster) model than the
-    agent's main LLM; it otherwise falls back to the default model.
-    """
-    global _summary_llm
-    if _summary_llm is None:
-        from agent_runtime.providers.llm import OpenAICompatibleLLM
-        _summary_llm = OpenAICompatibleLLM(
-            model=os.getenv("AGENT_RUNTIME_SUMMARY_MODEL") or None)
-    return _summary_llm
 
 
 def _strip_leading_system(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -596,7 +604,8 @@ async def summarize_history(messages: list[dict[str, Any]], *,
       which also keeps the request prefix stable across compactions.
     * summary — a structured snapshot injected as a ``user`` message.
     * preserved users — mid-conversation user messages kept VERBATIM
-      (newest first within ``user_preserve_budget``).  User messages are
+      (newest first within ``user_preserve_budget`` chars, either budget
+      unit).  User messages are
       the authoritative record of intent; summarising them risks the
       next reasoning step missing a mid-session redirect (opencode /
       Codex keep them verbatim for the same reason).  Messages beyond
@@ -640,10 +649,16 @@ async def summarize_history(messages: list[dict[str, Any]], *,
     segment_start = max(starts[0], boundary)
     segment = messages[segment_start:tail_start]
 
-    # Preserve user messages verbatim, newest first within the budget;
-    # overflow users (oldest, past the budget) join the summarizer input.
+    # Preserve user messages verbatim, newest first within the budget
+    # (chars, in either budget unit — see below); overflow users (oldest,
+    # past the budget) join the summarizer input.
+    # NOTE: user_preserve_budget is deliberately metered in chars even
+    # when budget_unit == "tokens". The preserve pool is a coarse guard
+    # ("keep the last few redirects whole"), not a precise budget: routing
+    # it through the anchor-calibrated char/token ratio would inject
+    # conversion noise into a threshold that chars serve fine.
     preserved: list[dict[str, Any]] = []
-    summarizer_input: list[dict[str, Any]] = []
+    novel: list[dict[str, Any]] = []
     user_chars = 0
     for message in reversed(segment):
         if message.get("role") == "user":
@@ -652,11 +667,18 @@ async def summarize_history(messages: list[dict[str, Any]], *,
                 preserved.append(message)
                 user_chars += len(content)
                 continue
-        summarizer_input.append(message)
-    summarizer_input.reverse()
+        novel.append(message)
+    novel.reverse()
     preserved.reverse()  # restore chronological order
+    # The summarizer reads the FULL segment — including the verbatim-kept
+    # users — so the snapshot covers them and the incremental boundary may
+    # safely advance past them. Verbatim users ride the view as well; they
+    # cost a little extra summarizer input (short by construction) but are
+    # never silently dropped by the next compaction.
 
-    if not summarizer_input:
+    summarizer_input = list(segment)
+
+    if not novel:
         # Nothing new to summarise: keep the previous snapshot in place.
         if previous_summary is not None:
             summary_msg = {"role": "user",
@@ -666,7 +688,7 @@ async def summarize_history(messages: list[dict[str, Any]], *,
 
     summary = await _generate_summary(
         summarizer_input, previous_summary=previous_summary,
-        summary_max_tokens=summary_max_tokens)
+        summary_max_tokens=summary_max_tokens, prompt=prompt)
     if summary is None:
         logger.warning("memory.summary.failed falling back to compact_observations")
         return compact_observations(messages, budget=char_budget,

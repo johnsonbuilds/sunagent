@@ -337,6 +337,142 @@ class RetrievalExemptionTests(unittest.TestCase):
         self.assertIn("[observation compacted: grep_search", content)
 
 
+class PromptForwardingTests(unittest.IsolatedAsyncioTestCase):
+    def tearDown(self) -> None:
+        set_summary_llm(None)
+
+    async def test_custom_prompt_reaches_summarizer(self) -> None:
+        messages = build_rounds(6, tool_chars=1_000)
+        llm = FakeSummaryLLM()
+        set_summary_llm(llm)
+        await summarize_history(messages, budget=1, tail_rounds=2,
+                                prompt="CUSTOM SCHEMA V9")
+        self.assertIn("CUSTOM SCHEMA V9",
+                      str(llm.last_messages[-1].get("content", "")))
+
+
+class SummaryCoverageTests(unittest.IsolatedAsyncioTestCase):
+    def tearDown(self) -> None:
+        set_summary_llm(None)
+
+    async def test_preserved_users_fed_to_summarizer(self) -> None:
+        # The snapshot must cover the verbatim-kept users: the incremental
+        # boundary advances past the whole segment, so anything the
+        # summarizer never read would be silently dropped next round.
+        messages = build_rounds(6, tool_chars=1_000,
+                                mid_users=["pivot to task B", "one more thing"])
+        llm = FakeSummaryLLM()
+        set_summary_llm(llm)
+        await summarize_history(messages, budget=1, tail_rounds=2)
+        fed = [str(m.get("content", "")) for m in llm.last_messages]
+        self.assertIn("pivot to task B", fed)
+        self.assertIn("one more thing", fed)
+
+    async def test_all_preserved_segment_reuses_snapshot(self) -> None:
+        # Segment holds only verbatim-kept users: no novel content, so the
+        # previous snapshot is carried forward with zero LLM calls.
+        messages = build_rounds(4, tool_chars=50, mid_users=["U1"])
+        llm = FakeSummaryLLM()
+        set_summary_llm(llm)
+        view = await summarize_history(messages, budget=1, tail_rounds=3,
+                                       boundary=4,
+                                       previous_summary=valid_summary("OLD"))
+        self.assertEqual(llm.call_count, 0)
+        contents = [str(m.get("content", "")) for m in view]
+        self.assertIn("U1", contents)
+        self.assertTrue(any(c.startswith(SUMMARY_PREFIX) and "OLD" in c
+                            for c in contents))
+
+
+class StreamUsageTests(unittest.IsolatedAsyncioTestCase):
+    async def test_consume_stream_harvests_usage(self) -> None:
+        from agent_runtime.agent.chat import _consume_stream
+
+        async def fake_stream(messages, tools=None):
+            yield {"content": "hi", "reasoning_content": ""}
+            yield {"content": "", "reasoning_content": "",
+                   "finish_reason": "stop",
+                   "usage": {"prompt_tokens": 123, "completion_tokens": 4}}
+
+        class FakeStreamLLM:
+            def stream(self, messages, tools=None):
+                return fake_stream(messages, tools)
+
+        response = await _consume_stream(FakeStreamLLM(), [], None, 1)
+        self.assertEqual(response["usage"]["prompt_tokens"], 123)
+        self.assertEqual(response["usage"]["completion_tokens"], 4)
+
+
+class OverflowClassifierTests(unittest.TestCase):
+    def test_specific_markers_match(self) -> None:
+        from agent_runtime.providers.llm import _looks_like_context_overflow as f
+        self.assertTrue(f(RuntimeError("This model's maximum context length "
+                                       "is 128000 tokens")))
+        self.assertTrue(f(RuntimeError("prompt is too long")))
+
+    def test_generic_marker_needs_companion(self) -> None:
+        from agent_runtime.providers.llm import _looks_like_context_overflow as f
+        self.assertTrue(f(RuntimeError("Input tokens exceed the context "
+                                       "window limit")))
+        self.assertFalse(f(RuntimeError("invalid context window parameter")))
+        self.assertFalse(f(RuntimeError("quota: too many tokens this month")))
+
+    def test_unrelated_errors_no_match(self) -> None:
+        from agent_runtime.providers.llm import _looks_like_context_overflow as f
+        self.assertFalse(f(RuntimeError("rate limit exceeded, retry later")))
+        self.assertFalse(f(RuntimeError("connection reset by peer")))
+
+
+class AnchorLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    def tearDown(self) -> None:
+        set_summary_llm(None)
+
+    async def test_anchor_cleared_on_compaction(self) -> None:
+        # The anchor measures the pre-compaction mix; carrying it onto a
+        # summary-heavy view would drift worse than the default ratio, so
+        # refresh drops it until the next billed response re-anchors.
+        conversation = Conversation()
+        conversation.messages.extend(build_rounds(3, tool_chars=50))
+        history = TurnHistory(conversation.messages)
+        history.record_usage(5_000)
+        self.assertIsNotNone(history.usage_anchor)
+        genome = MemoryGenome(strategy="compact_observations",
+                              context_budget=1)
+        await history.refresh_view(genome)
+        self.assertIsNone(history.usage_anchor)
+
+    async def test_anchor_kept_without_compaction(self) -> None:
+        conversation = Conversation()
+        conversation.messages.extend(build_rounds(1, tool_chars=10))
+        history = TurnHistory(conversation.messages)
+        history.record_usage(5_000)
+        genome = MemoryGenome(strategy="compact_observations",
+                              context_budget=10 ** 9)
+        await history.refresh_view(genome)
+        self.assertIsNotNone(history.usage_anchor)
+
+
+class ForceBudgetTests(unittest.IsolatedAsyncioTestCase):
+    def tearDown(self) -> None:
+        set_summary_llm(None)
+
+    async def test_no_shrink_falls_back_to_compact(self) -> None:
+        # Working view already tiny; the summary path can only grow it, so
+        # the hard-gate fallback must kick in (deterministic compaction,
+        # no summary marker) instead of reporting illusory progress.
+        messages = build_rounds(6, tool_chars=1_000)
+        llm = FakeSummaryLLM()
+        set_summary_llm(llm)
+        result = await apply_memory_strategy(
+            messages,
+            MemoryGenome(strategy="llm_summary",
+                         context_budget=10 ** 9),
+            compact_messages=messages[:2], force_budget=1)
+        self.assertFalse(any(
+            str(m.get("content", "")).startswith(SUMMARY_PREFIX)
+            for m in result))
+
+
 class TB4HarnessTests(unittest.TestCase):
     def test_tb_v4_loads_new_genes(self) -> None:
         from agent_runtime.harness import load_named_harness

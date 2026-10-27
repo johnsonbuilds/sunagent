@@ -97,7 +97,7 @@ memory:
   strategy: llm_summary
   budget_unit: tokens
   context_budget: 30000
-  user_preserve_budget: 8000
+  user_preserve_budget: 8000  # chars (either budget unit): coarse verbatim guard, no token conversion by design
   summary_max_tokens: 2048
 recovery:
   tool_error: feed_error_and_continue

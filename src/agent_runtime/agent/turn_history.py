@@ -24,7 +24,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from agent_runtime.agent.memory import SUMMARY_PREFIX, _total_chars, apply_memory_strategy
+from agent_runtime.agent.memory import (
+    SUMMARY_PREFIX,
+    _reasoning_replayed,
+    _total_chars,
+    apply_memory_strategy,
+)
 from agent_runtime.harness import MemoryGenome
 
 
@@ -84,10 +89,13 @@ class TurnHistory:
         provider just accepted. Anchoring at the current view length
         lets the estimator extrapolate only over messages appended
         after the measurement — the short, well-calibrated tail.
+        Reasoning chars are counted exactly as the budget layer counts
+        them (echo policy); otherwise the anchor ratio would skew the
+        moment the endpoint stops replaying reasoning.
         """
         if prompt_tokens > 0:
             self._usage_anchor = (prompt_tokens, len(self.view),
-                                  _total_chars(self.view, True))
+                                  _total_chars(self.view, _reasoning_replayed()))
 
     @property
     def usage_anchor(self) -> tuple[int, int, int] | None:
@@ -109,6 +117,13 @@ class TurnHistory:
             usage_anchor=self._usage_anchor,
             force_budget=force_budget)
         if new_view is not self.messages:
+            if new_view is not self.view:
+                # The view was rebuilt: the anchor measured the OLD mix
+                # (tool-heavy), not the new summary-heavy mix. Drop it so
+                # the next estimate uses the default ratio until the next
+                # billed response re-anchors (one iteration later) —
+                # a stale ratio drifts worse than no ratio.
+                self._usage_anchor = None
             self.view = new_view
             if any(message.get("role") == "user"
                    and str(message.get("content", "")).startswith(SUMMARY_PREFIX)

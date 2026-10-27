@@ -195,12 +195,14 @@ class AgentTurn:
         budget to 70% of the rejected request's estimated size, rebuilds
         the view, and copies the new content into the list reference the
         recovery loop already holds (mutating in place, not rebinding).
-        Returns False when the strategy cannot shrink further, which
-        lets the recovery loop re-raise.
+        Returns False when the strategy cannot shrink further (identity
+        or no size reduction — resending would be rejected again), which
+        lets the recovery loop re-raise instead of burning retries.
         """
         async def _refresh() -> bool:
             current = request_view_size(history.view, self.harness.memory,
                                         history.usage_anchor)
+            anchor_before = history.usage_anchor
             target = max(1, int(current * 0.7))
             view_ref = history.view
             try:
@@ -214,6 +216,14 @@ class AgentTurn:
                     iteration, exc)
                 return False
             if history.view is view_ref:
+                return False
+            # Compare with the pre-refresh anchor: refresh clears it
+            # (stale mix), and measuring old vs new with different rulers
+            # would misjudge shrinkage.
+            if request_view_size(history.view, self.harness.memory,
+                                 anchor_before) >= current:
+                logger.warning(
+                    "llm.context_window.no_shrink iteration=%d", iteration)
                 return False
             view_ref[:] = history.view
             return True
@@ -514,7 +524,9 @@ class AgentTurn:
                             messages=list(history.view)) as span_meta:
                 response = await chat_with_recovery(
                     self.llm, history.view, None, iteration, harness,
-                    stream=self.stream, trace=trace, events=events)
+                    stream=self.stream, trace=trace, events=events,
+                    refresh=self._context_window_refresh(
+                        history, iteration))
                 span_meta.update(tool_count=0, tools=[], final=True)
                 logger.debug("llm.request.end iteration=%d content_chars=%d tool_calls=[]",
                              iteration, len(response.get("content") or ""))

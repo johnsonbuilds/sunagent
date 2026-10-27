@@ -134,7 +134,7 @@ DEFAULT_CONTEXT_BUDGET = 60_000          # memory: request-view char budget that
 DEFAULT_WINDOW_ROUNDS = 12               # memory: compaction comfort window
 DEFAULT_KEEP_RECENT_ROUNDS = 2           # memory: rounds never compacted under budget pressure
 DEFAULT_SUMMARY_TAIL_ROUNDS = 2          # memory: llm_summary verbatim tail
-DEFAULT_USER_PRESERVE_BUDGET = 8_000     # memory: chars of mid-conversation user messages kept verbatim (newest first)
+DEFAULT_USER_PRESERVE_BUDGET = 8_000     # memory: CHARS (either budget unit) of mid-conversation user messages kept verbatim (newest first). Always chars by design: the preserve pool is a coarse guard, and routing it through the anchor-calibrated char/token ratio would inject conversion noise into a threshold chars serve fine.
 DEFAULT_SUMMARY_MAX_TOKENS = 2_048       # memory: summarizer output cap; longer output is rejected, falls back
 
 # Tool names whose observations outlive the comfort window verbatim and
@@ -198,7 +198,7 @@ class MemoryGenome:
     window_rounds: int = DEFAULT_WINDOW_ROUNDS
     keep_recent_rounds: int = DEFAULT_KEEP_RECENT_ROUNDS
     summary_tail_rounds: int = DEFAULT_SUMMARY_TAIL_ROUNDS
-    user_preserve_budget: int = DEFAULT_USER_PRESERVE_BUDGET
+    user_preserve_budget: int = DEFAULT_USER_PRESERVE_BUDGET  # chars, either budget unit (coarse guard; no token conversion)
     summary_max_tokens: int = DEFAULT_SUMMARY_MAX_TOKENS
     retrieval_exempt_tools: tuple[str, ...] = DEFAULT_RETRIEVAL_EXEMPT_TOOLS
 

@@ -96,25 +96,43 @@ class ContextWindowExceededError(RuntimeError):
 # same 400 differently ("context_length_exceeded", "maximum context
 # length", …), so the match is a lowercase substring scan over the
 # exception text — same approach as the OpenHands error classifier.
-# Markers are chosen to only appear in over-limit rejections; generic
-# provider errors never match them.
-_CONTEXT_OVERFLOW_MARKERS: tuple[str, ...] = (
+# Specific markers match on their own; the two generic ones ("context
+# window", "too many tokens") only count alongside an overflow companion
+# word, so unrelated errors mentioning a context window (e.g. "invalid
+# context window parameter") stay on the provider_error retry policy
+# instead of burning the hard gate's compaction budget.
+_CONTEXT_OVERFLOW_SPECIFIC: tuple[str, ...] = (
     "context_length_exceeded",
     "maximum context length",
-    "context window",
     "reduce the length",
     "input is too long",
     "prompt is too long",
-    "too many tokens",
     "exceeds the maximum number of tokens",
     "context length of",
+)
+_CONTEXT_OVERFLOW_GENERIC: tuple[str, ...] = (
+    "context window",
+    "too many tokens",
+)
+_CONTEXT_OVERFLOW_COMPANIONS: tuple[str, ...] = (
+    "exceed",
+    "too long",
+    "too large",
+    "maximum",
+    "limit",
+    "reduce",
+    "length",
 )
 
 
 def _looks_like_context_overflow(exc: BaseException) -> bool:
     """Whether a provider error text matches a context-window rejection."""
     haystack = str(exc).lower()
-    return any(marker in haystack for marker in _CONTEXT_OVERFLOW_MARKERS)
+    if any(marker in haystack for marker in _CONTEXT_OVERFLOW_SPECIFIC):
+        return True
+    if any(marker in haystack for marker in _CONTEXT_OVERFLOW_GENERIC):
+        return any(word in haystack for word in _CONTEXT_OVERFLOW_COMPANIONS)
+    return False
 
 
 def _usage_dict(usage: Any) -> dict[str, int]:

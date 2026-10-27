@@ -127,6 +127,7 @@ async def _consume_stream(llm: ChatModel, messages: list[dict[str, Any]],
     reasoning: list[str] = []
     tool_calls: list[dict[str, Any]] = []
     finish_reason: str | None = None
+    usage: dict[str, Any] | None = None
     reasoning_budget = _reasoning_budget_chars()
     logger.debug("llm.stream.start iteration=%d", iteration)
     stream_iterator = llm.stream(messages, tools).__aiter__()
@@ -148,6 +149,13 @@ async def _consume_stream(llm: ChatModel, messages: list[dict[str, Any]],
             ) from exc
         if not isinstance(chunk, Mapping):
             raise TypeError("LLM stream chunks must be objects")
+        # A trailing usage chunk carries no payload but may or may not
+        # carry finish_reason (provider-dependent): harvest usage first so
+        # the token-budget anchor is fed on streaming turns too.
+        chunk_usage = chunk.get("usage")
+        if isinstance(chunk_usage, Mapping) and chunk_usage:
+            usage = {"prompt_tokens": int(chunk_usage.get("prompt_tokens") or 0),
+                     "completion_tokens": int(chunk_usage.get("completion_tokens") or 0)}
         reason = chunk.get("finish_reason")
         if isinstance(reason, str) and reason:
             finish_reason = reason
@@ -197,6 +205,8 @@ async def _consume_stream(llm: ChatModel, messages: list[dict[str, Any]],
     response: dict[str, Any] = {"content": "".join(content), "tool_calls": tool_calls}
     if reasoning:
         response["reasoning_content"] = "".join(reasoning)
+    if usage is not None:
+        response["usage"] = usage
     if finish_reason is None:
         # The server cut the stream without a finish marker (observed on
         # free-tier reasoning models after very long thinking). Treat the
