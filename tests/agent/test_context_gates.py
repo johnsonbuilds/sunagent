@@ -44,7 +44,7 @@ def build_rounds(rounds: int, tool_chars: int = 100,
             }],
         })
         messages.append({
-            "role": "tool", "_id": f"call-{index}",
+            "role": "tool", "tool_call_id": f"call-{index}",
             "content": "x" * tool_chars,
         })
     return messages
@@ -277,6 +277,64 @@ class TurnHistoryAnchorTests(unittest.IsolatedAsyncioTestCase):
         await history.refresh_view(genome)
         self.assertGreater(history._summary_boundary, 0)
         set_summary_llm(None)
+
+
+class RetrievalExemptionTests(unittest.TestCase):
+    def _mixed_rounds(self, rounds: int, tool_chars: int = 1_000) -> list[dict[str, Any]]:
+        """system + task, then alternating grep_search / run_command rounds."""
+        out = [{"role": "system", "content": "sys"},
+               {"role": "user", "content": "do the task"}]
+        for i in range(rounds):
+            tool = "grep_search" if i % 2 == 0 else "run_command"
+            out.append({"role": "assistant", "content": "",
+                        "tool_calls": [{"id": f"c{i}", "type": "function",
+                                        "function": {"name": tool, "arguments": "{}"}}]})
+            out.append({"role": "tool", "tool_call_id": f"c{i}",
+                        "content": (f"src/app.py:{40 + i}: def handler" + "x" * tool_chars)})
+        return out
+
+    def test_exempt_survives_pass1_nonexempt_folds(self) -> None:
+        from agent_runtime.agent.memory import compact_observations, DEFAULT_HEAD_CHARS
+        messages = self._mixed_rounds(12, tool_chars=1_000)
+        # Budget just above what pass-1 folding of the non-exempt rounds
+        # achieves, so passes 2/3 stay out of the picture.
+        view = compact_observations(messages, budget=10_000,
+                                    window_rounds=4, exempt_tools=("grep_search",))
+        tool_contents = {m["tool_call_id"]: str(m.get("content", ""))
+                         for m in view if m.get("role") == "tool"}
+        # Exempt grep output survives verbatim, un-truncated.
+        self.assertIn("src/app.py:40: def handler", tool_contents["c0"])
+        self.assertTrue(tool_contents["c0"].endswith("x" * 1000))
+        # Non-exempt run_command output folds: the compaction banner
+        # (~180 chars) plus the head_chars excerpt.
+        self.assertIn("[observation compacted", tool_contents["c1"])
+        self.assertLess(len(tool_contents["c1"]), DEFAULT_HEAD_CHARS + 200)
+
+    def test_exempt_folds_under_hard_budget_pressure(self) -> None:
+        from agent_runtime.agent.memory import compact_observations
+        messages = self._mixed_rounds(12, tool_chars=1_000)
+        # Tiny budget: pass 2 exhausts non-exempt rounds, pass 3 folds
+        # the exempt ones too - exemption is a fold order, not a
+        # budget exemption.
+        view = compact_observations(messages, budget=200,
+                                    window_rounds=4, keep_recent_rounds=2,
+                                    exempt_tools=("grep_search",))
+        tool_contents = [str(m.get("content", ""))
+                         for m in view if m.get("role") == "tool"]
+        old_greps = [c for i, c in enumerate(tool_contents)
+                     if i < len(tool_contents) - 4
+                     and c.startswith("src/app.py")]
+        self.assertEqual(old_greps, [],
+                         "old exempt observations must fold under budget pressure")
+
+    def test_no_exemption_by_default(self) -> None:
+        from agent_runtime.agent.memory import compact_observations
+        messages = self._mixed_rounds(12, tool_chars=1_000)
+        view = compact_observations(messages, budget=10_000, window_rounds=4)
+        first_tool = next(m for m in view if m.get("role") == "tool")
+        # Without the gene everything folds the same way, including grep.
+        content = str(first_tool.get("content", ""))
+        self.assertIn("[observation compacted: grep_search", content)
 
 
 class TB4HarnessTests(unittest.TestCase):

@@ -260,16 +260,16 @@ def _tool_name_for(messages: list[dict[str, Any]],
                     return (call.get("function") or {}).get("name") or "tool"
     return "tool"
 
-
 def compact_observations(messages: list[dict[str, Any]], *,
                          budget: int = DEFAULT_CONTEXT_BUDGET,
                          window_rounds: int = DEFAULT_WINDOW_ROUNDS,
                          keep_recent_rounds: int = DEFAULT_KEEP_RECENT_ROUNDS,
                          head_chars: int = DEFAULT_HEAD_CHARS,
+                         exempt_tools: tuple[str, ...] = (),
                          ) -> list[dict[str, Any]]:
     """Return a compacted copy of ``messages`` when it exceeds ``budget``.
 
-    Two passes, oldest first:
+    Three passes, oldest first:
 
     1. Compact tool observations in rounds older than the last
        ``window_rounds`` rounds (the comfort zone that is normally kept
@@ -277,11 +277,20 @@ def compact_observations(messages: list[dict[str, Any]], *,
        pad the same way (stale chain-of-thought is replayed whole yet
        rarely reused; a truncated fragment would mislead, so it goes
        wholesale — the key stays for echo contracts).
+       Observations of ``exempt_tools`` survive pass 1 verbatim.
     2. If the request would still exceed ``budget``, keep compacting
        tool observations round by round from the oldest round still
        intact — but never inside the most recent ``keep_recent_rounds``
        rounds.  Those are the active working context; if they alone
        exceed the budget the budget yields, not the context.
+       Exempt observations still survive: retrieval anchors (grep/read
+       results) outlive non-exempt ones so multi-step reasoning keeps
+       its references without a re-query round (Gemini CLI exempts
+       retrieval tools from its collapse layer for the same reason).
+    3. If the budget is still exceeded after pass 2 exhausted the
+       non-exempt rounds, exempt observations fold too, using the same
+       ``head_chars``.  Exemption is a fold order, never an exemption
+       from the budget.
 
     Reasoning chars count toward ``budget`` only when the echo policy
     will actually replay them on the wire (see :func:`_reasoning_replayed`
@@ -305,7 +314,10 @@ def compact_observations(messages: list[dict[str, Any]], *,
             position += 1
         return position
 
-    def _compact_at(cutoff: int) -> tuple[list[dict[str, Any]], bool]:
+    exempt = set(exempt_tools)
+
+    def _compact_at(cutoff: int,
+                    fold_exempt: bool = False) -> tuple[list[dict[str, Any]], bool]:
         """Compact tool messages and stale reasoning in rounds 1..cutoff."""
         result: list[dict[str, Any]] = []
         compacted_any = False
@@ -313,6 +325,9 @@ def compact_observations(messages: list[dict[str, Any]], *,
             role = message.get("role")
             if role == "tool" and 0 < _round_of(index) <= cutoff:
                 tool = _tool_name_for(messages, index)
+                if not fold_exempt and tool in exempt:
+                    result.append(message)
+                    continue
                 compacted = _compact_tool_message(message, tool, head_chars)
                 if compacted is not message:
                     compacted_any = True
@@ -333,6 +348,7 @@ def compact_observations(messages: list[dict[str, Any]], *,
 
     # Pass 2: under budget pressure, shrink the window round by round
     # until the budget is met or only the keep-recent core remains.
+    # Exempt observations keep surviving this pass.
     cutoff = window_cutoff
     while (_total_chars(result, count) > budget
            and cutoff < never_touch_from_round):
@@ -340,6 +356,13 @@ def compact_observations(messages: list[dict[str, Any]], *,
         result, compacted_any = _compact_at(cutoff)
         if not compacted_any:
             break
+
+    # Pass 3: budget still exceeded — exempt observations fold too.
+    # The exemption is a fold ORDER (retrieval anchors fold last), not
+    # an exemption from the budget; keep_recent_rounds still yields
+    # nothing (the budget yields to the working core, as before).
+    if exempt and _total_chars(result, count) > budget:
+        result, compacted_any = _compact_at(cutoff, fold_exempt=True)
     return result
 
 
@@ -397,7 +420,8 @@ async def apply_memory_strategy(messages: list[dict[str, Any]], memory: MemoryGe
         result = compact_observations(messages, budget=char_budget,
                                       window_rounds=memory.window_rounds,
                                       keep_recent_rounds=memory.keep_recent_rounds,
-                                      head_chars=memory.head_chars)
+                                      head_chars=memory.head_chars,
+                                      exempt_tools=memory.retrieval_exempt_tools)
     else:  # STRATEGY_LLM_SUMMARY
         previous_summary = _extract_summary(working)
         result = await summarize_history(
@@ -408,6 +432,7 @@ async def apply_memory_strategy(messages: list[dict[str, Any]], memory: MemoryGe
             boundary=boundary,
             previous_summary=previous_summary,
             unit=unit, usage_anchor=usage_anchor,
+            exempt_tools=memory.retrieval_exempt_tools,
             prompt=options.get("prompt"), trace=trace,
             iteration=iteration)
 
@@ -557,6 +582,7 @@ async def summarize_history(messages: list[dict[str, Any]], *,
                             previous_summary: str | None = None,
                             unit: str = "chars",
                             usage_anchor: tuple[int, int, int] | None = None,
+                            exempt_tools: tuple[str, ...] = (),
                             prompt: str | None = None,
                             trace: Any = None,
                             iteration: int | None = None,
@@ -643,12 +669,14 @@ async def summarize_history(messages: list[dict[str, Any]], *,
         summary_max_tokens=summary_max_tokens)
     if summary is None:
         logger.warning("memory.summary.failed falling back to compact_observations")
-        return compact_observations(messages, budget=char_budget)
+        return compact_observations(messages, budget=char_budget,
+                                    exempt_tools=exempt_tools)
     try:
         _validate_summary(summary, summary_max_tokens=summary_max_tokens)
     except ValueError as exc:
         logger.warning("memory.summary.invalid %s falling back to compact_observations", exc)
-        return compact_observations(messages, budget=char_budget)
+        return compact_observations(messages, budget=char_budget,
+                                    exempt_tools=exempt_tools)
     summary_msg = {"role": "user", "content": SUMMARY_PREFIX + summary}
     view = leading + [summary_msg] + preserved + tail
     if trace is not None:
