@@ -158,7 +158,11 @@ def _view_size(messages: list[dict[str, Any]], count_reasoning: bool,
         return _estimate_tokens(_total_chars(messages, count_reasoning))
     tokens, anchor_len, anchor_chars = anchor
     ratio = tokens / anchor_chars if anchor_chars > 0 else 0.25
-    if len(messages) <= anchor_len:
+    if len(messages) == anchor_len:
+        # Exactly the measured request: the provider's number is the
+        # truth, no conversion noise.
+        return max(1, tokens)
+    if len(messages) < anchor_len:
         # View only shrank since the measurement: scale the measured
         # number down by the calibrated ratio.
         return max(1, int(_total_chars(messages, count_reasoning) * ratio))
