@@ -473,6 +473,86 @@ class ForceBudgetTests(unittest.IsolatedAsyncioTestCase):
             for m in result))
 
 
+class BoundaryChaseTests(unittest.IsolatedAsyncioTestCase):
+    """The incremental boundary must not chase len(messages) on no-op refreshes.
+
+    Production freeze (video-processing/tb-v4): refresh runs every iteration,
+    and the old prefix-presence check moved the boundary on each one — even
+    when the view was already under budget. By the next real compaction the
+    boundary sat inside the verbatim tail, the segment came out empty, and
+    every later compaction reused the first snapshot byte-identically.
+    """
+
+    def tearDown(self) -> None:
+        set_summary_llm(None)
+
+    def _history(self, rounds: int, chars: int = 3000) -> TurnHistory:
+        conversation = Conversation()
+        conversation.messages.extend([
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "do the task"},
+        ])
+        for i in range(rounds):
+            conversation.messages.append({
+                "role": "assistant", "content": "",
+                "tool_calls": [{
+                    "id": f"call-{i}", "type": "function",
+                    "function": {"name": "run_command", "arguments": "{}"},
+                }],
+            })
+            conversation.messages.append({
+                "role": "tool", "tool_call_id": f"call-{i}",
+                "content": "x" * chars,
+            })
+        return TurnHistory(conversation.messages)
+
+    async def test_noop_refreshes_do_not_freeze_next_summary(self) -> None:
+        class CountingLLM:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def chat(self, messages, tools=None, **kwargs):
+                self.calls += 1
+                n = self.calls
+                return {"content": valid_summary(f"SNAP-{n}"),
+                        "tool_calls": []}
+
+        llm = CountingLLM()
+        set_summary_llm(llm)
+        genome = MemoryGenome(strategy="llm_summary", budget_unit="chars",
+                              context_budget=20_000)
+        history = self._history(16)
+        # First compaction, like the agent loop: refresh, then work.
+        await history.refresh_view(genome)
+        self.assertEqual(llm.calls, 1)
+        first_boundary = history.summary_boundary
+        self.assertGreater(first_boundary, 0)
+        # Eleven more iterations, refreshing every time exactly like the
+        # loop does: most refreshes are no-ops (view still under budget).
+        for i in range(11):
+            history.append({
+                "role": "assistant", "content": "",
+                "tool_calls": [{
+                    "id": f"later-{i}", "type": "function",
+                    "function": {"name": "run_command",
+                                 "arguments": "{}"},
+                }],
+            })
+            history.append({
+                "role": "tool", "tool_call_id": f"later-{i}",
+                "content": "y" * 3000,
+            })
+            await history.refresh_view(genome)
+        # The growth must have forced genuine re-summarization — a frozen
+        # first-snapshot reuse would leave the call count at 1.
+        self.assertGreaterEqual(llm.calls, 2)
+        self.assertGreater(history.summary_boundary, first_boundary)
+        view_text = " ".join(str(m.get("content", ""))
+                             for m in history.view)
+        self.assertIn(f"SNAP-{llm.calls}", view_text)
+        self.assertNotIn("SNAP-1", view_text)
+
+
 class TB4HarnessTests(unittest.TestCase):
     def test_tb_v4_loads_new_genes(self) -> None:
         from agent_runtime.harness import load_named_harness

@@ -11,9 +11,12 @@ Two cross-compaction anchors live here as projection metadata (they
 never travel on the wire):
 
 * ``_summary_boundary`` — the ``messages`` length when the latest
-  compaction summary was produced. The incremental summarizer reads
-  only ``messages[boundary:]`` plus the previous summary, so a second
-  compaction costs O(new segment), not O(full history).
+  compaction summary was PRODUCED. Only a genuinely new snapshot moves it
+  (no-op refreshes and snapshot reuses keep it): the incremental
+  summarizer reads only ``messages[boundary:]`` plus the previous
+  summary, so a second compaction costs O(new segment), not O(full
+  history). Advancing it on every refresh would chase ``len(messages)``
+  and starve later compactions of input, freezing the snapshot.
 * ``_usage_anchor`` — (measured prompt tokens, view length) from the
   last response that reported billed usage. Token-budget estimates
   extrapolate from this anchor: measured truth below it, per-message
@@ -25,7 +28,7 @@ from __future__ import annotations
 from typing import Any
 
 from agent_runtime.agent.memory import (
-    SUMMARY_PREFIX,
+    _extract_summary,
     _reasoning_replayed,
     _total_chars,
     apply_memory_strategy,
@@ -124,10 +127,16 @@ class TurnHistory:
                 # billed response re-anchors (one iteration later) —
                 # a stale ratio drifts worse than no ratio.
                 self._usage_anchor = None
+            old_summary = _extract_summary(self.view)
             self.view = new_view
-            if any(message.get("role") == "user"
-                   and str(message.get("content", "")).startswith(SUMMARY_PREFIX)
-                   for message in self.view):
+            new_summary = _extract_summary(new_view)
+            # Advance past the summarized region only when a NEW snapshot
+            # was produced. No-op refreshes (view already under budget) and
+            # snapshot reuses (nothing novel to summarise) keep the old text:
+            # advancing there would chase len(messages) every iteration,
+            # leaving later compactions an empty segment and freezing the
+            # snapshot forever while history grows past it.
+            if new_summary is not None and new_summary != old_summary:
                 self._summary_boundary = len(self.messages)
 
 
