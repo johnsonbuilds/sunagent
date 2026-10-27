@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from typing import Any, Protocol
 
 from agent_runtime.agent.tool_dispatch import _tool_trace_metadata
@@ -245,12 +245,22 @@ async def chat_with_recovery(llm: ChatModel, messages: list[dict[str, Any]],
                              harness: HarnessSpec, *,
                              stream: bool = False,
                              trace: RunTrace | None = None,
-                             events: EventEmitter | None = None) -> dict[str, Any]:
+                             events: EventEmitter | None = None,
+                             refresh: Callable[[], Awaitable[bool]] | None = None,
+                             ) -> dict[str, Any]:
     """One chat request, retried per the ``recovery.llm_errors`` gene.
 
     Retries replay the identical request in place; they do not consume
     ``control.max_iterations``. Attempt counts are kept per category so
     one exhausted policy cannot eat another category's budget.
+
+    The ``context_window`` category is the exception: replaying the same
+    over-limit request can never succeed, so when a ``refresh`` hook is
+    supplied the caller compacts the request view *in place* (mutating
+    ``messages``' contents, not rebinding it) before the resend; without
+    a hook — or when the hook reports nothing further to compact — the
+    error propagates.  No backoff sleep on this category: the compaction
+    itself is the delay.
     """
     attempted: dict[str, int] = {}
     while True:
@@ -265,6 +275,9 @@ async def chat_with_recovery(llm: ChatModel, messages: list[dict[str, Any]],
             tried = attempted.get(category, 0)
             if policy is None or tried >= policy.max_retries:
                 raise
+            if category == "context_window":
+                if refresh is None or not await refresh():
+                    raise
             delay = policy.delay(tried + 1)
             logger.warning(
                 "llm.retry iteration=%d category=%s attempt=%d/%d "

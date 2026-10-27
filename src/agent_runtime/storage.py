@@ -67,21 +67,12 @@ def memory_dir() -> Path:
     return runtime_home() / "memory"
 
 
-def session_memory_path() -> Path:
-    """The file holding the most recent compaction summary.
-
-    One file per run, overwritten by each new summary: the summary
-    describes the current task, so an older one has no value.
-    """
-    return memory_dir() / "session_memory.md"
-
-
 def trace_path(run_id: str) -> Path:
     """The trace file for one agent turn."""
     return traces_dir() / f"{run_id}.jsonl"
 
 
 __all__ = [
-    "DEFAULT_HOME_DIRNAME", "memory_dir", "runtime_home", "session_memory_path",
+    "DEFAULT_HOME_DIRNAME", "memory_dir", "runtime_home",
     "sessions_dir", "trace_path", "traces_dir",
 ]

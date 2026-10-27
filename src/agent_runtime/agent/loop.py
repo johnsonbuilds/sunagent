@@ -45,6 +45,7 @@ from agent_runtime.agent.verification import (
     submit_nudge,
 )
 from agent_runtime.agent.observations import ObservationFormatter
+from agent_runtime.agent.memory import request_view_size
 from agent_runtime.agent.turn_history import (
     Conversation,
     TurnHistory,
@@ -186,6 +187,38 @@ class AgentTurn:
         # turn aborts instead of burning the iteration budget on prose.
         self._finish_violations = 0
 
+    def _context_window_refresh(self, history: TurnHistory,
+                                iteration: int):
+        """Build the hard-gate refresh hook handed to chat recovery.
+
+        On a context-window rejection the hook shrinks the working
+        budget to 70% of the rejected request's estimated size, rebuilds
+        the view, and copies the new content into the list reference the
+        recovery loop already holds (mutating in place, not rebinding).
+        Returns False when the strategy cannot shrink further, which
+        lets the recovery loop re-raise.
+        """
+        async def _refresh() -> bool:
+            current = request_view_size(history.view, self.harness.memory,
+                                        history.usage_anchor)
+            target = max(1, int(current * 0.7))
+            view_ref = history.view
+            try:
+                await history.refresh_view(self.harness.memory,
+                                           trace=self.trace,
+                                           iteration=iteration,
+                                           force_budget=target)
+            except Exception as exc:
+                logger.warning(
+                    "llm.context_window.refresh_failed iteration=%d %s",
+                    iteration, exc)
+                return False
+            if history.view is view_ref:
+                return False
+            view_ref[:] = history.view
+            return True
+        return _refresh
+
     async def run(self) -> str:
         """Execute the turn and always flush the trace."""
         agent_meta: dict[str, Any] = {}
@@ -237,9 +270,14 @@ class AgentTurn:
                                 messages=list(history.view)) as span_meta:
                     response = await chat_with_recovery(
                         self.llm, history.view, tools.schemas, iteration,
-                        harness, stream=self.stream, trace=trace, events=events)
+                        harness, stream=self.stream, trace=trace, events=events,
+                        refresh=self._context_window_refresh(
+                            history, iteration))
                     tool_calls = response.get("tool_calls") or []
                     content = response.get("content") or ""
+                    usage = response.get("usage")
+                    if usage and int(usage.get("prompt_tokens") or 0) > 0:
+                        history.record_usage(int(usage["prompt_tokens"]))
 
                     span_meta.update(
                         tool_count=len(tool_calls),

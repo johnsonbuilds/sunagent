@@ -18,18 +18,16 @@ caller; this module holds no policy constants of its own.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
-from pathlib import Path
 from typing import Any
-
-from agent_runtime import storage
 from agent_runtime.harness import (
     DEFAULT_CONTEXT_BUDGET,
     DEFAULT_HEAD_CHARS,
     DEFAULT_KEEP_RECENT_ROUNDS,
+    DEFAULT_SUMMARY_MAX_TOKENS,
     DEFAULT_SUMMARY_TAIL_ROUNDS,
+    DEFAULT_USER_PRESERVE_BUDGET,
     DEFAULT_WINDOW_ROUNDS,
     MemoryGenome,
 )
@@ -76,6 +74,32 @@ Use exactly these sections:
 - **Relevant Files / Artifacts**: ...
 - **Environment State**: ..."""
 
+# Appended when a previous compaction summary exists: the new summary
+# must integrate it, not replace it — earlier work state and failure
+# lessons survive every compaction (same anchoring rule as Gemini CLI /
+# opencode update mode).
+SUMMARIZER_INTEGRATION_ADDENDUM = """
+
+A PREVIOUS SNAPSHOT follows the conversation history (or is interleaved
+with it). You must merge it into your output:
+- Fold the previous "Work State", "Next Move" and "Working Context &
+  Anchors" into the new snapshot; keep items that are still relevant,
+  mark superseded ones as completed/obsolete, never silently drop a
+  failure lesson.
+- The output is the single consolidated snapshot for the whole session,
+  in the same section format as before."""
+
+
+def _extract_summary(view: list[dict[str, Any]] | None) -> str | None:
+    """The previous compaction summary text carried in a request view."""
+    if not view:
+        return None
+    for message in view:
+        if (message.get("role") == "user"
+                and str(message.get("content", "")).startswith(SUMMARY_PREFIX)):
+            return str(message["content"])[len(SUMMARY_PREFIX):]
+    return None
+
 
 def _reasoning_replayed() -> bool:
     """Whether reasoning_content rides the wire for the configured endpoint.
@@ -108,6 +132,59 @@ def _total_chars(messages: list[dict[str, Any]],
                  count_reasoning: bool = True) -> int:
     return sum(_message_chars(message, count_reasoning)
                for message in messages)
+
+
+def _estimate_tokens(chars: int, chars_per_token: float = 4.0) -> int:
+    """Char-based token estimate; code-heavy mixed text runs ~3-5 c/t."""
+    return max(1, int(chars / chars_per_token)) if chars else 0
+
+
+def _view_size(messages: list[dict[str, Any]], count_reasoning: bool,
+               unit: str,
+               anchor: tuple[int, int, int] | None = None) -> int:
+    """Request-view size in the genome's budget unit.
+
+    ``chars`` (legacy) counts characters.  ``tokens`` extrapolates from
+    the usage anchor ``(measured prompt tokens, view length, view chars)``
+    produced by the last billed response: below the anchor's view length
+    the provider's own number is the truth, above it the tail is
+    estimated with the char ratio the anchor itself calibrates — no
+    tokenizer dependency, and the ratio converges as measurements
+    accumulate.
+    """
+    if unit != "tokens":
+        return _total_chars(messages, count_reasoning)
+    if anchor is None:
+        return _estimate_tokens(_total_chars(messages, count_reasoning))
+    tokens, anchor_len, anchor_chars = anchor
+    ratio = tokens / anchor_chars if anchor_chars > 0 else 0.25
+    if len(messages) == anchor_len:
+        # Exactly the measured request: the provider's number is the
+        # truth, no conversion noise.
+        return max(1, tokens)
+    if len(messages) < anchor_len:
+        # View only shrank since the measurement: scale the measured
+        # number down by the calibrated ratio.
+        return max(1, int(_total_chars(messages, count_reasoning) * ratio))
+    tail_chars = _total_chars(messages[anchor_len:], count_reasoning)
+    return tokens + int(tail_chars * ratio)
+
+
+def _anchor_chars_per_token(anchor: tuple[int, int, int] | None) -> float:
+    """Char-per-token ratio implied by the usage anchor (default 4.0)."""
+    if anchor is None:
+        return 4.0
+    tokens, _, anchor_chars = anchor
+    if tokens <= 0 or anchor_chars <= 0:
+        return 4.0
+    return anchor_chars / tokens
+
+
+def request_view_size(view: list[dict[str, Any]], memory: MemoryGenome,
+                      usage_anchor: tuple[int, int, int] | None = None) -> int:
+    """Request-view size in the genome's unit, for gate decisions."""
+    return _view_size(view, _reasoning_replayed(), memory.budget_unit,
+                      usage_anchor)
 
 
 def _round_starts(messages: list[dict[str, Any]]) -> list[int]:
@@ -183,16 +260,16 @@ def _tool_name_for(messages: list[dict[str, Any]],
                     return (call.get("function") or {}).get("name") or "tool"
     return "tool"
 
-
 def compact_observations(messages: list[dict[str, Any]], *,
                          budget: int = DEFAULT_CONTEXT_BUDGET,
                          window_rounds: int = DEFAULT_WINDOW_ROUNDS,
                          keep_recent_rounds: int = DEFAULT_KEEP_RECENT_ROUNDS,
                          head_chars: int = DEFAULT_HEAD_CHARS,
+                         exempt_tools: tuple[str, ...] = (),
                          ) -> list[dict[str, Any]]:
     """Return a compacted copy of ``messages`` when it exceeds ``budget``.
 
-    Two passes, oldest first:
+    Three passes, oldest first:
 
     1. Compact tool observations in rounds older than the last
        ``window_rounds`` rounds (the comfort zone that is normally kept
@@ -200,11 +277,20 @@ def compact_observations(messages: list[dict[str, Any]], *,
        pad the same way (stale chain-of-thought is replayed whole yet
        rarely reused; a truncated fragment would mislead, so it goes
        wholesale — the key stays for echo contracts).
+       Observations of ``exempt_tools`` survive pass 1 verbatim.
     2. If the request would still exceed ``budget``, keep compacting
        tool observations round by round from the oldest round still
        intact — but never inside the most recent ``keep_recent_rounds``
        rounds.  Those are the active working context; if they alone
        exceed the budget the budget yields, not the context.
+       Exempt observations still survive: retrieval anchors (grep/read
+       results) outlive non-exempt ones so multi-step reasoning keeps
+       its references without a re-query round (Gemini CLI exempts
+       retrieval tools from its collapse layer for the same reason).
+    3. If the budget is still exceeded after pass 2 exhausted the
+       non-exempt rounds, exempt observations fold too, using the same
+       ``head_chars``.  Exemption is a fold order, never an exemption
+       from the budget.
 
     Reasoning chars count toward ``budget`` only when the echo policy
     will actually replay them on the wire (see :func:`_reasoning_replayed`
@@ -228,7 +314,10 @@ def compact_observations(messages: list[dict[str, Any]], *,
             position += 1
         return position
 
-    def _compact_at(cutoff: int) -> tuple[list[dict[str, Any]], bool]:
+    exempt = set(exempt_tools)
+
+    def _compact_at(cutoff: int,
+                    fold_exempt: bool = False) -> tuple[list[dict[str, Any]], bool]:
         """Compact tool messages and stale reasoning in rounds 1..cutoff."""
         result: list[dict[str, Any]] = []
         compacted_any = False
@@ -236,6 +325,9 @@ def compact_observations(messages: list[dict[str, Any]], *,
             role = message.get("role")
             if role == "tool" and 0 < _round_of(index) <= cutoff:
                 tool = _tool_name_for(messages, index)
+                if not fold_exempt and tool in exempt:
+                    result.append(message)
+                    continue
                 compacted = _compact_tool_message(message, tool, head_chars)
                 if compacted is not message:
                     compacted_any = True
@@ -256,6 +348,7 @@ def compact_observations(messages: list[dict[str, Any]], *,
 
     # Pass 2: under budget pressure, shrink the window round by round
     # until the budget is met or only the keep-recent core remains.
+    # Exempt observations keep surviving this pass.
     cutoff = window_cutoff
     while (_total_chars(result, count) > budget
            and cutoff < never_touch_from_round):
@@ -263,12 +356,22 @@ def compact_observations(messages: list[dict[str, Any]], *,
         result, compacted_any = _compact_at(cutoff)
         if not compacted_any:
             break
+
+    # Pass 3: budget still exceeded — exempt observations fold too.
+    # The exemption is a fold ORDER (retrieval anchors fold last), not
+    # an exemption from the budget; keep_recent_rounds still yields
+    # nothing (the budget yields to the working core, as before).
+    if exempt and _total_chars(result, count) > budget:
+        result, compacted_any = _compact_at(cutoff, fold_exempt=True)
     return result
 
 
 async def apply_memory_strategy(messages: list[dict[str, Any]], memory: MemoryGenome, *,
                                 compact_messages: list[dict[str, Any]] | None = None,
                                 trace: Any = None, iteration: int | None = None,
+                                boundary: int = 0,
+                                usage_anchor: tuple[int, int, int] | None = None,
+                                force_budget: int | None = None,
                                 **options: Any) -> list[dict[str, Any]]:
     """Build the request view of ``messages`` under the memory genome.
 
@@ -297,29 +400,54 @@ async def apply_memory_strategy(messages: list[dict[str, Any]], memory: MemoryGe
         raise ValueError(f"unknown memory strategy: {strategy!r}")
 
     count = _reasoning_replayed()
+    unit = memory.budget_unit
+    # force_budget (context-window hard gate) must push below the size the
+    # provider just rejected, so it wins whenever it is the tighter bound.
     budget = memory.context_budget
+    if force_budget is not None:
+        budget = min(budget, force_budget)
     working = compact_messages if compact_messages is not None else messages
-    if _total_chars(working, count) <= budget:
+    if _view_size(working, count, unit, usage_anchor) <= budget:
         return working
 
     if strategy == STRATEGY_COMPACT_OBSERVATIONS:
-        result = compact_observations(messages, budget=budget,
+        # compact_observations is char-metered by construction; under the
+        # tokens unit the budget is converted with the anchor-calibrated
+        # ratio (a threshold decision, so conversion noise is acceptable).
+        char_budget = budget
+        if unit == "tokens":
+            char_budget = max(1, int(budget * _anchor_chars_per_token(usage_anchor)))
+        result = compact_observations(messages, budget=char_budget,
                                       window_rounds=memory.window_rounds,
                                       keep_recent_rounds=memory.keep_recent_rounds,
-                                      head_chars=memory.head_chars)
+                                      head_chars=memory.head_chars,
+                                      exempt_tools=memory.retrieval_exempt_tools)
     else:  # STRATEGY_LLM_SUMMARY
+        previous_summary = _extract_summary(working)
         result = await summarize_history(
             messages, budget=budget,
             tail_rounds=memory.summary_tail_rounds,
-            prompt=options.get("prompt"),
-            session_memory_path=options.get("session_memory_path"))
+            user_preserve_budget=memory.user_preserve_budget,
+            summary_max_tokens=memory.summary_max_tokens,
+            boundary=boundary,
+            previous_summary=previous_summary,
+            unit=unit, usage_anchor=usage_anchor,
+            exempt_tools=memory.retrieval_exempt_tools,
+            prompt=options.get("prompt"), trace=trace,
+            iteration=iteration)
 
     if trace is not None and result is not working and result is not messages:
         trace.emit(f"memory.{strategy}", iteration,
                    original_chars=_total_chars(messages, count),
                    request_chars=_total_chars(result, count),
                    original_count=len(messages),
-                   request_count=len(result))
+                   request_count=len(result),
+                   budget_unit=unit, budget=budget)
+        summary = _extract_summary(result)
+        if summary is not None:
+            # The summary text lives on the trace (per-run, queryable)
+            # instead of a shared on-disk file.
+            trace.emit(f"memory.{strategy}.text", iteration, summary=summary)
     return result
 
 
@@ -347,22 +475,6 @@ def _get_summary_llm() -> Any:
     return _summary_llm
 
 
-def _session_memory_path() -> Path | None:
-    """Default on-disk location for the latest session summary.
-
-    The summary is runtime state, so it lives under the runtime home
-    (see :mod:`agent_runtime.storage`) — one file per run, overwritten
-    by each new summary.
-    """
-    return storage.session_memory_path()
-
-
-def _write_session_memory(content: str, path: Path) -> None:
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
-
-
 def _strip_leading_system(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Drop any leading ``system`` messages (the agent's persona/system prompt).
 
@@ -376,35 +488,77 @@ def _strip_leading_system(messages: list[dict[str, Any]]) -> list[dict[str, Any]
     return messages[index:]
 
 
-async def _generate_summary(messages: list[dict[str, Any]], llm: Any,
-                            prompt: str | None) -> str:
-    """Ask the LLM for a structured summary of the full conversation.
+async def _generate_summary(messages: list[dict[str, Any]], *,
+                            previous_summary: str | None,
+                            summary_max_tokens: int,
+                            llm: Any = None,
+                            prompt: str | None = None) -> str | None:
+    """Ask the LLM for a structured summary of the compaction segment.
 
     The payload is assembled as: a fixed summarizer-identity system message, the
-    raw interaction history (agent system prompt stripped), and a final user
+    raw interaction history (agent system prompt stripped), optionally the
+    previous snapshot as a leading user message, and a final user
     instruction carrying the extraction schema. Ordering the instruction last
     exploits recency to dominate the model's output, and removing the agent's
     system prompt stops the model from imitating the agent's tool calls.
+
+    ``summary_max_tokens`` caps the summarizer's output at the request
+    level (pi-style bound: a snapshot is a checkpoint, not a retelling).
+    An exception from the summarizer LLM is returned as ``None`` so the
+    caller can fall back to the deterministic compactor instead of
+    aborting the turn.
     """
     history = _strip_leading_system(messages)
     instruction = prompt or SUMMARIZER_INSTRUCTION
+    if previous_summary is not None:
+        instruction = instruction + SUMMARIZER_INTEGRATION_ADDENDUM
+    prefix: list[dict[str, Any]] = []
+    if previous_summary is not None:
+        prefix = [{"role": "user",
+                   "content": SUMMARY_PREFIX + previous_summary}]
     summarizer_messages: list[dict[str, Any]] = [
         {"role": "system", "content": SUMMARIZER_SYSTEM},
+        *prefix,
         *history,
         {"role": "user", "content": instruction},
     ]
-    response = await llm.chat(summarizer_messages, tools=None)
+    model = llm if llm is not None else await _get_summary_llm_async()
+    try:
+        response = await model.chat(summarizer_messages, tools=None,
+                                    max_tokens=summary_max_tokens)
+    except Exception as exc:
+        logger.warning("memory.summary.llm_error %s", exc)
+        return None
     return response.get("content") or ""
+
+
+async def _get_summary_llm_async() -> Any:
+    """Lazily build the summarizer LLM (async variant for tests)."""
+    if _summary_llm is None:
+        set_summary_llm(_build_summary_llm())
+    return _summary_llm
+
+
+def _build_summary_llm() -> Any:
+    """Construct the default summarizer provider."""
+    from agent_runtime.providers.llm import OpenAICompatibleLLM
+    return OpenAICompatibleLLM(
+        model=os.getenv("AGENT_RUNTIME_SUMMARY_MODEL") or None)
 
 
 _REQUIRED_SECTIONS = ["## 1. Work State", "## 2. Next Move", "## 3. Working Context & Anchors"]
 
 
-def _validate_summary(summary: str) -> None:
+def _validate_summary(summary: str, *,
+                      summary_max_tokens: int = DEFAULT_SUMMARY_MAX_TOKENS) -> None:
     """Raise ``ValueError`` when ``summary`` does not look like a valid
     structured summary produced by the summarizer.
 
-    A valid summary must be non-empty and contain all three required
+    A valid summary must be non-empty, contain all three required sections,
+    and stay within the output cap — a summary that grows toward the
+    history it replaces defeats compaction (Gemini CLI rejects an
+    inflated summary outright; we do the same at roughly 6 chars per
+    token, generous to CJK text where the ratio is closer to 2-3).
     section headers.
     """
     stripped = summary.strip()
@@ -413,68 +567,132 @@ def _validate_summary(summary: str) -> None:
     for section in _REQUIRED_SECTIONS:
         if section not in stripped:
             raise ValueError(f"summary missing required section {section!r}")
+    if len(stripped) > summary_max_tokens * 6:
+        raise ValueError(
+            f"summary exceeds output cap ({len(stripped)} chars > "
+            f"{summary_max_tokens} tokens x 6 chars)")
 
 
 async def summarize_history(messages: list[dict[str, Any]], *,
                             budget: int | None = None,
                             tail_rounds: int | None = None,
+                            user_preserve_budget: int = DEFAULT_USER_PRESERVE_BUDGET,
+                            summary_max_tokens: int = DEFAULT_SUMMARY_MAX_TOKENS,
+                            boundary: int = 0,
+                            previous_summary: str | None = None,
+                            unit: str = "chars",
+                            usage_anchor: tuple[int, int, int] | None = None,
+                            exempt_tools: tuple[str, ...] = (),
                             prompt: str | None = None,
-                            session_memory_path: Path | None = None
+                            trace: Any = None,
+                            iteration: int | None = None,
                             ) -> list[dict[str, Any]]:
-    """Return a summarized copy of ``messages`` once over ``budget``.
+    """Return a summarized request view of ``messages`` once over ``budget``.
 
-    The summarizer reads the FULL history and produces a structured summary
-    (see ``SUMMARIZER_INSTRUCTION``). The request view keeps the system
-    prompt and original task, injects the summary as a ``user`` message, and
-    appends the most recent ``tail_rounds`` rounds verbatim (preserving
-    tool-call pairs and short-term coherence). The summary is also written to
-    ``session_memory.md`` (overwriting any prior summary for this task).
+    Structure: ``leading + [summary] + preserved user messages + tail``.
 
-    Below budget, or when there are no older rounds to collapse, the original
-    list is returned unchanged. If the summarizer LLM call fails *or* produces
-    an invalid summary (missing sections), the strategy falls back to the
-    deterministic ``compact_observations`` so the turn still proceeds.
-    Reasoning chars are budgeted only when the echo policy will replay
-    them on the wire (see :func:`_reasoning_replayed`).
+    * ``leading`` — the system prompt and the original task (round 0);
+      it anchors the final answer to the task definition and never moves,
+      which also keeps the request prefix stable across compactions.
+    * summary — a structured snapshot injected as a ``user`` message.
+    * preserved users — mid-conversation user messages kept VERBATIM
+      (newest first within ``user_preserve_budget``).  User messages are
+      the authoritative record of intent; summarising them risks the
+      next reasoning step missing a mid-session redirect (opencode /
+      Codex keep them verbatim for the same reason).  Messages beyond
+      the budget feed the summarizer instead of being dropped.
+    * tail — the most recent ``tail_rounds`` rounds verbatim, preserving
+      tool-call pairs and short-term coherence.
+
+    Incremental input: with ``boundary`` (the messages length when the
+    previous summary was produced) and ``previous_summary``, the
+    summarizer reads only ``messages[boundary:]`` plus that snapshot and
+    must integrate it — a second compaction costs O(new segment), not
+    O(full history).  Below budget, or when nothing older can collapse,
+    the input list is returned unchanged; summarizer failure or an
+    invalid/oversized summary falls back to ``compact_observations``.
+    Observability: the summary text is emitted on ``trace`` (per-run)
+    rather than written to a shared file.
     """
-    if budget is None:
-        budget = DEFAULT_CONTEXT_BUDGET
+    count = _reasoning_replayed()
+    if unit == "tokens":
+        chars_per_token = _anchor_chars_per_token(usage_anchor)
+        char_budget = int((budget or DEFAULT_CONTEXT_BUDGET) * chars_per_token)
+    else:
+        char_budget = budget or DEFAULT_CONTEXT_BUDGET
     if tail_rounds is None:
         tail_rounds = DEFAULT_SUMMARY_TAIL_ROUNDS
-    count = _reasoning_replayed()
-    llm = _get_summary_llm()
-    if _total_chars(messages, count) <= budget:
-        return messages
+
     starts = _round_starts(messages)
-    total_rounds = len(starts)
-    if total_rounds <= tail_rounds:
+    if len(starts) < 2:
         return messages
-    logger.debug("memory.summary.start rounds=%d tail=%d", total_rounds, tail_rounds)
-    try:
-        summary = await _generate_summary(messages, llm, prompt)
-    except Exception:
-        logger.warning("memory.summary.failed falling back to compact_observations")
-        return compact_observations(messages, budget=budget)
-    try:
-        _validate_summary(summary)
-    except ValueError as exc:
-        logger.warning("memory.summary.invalid %s falling back to compact_observations", exc)
-        return compact_observations(messages, budget=budget)
+    # Below budget: the view is already small enough — identity.
+    if _view_size(messages, count, unit, usage_anchor) <= (budget or DEFAULT_CONTEXT_BUDGET):
+        return messages
+
     leading = messages[:starts[0]]
     tail_start = starts[-tail_rounds]
     tail = messages[tail_start:]
+
+    # Mid-segment: the part between the leading task and the verbatim
+    # tail, restricted to what the previous summary has NOT already
+    # absorbed (incremental boundary).
+    segment_start = max(starts[0], boundary)
+    segment = messages[segment_start:tail_start]
+
+    # Preserve user messages verbatim, newest first within the budget;
+    # overflow users (oldest, past the budget) join the summarizer input.
+    preserved: list[dict[str, Any]] = []
+    summarizer_input: list[dict[str, Any]] = []
+    user_chars = 0
+    for message in reversed(segment):
+        if message.get("role") == "user":
+            content = str(message.get("content", ""))
+            if user_chars + len(content) <= user_preserve_budget:
+                preserved.append(message)
+                user_chars += len(content)
+                continue
+        summarizer_input.append(message)
+    summarizer_input.reverse()
+    preserved.reverse()  # restore chronological order
+
+    if not summarizer_input:
+        # Nothing new to summarise: keep the previous snapshot in place.
+        if previous_summary is not None:
+            summary_msg = {"role": "user",
+                           "content": SUMMARY_PREFIX + previous_summary}
+            return leading + [summary_msg] + preserved + tail
+        return messages
+
+    summary = await _generate_summary(
+        summarizer_input, previous_summary=previous_summary,
+        summary_max_tokens=summary_max_tokens)
+    if summary is None:
+        logger.warning("memory.summary.failed falling back to compact_observations")
+        return compact_observations(messages, budget=char_budget,
+                                    exempt_tools=exempt_tools)
+    try:
+        _validate_summary(summary, summary_max_tokens=summary_max_tokens)
+    except ValueError as exc:
+        logger.warning("memory.summary.invalid %s falling back to compact_observations", exc)
+        return compact_observations(messages, budget=char_budget,
+                                    exempt_tools=exempt_tools)
     summary_msg = {"role": "user", "content": SUMMARY_PREFIX + summary}
-    view = leading + [summary_msg] + tail
-    path = session_memory_path or _session_memory_path()
-    if path is not None:
-        await asyncio.to_thread(_write_session_memory, summary, path)
+    view = leading + [summary_msg] + preserved + tail
+    if trace is not None:
+        trace.emit("memory.llm_summary.yield", iteration,
+                   summary=summary, preserved_users=len(preserved),
+                   summarizer_input_count=len(summarizer_input),
+                   boundary=boundary, char_budget=char_budget)
     return view
 
 
 __all__ = [
     "DEFAULT_CONTEXT_BUDGET", "DEFAULT_HEAD_CHARS", "DEFAULT_SUMMARY_TAIL_ROUNDS",
     "DEFAULT_KEEP_RECENT_ROUNDS", "DEFAULT_WINDOW_ROUNDS",
+    "DEFAULT_USER_PRESERVE_BUDGET", "DEFAULT_SUMMARY_MAX_TOKENS",
     "STRATEGY_COMPACT_OBSERVATIONS", "STRATEGY_FULL_HISTORY", "STRATEGY_LLM_SUMMARY",
+    "SUMMARY_PREFIX", "SUMMARIZER_INSTRUCTION", "request_view_size",
     "apply_memory_strategy", "compact_observations", "set_summary_llm",
     "summarize_history",
 ]

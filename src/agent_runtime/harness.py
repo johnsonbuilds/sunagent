@@ -58,12 +58,16 @@ TOOL_ERROR_STRATEGIES: dict[str, ToolErrorStrategy] = {
 }
 
 # Categories a failed LLM call is classified into; each maps to its own
-# retry policy under the recovery.llm_errors gene.
+# retry policy under the recovery.llm_errors gene.  ``context_window`` is
+# the hard gate: the provider rejected the request for exceeding the
+# context window.  Retrying it in place can never succeed, so the loop
+# refreshes (further compacts) the request view before resending.
 LLM_RETRY_CATEGORIES = (
     "stream_idle_timeout",
     "stream_truncated",
     "stream_empty",
     "provider_error",
+    "context_window",
 )
 
 
@@ -130,6 +134,19 @@ DEFAULT_CONTEXT_BUDGET = 60_000          # memory: request-view char budget that
 DEFAULT_WINDOW_ROUNDS = 12               # memory: compaction comfort window
 DEFAULT_KEEP_RECENT_ROUNDS = 2           # memory: rounds never compacted under budget pressure
 DEFAULT_SUMMARY_TAIL_ROUNDS = 2          # memory: llm_summary verbatim tail
+DEFAULT_USER_PRESERVE_BUDGET = 8_000     # memory: chars of mid-conversation user messages kept verbatim (newest first)
+DEFAULT_SUMMARY_MAX_TOKENS = 2_048       # memory: summarizer output cap; longer output is rejected, falls back
+
+# Tool names whose observations outlive the comfort window verbatim and
+# only fold under real budget pressure (last-folded, never exempt from
+# the budget itself).  Retrieval results (grep/read/find) are anchors
+# for multi-step reasoning; folding them early forces re-query rounds.
+DEFAULT_RETRIEVAL_EXEMPT_TOOLS: tuple[str, ...] = ()
+
+# Units the request-view budget can be measured in.  ``chars`` is the
+# legacy cheap proxy; ``tokens`` combines the last measured prompt usage
+# with per-message char estimates (see agent.memory).
+MEMORY_BUDGET_UNITS: tuple[str, ...] = ("chars", "tokens")
 DEFAULT_MAX_OBSERVATION_CHARS = 16_000   # control: inline observation budget before windowing
 DEFAULT_SPILL_PREVIEW_CHARS = 4_000      # control: head/tail window half-size
 
@@ -175,11 +192,15 @@ class ControlGenome:
 @dataclass(frozen=True)
 class MemoryGenome:
     strategy: str = "full_history"
+    budget_unit: str = "chars"
     head_chars: int = DEFAULT_HEAD_CHARS
     context_budget: int = DEFAULT_CONTEXT_BUDGET
     window_rounds: int = DEFAULT_WINDOW_ROUNDS
     keep_recent_rounds: int = DEFAULT_KEEP_RECENT_ROUNDS
     summary_tail_rounds: int = DEFAULT_SUMMARY_TAIL_ROUNDS
+    user_preserve_budget: int = DEFAULT_USER_PRESERVE_BUDGET
+    summary_max_tokens: int = DEFAULT_SUMMARY_MAX_TOKENS
+    retrieval_exempt_tools: tuple[str, ...] = DEFAULT_RETRIEVAL_EXEMPT_TOOLS
 
 
 @dataclass(frozen=True)
@@ -270,7 +291,9 @@ class HarnessSpec:
             "prompt": asdict(self.prompt),
             "tools": {"enabled": list(self.tools.enabled)},
             "control": asdict(self.control),
-            "memory": asdict(self.memory),
+            "memory": {**asdict(self.memory),
+                       "retrieval_exempt_tools":
+                           list(self.memory.retrieval_exempt_tools)},
             "recovery": asdict(self.recovery),
             "verification": asdict(self.verification),
             "skills": list(self.skills),
@@ -424,16 +447,25 @@ def _memory_genome(data: Mapping[str, Any]) -> MemoryGenome:
     section = data.get("memory") or {}
     if not isinstance(section, Mapping):
         raise HarnessError("memory must be a mapping")
-    _check_keys(section, {"strategy", "head_chars", "context_budget",
-                          "window_rounds", "keep_recent_rounds",
-                          "summary_tail_rounds"}, "memory")
+    _check_keys(section, {"strategy", "budget_unit", "head_chars",
+                          "context_budget", "window_rounds",
+                          "keep_recent_rounds", "summary_tail_rounds",
+                          "user_preserve_budget", "summary_max_tokens",
+                          "retrieval_exempt_tools"},
+                "memory")
     strategy = _required_text(section, "strategy", "memory", "full_history")
     if strategy not in MEMORY_STRATEGIES:
         raise HarnessError(
             f"memory.strategy must be one of {list(MEMORY_STRATEGIES)}, "
             f"got {strategy!r}")
+    budget_unit = section.get("budget_unit") or "chars"
+    if budget_unit not in MEMORY_BUDGET_UNITS:
+        raise HarnessError(
+            f"memory.budget_unit must be one of "
+            f"{list(MEMORY_BUDGET_UNITS)}, got {budget_unit!r}")
     return MemoryGenome(
         strategy=strategy,
+        budget_unit=budget_unit,
         head_chars=_positive_int(section.get("head_chars"),
                                  "memory.head_chars", DEFAULT_HEAD_CHARS),
         context_budget=_positive_int(section.get("context_budget"),
@@ -447,7 +479,15 @@ def _memory_genome(data: Mapping[str, Any]) -> MemoryGenome:
                                          DEFAULT_KEEP_RECENT_ROUNDS),
         summary_tail_rounds=_positive_int(section.get("summary_tail_rounds"),
                                           "memory.summary_tail_rounds",
-                                          DEFAULT_SUMMARY_TAIL_ROUNDS))
+                                          DEFAULT_SUMMARY_TAIL_ROUNDS),
+        user_preserve_budget=_positive_int(
+            section.get("user_preserve_budget"),
+            "memory.user_preserve_budget", DEFAULT_USER_PRESERVE_BUDGET),
+        summary_max_tokens=_positive_int(
+            section.get("summary_max_tokens"),
+            "memory.summary_max_tokens", DEFAULT_SUMMARY_MAX_TOKENS),
+        retrieval_exempt_tools=_name_list(
+            section, "retrieval_exempt_tools", "memory"))
 
 
 def _recovery_genome(data: Mapping[str, Any]) -> RecoveryGenome:
@@ -762,7 +802,10 @@ __all__ = [
     "RecoveryGenome", "VerificationGenome", "DEFAULT_VERIFICATION_REQUIRE",
     "VERIFICATION_MODES", "TOOL_ERROR_STRATEGIES",
     "LLM_RETRY_CATEGORIES", "LLMRetryPolicy", "BACKOFF_POLICIES",
-    "MEMORY_STRATEGIES", "default_harness", "feed_error_and_continue",
+    "MEMORY_STRATEGIES", "MEMORY_BUDGET_UNITS",
+    "DEFAULT_USER_PRESERVE_BUDGET", "DEFAULT_SUMMARY_MAX_TOKENS",
+    "DEFAULT_RETRIEVAL_EXEMPT_TOOLS",
+    "default_harness", "feed_error_and_continue",
     "from_dict", "load_harness", "load_named_harness", "manifest_candidates",
     "resolve_harness", "_main",
 ]

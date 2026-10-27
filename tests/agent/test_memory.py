@@ -379,10 +379,12 @@ class FakeSummaryLLM:
             )
 
     async def chat(self, messages: list[dict[str, Any]],
-                   tools: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+                   tools: list[dict[str, Any]] | None = None,
+                   **request_kwargs: Any) -> dict[str, Any]:
         self.call_count += 1
         if self.error is not None:
             raise self.error
+        self.last_request_kwargs = dict(request_kwargs)
         return {"content": self.summary, "tool_calls": []}
 
 
@@ -433,27 +435,6 @@ class SummarizeHistoryTests(unittest.IsolatedAsyncioTestCase):
         result = await summarize_history(messages, budget=10, tail_rounds=2)
         # Deterministic compaction keeps the turn viable.
         self.assertIn("observation compacted", result[3]["content"])
-
-    async def test_writes_session_memory_file(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "session_memory.md"
-            messages = build_rounds(10, 5_000)
-            set_summary_llm(FakeSummaryLLM(summary=(
-                "# Agent Context Snapshot\n\n"
-                "## 1. Work State\n"
-                "### Completed\n"
-                "- LATEST SNAPSHOT\n\n"
-                "## 2. Next Move\n"
-                "- continue\n\n"
-                "## 3. Working Context & Anchors\n"
-                "- **Files**: ars.R")))
-            await summarize_history(messages, budget=1_000,
-                                    tail_rounds=2,
-                                    session_memory_path=path)
-            self.assertTrue(path.is_file())
-            content = path.read_text(encoding="utf-8")
-            self.assertIn("LATEST SNAPSHOT", content)
-            self.assertIn("## 1. Work State", content)
 
     async def test_invalid_summary_falls_back_to_compact(self) -> None:
         messages = build_rounds(10, 5_000)

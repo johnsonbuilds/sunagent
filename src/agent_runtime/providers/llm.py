@@ -80,6 +80,68 @@ def _should_echo_reasoning(model: str, base_url: str | None,
 _DEFAULT_MODEL = "glm-5.3"
 
 
+class ContextWindowExceededError(RuntimeError):
+    """The provider rejected the request for exceeding the context window.
+
+    Carries ``llm_category = "context_window"`` so the recovery layer
+    routes it to the ``recovery.llm_errors.context_window`` policy.  An
+    in-place retry can never succeed: the caller must compact the request
+    view before resending (agent loop's refresh hook).
+    """
+
+    llm_category = "context_window"
+
+
+# Substring markers for context-window rejections.  Providers word the
+# same 400 differently ("context_length_exceeded", "maximum context
+# length", …), so the match is a lowercase substring scan over the
+# exception text — same approach as the OpenHands error classifier.
+# Markers are chosen to only appear in over-limit rejections; generic
+# provider errors never match them.
+_CONTEXT_OVERFLOW_MARKERS: tuple[str, ...] = (
+    "context_length_exceeded",
+    "maximum context length",
+    "context window",
+    "reduce the length",
+    "input is too long",
+    "prompt is too long",
+    "too many tokens",
+    "exceeds the maximum number of tokens",
+    "context length of",
+)
+
+
+def _looks_like_context_overflow(exc: BaseException) -> bool:
+    """Whether a provider error text matches a context-window rejection."""
+    haystack = str(exc).lower()
+    return any(marker in haystack for marker in _CONTEXT_OVERFLOW_MARKERS)
+
+
+def _usage_dict(usage: Any) -> dict[str, int]:
+    """Normalise a provider ``usage`` object to a plain int dict.
+
+    ``prompt_tokens`` is the measured size of the request as the provider
+    billed it — the ground truth the token-budget layer anchors its
+    estimates on.  Missing fields fall back to 0 rather than raising so a
+    partial usage object never breaks a successful call.
+    """
+    prompt = getattr(usage, "prompt_tokens", None)
+    completion = getattr(usage, "completion_tokens", None)
+    return {"prompt_tokens": prompt if isinstance(prompt, int) else 0,
+            "completion_tokens": completion if isinstance(completion, int) else 0}
+
+
+def _stream_usage_enabled() -> bool:
+    """Whether streaming requests ask for a trailing usage chunk.
+
+    ``stream_options: {"include_usage": true}`` is the OpenAI-compatible
+    way to get billed token counts on a stream.  Set
+    ``AGENT_RUNTIME_STREAM_USAGE=0`` for providers that reject the
+    parameter outright.
+    """
+    return os.getenv("AGENT_RUNTIME_STREAM_USAGE", "1").strip() != "0"
+
+
 def reasoning_echo_enabled(model: str | None = None,
                            base_url: str | None = None) -> bool:
     """Echo decision for the configured endpoint (env-backed defaults).
@@ -173,13 +235,21 @@ class OpenAICompatibleLLM:
             kwargs.setdefault("reasoning_effort", effort)
         if tools is not None:
             kwargs["tools"] = tools
-        response = await self.client.chat.completions.create(**kwargs)
+        try:
+            response = await self.client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            if _looks_like_context_overflow(exc):
+                raise ContextWindowExceededError(str(exc)) from exc
+            raise
         message = response.choices[0].message
         calls = [call.model_dump(exclude_none=True) for call in (message.tool_calls or [])]
         result = {"content": message.content or "", "tool_calls": calls}
         reasoning = _reasoning_text(message)
         if reasoning:
             result["reasoning_content"] = reasoning
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            result["usage"] = _usage_dict(usage)
         return result
 
     async def stream(self, messages: Sequence[dict[str, Any]],
@@ -202,9 +272,20 @@ class OpenAICompatibleLLM:
             kwargs.setdefault("reasoning_effort", effort)
         if tools is not None:
             kwargs["tools"] = tools
-        response = await self.client.chat.completions.create(**kwargs)
+        if _stream_usage_enabled():
+            kwargs.setdefault("stream_options", {"include_usage": True})
+        try:
+            response = await self.client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            if _looks_like_context_overflow(exc):
+                raise ContextWindowExceededError(str(exc)) from exc
+            raise
         finish_reason: str | None = None
+        usage: dict[str, int] | None = None
         async for chunk in response:
+            chunk_usage = getattr(chunk, "usage", None)
+            if chunk_usage is not None:
+                usage = _usage_dict(chunk_usage)
             if not chunk.choices:
                 # Some providers append a final chunk with empty choices
                 # (e.g. a usage summary); it carries no delta payload.
@@ -232,7 +313,17 @@ class OpenAICompatibleLLM:
             if data["content"] or calls or reasoning:
                 yield data
         if finish_reason:
-            yield {"content": "", "reasoning_content": "",
-                   "finish_reason": finish_reason}
+            final: dict[str, Any] = {"content": "", "reasoning_content": "",
+                                     "finish_reason": finish_reason}
+            if usage is not None:
+                final["usage"] = usage
+            yield final
+        elif usage is not None:
+            yield {"content": "", "reasoning_content": "", "usage": usage}
+
+__all__ = [
+    "OpenAICompatibleLLM", "OpenAILLM", "ContextWindowExceededError",
+    "_looks_like_context_overflow", "_usage_dict", "_stream_usage_enabled",
+]
 
 OpenAILLM = OpenAICompatibleLLM
