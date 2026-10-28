@@ -532,6 +532,60 @@ class SummarizerObservabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("missing required section", payload["reason"])
         self.assertEqual(payload["summary_chars"], len("no sections here"))
 
+    async def test_invalid_then_valid_recovers_on_retry(self) -> None:
+        class FlakyLLM:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def chat(self, messages, tools=None, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return {"content": "no sections here", "tool_calls": []}
+                return {"content": valid_summary("RECOVERED"),
+                        "tool_calls": []}
+
+        llm = FlakyLLM()
+        set_summary_llm(llm)
+        events: list[tuple] = []
+
+        class FakeTrace:
+            def emit(self, *args, **kwargs):
+                events.append((args, kwargs))
+
+        result = await summarize_history(
+            self._history(), budget=1, tail_rounds=2,
+            trace=FakeTrace(), iteration=9)
+        self.assertEqual(llm.calls, 2)
+        contents = [str(m.get("content", "")) for m in result]
+        self.assertTrue(any(c.startswith(SUMMARY_PREFIX) and "RECOVERED" in c
+                            for c in contents))
+        kinds = [a[0] for a, _ in events]
+        self.assertIn("memory.llm_summary.invalid", kinds)
+        self.assertIn("memory.llm_summary.yield", kinds)
+        _, payload = next((a, k) for a, k in events
+                          if a[0] == "memory.llm_summary.invalid")
+        self.assertEqual(payload["attempt"], 1)
+
+    async def test_double_invalid_falls_back(self) -> None:
+        llm = FakeSummaryLLM(summary="no sections here")
+        set_summary_llm(llm)
+        events: list[tuple] = []
+
+        class FakeTrace:
+            def emit(self, *args, **kwargs):
+                events.append((args, kwargs))
+
+        result = await summarize_history(
+            self._history(), budget=1, tail_rounds=2,
+            trace=FakeTrace(), iteration=9)
+        self.assertEqual(llm.call_count, 2)
+        self.assertFalse(any(
+            str(m.get("content", "")).startswith(SUMMARY_PREFIX)
+            for m in result))
+        attempts = [k["attempt"] for a, k in events
+                    if a[0] == "memory.llm_summary.invalid"]
+        self.assertEqual(attempts, [1, 2])
+
     async def test_success_still_emits_yield_only(self) -> None:
         set_summary_llm(FakeSummaryLLM())
         events: list[tuple] = []

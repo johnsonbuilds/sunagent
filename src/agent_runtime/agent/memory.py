@@ -682,47 +682,55 @@ async def summarize_history(messages: list[dict[str, Any]], *,
             return leading + [summary_msg] + preserved + tail
         return messages
 
-    summary: str | None
-    try:
-        summary = await _generate_summary(
-            summarizer_input, previous_summary=previous_summary,
-            summary_max_tokens=summary_max_tokens, prompt=prompt)
-    except Exception as exc:
-        # The summarizer request itself failed (rate limit, context
-        # overflow on a huge segment, transport error): record the cause
-        # with the input scale so production fallbacks are diagnosable,
-        # then take the deterministic path.
-        if trace is not None:
-            trace.emit("memory.llm_summary.error", iteration,
-                       error=str(exc)[:500], error_type=type(exc).__name__,
-                       summarizer_input_chars=_total_chars(
-                           summarizer_input, count),
-                       summarizer_input_count=len(summarizer_input),
-                       boundary=boundary, char_budget=char_budget,
-                       summary_max_tokens=summary_max_tokens)
-        logger.warning("memory.summary.failed falling back to "
-                       "compact_observations: %s", exc)
-        return compact_observations(messages, budget=char_budget,
-                                    exempt_tools=exempt_tools)
-    try:
-        _validate_summary(summary, summary_max_tokens=summary_max_tokens)
-    except ValueError as exc:
-        # The model answered but the snapshot is unusable (missing
-        # sections, or grown toward the history it replaces): record the
-        # output size against the cap so truncation vs gibberish is
-        # distinguishable, then fall back.
-        if trace is not None:
-            trace.emit("memory.llm_summary.invalid", iteration,
-                       reason=str(exc)[:500],
-                       summary_chars=len(summary or ""),
-                       summarizer_input_chars=_total_chars(
-                           summarizer_input, count),
-                       summarizer_input_count=len(summarizer_input),
-                       boundary=boundary, char_budget=char_budget,
-                       summary_max_tokens=summary_max_tokens)
-        logger.warning("memory.summary.invalid %s falling back to compact_observations", exc)
-        return compact_observations(messages, budget=char_budget,
-                                    exempt_tools=exempt_tools)
+    summary: str | None = None
+    for attempt in (1, 2):
+        try:
+            summary = await _generate_summary(
+                summarizer_input, previous_summary=previous_summary,
+                summary_max_tokens=summary_max_tokens, prompt=prompt)
+        except Exception as exc:
+            # The summarizer request itself failed (rate limit, context
+            # overflow on a huge segment, transport error): record the cause
+            # with the input scale so production fallbacks are diagnosable,
+            # then take the deterministic path.
+            if trace is not None:
+                trace.emit("memory.llm_summary.error", iteration,
+                           error=str(exc)[:500], error_type=type(exc).__name__,
+                           summarizer_input_chars=_total_chars(
+                               summarizer_input, count),
+                           summarizer_input_count=len(summarizer_input),
+                           boundary=boundary, char_budget=char_budget,
+                           summary_max_tokens=summary_max_tokens)
+            logger.warning("memory.summary.failed falling back to "
+                           "compact_observations: %s", exc)
+            return compact_observations(messages, budget=char_budget,
+                                        exempt_tools=exempt_tools)
+        try:
+            _validate_summary(summary, summary_max_tokens=summary_max_tokens)
+            break
+        except ValueError as exc:
+            # The model answered but the snapshot is unusable (missing
+            # sections, empty, or grown toward the history it replaces):
+            # record the output size against the cap so truncation vs
+            # corner-cutting is distinguishable. Non-compliance is usually
+            # flaky (trial-3: 482-char and empty snapshots from the same
+            # model that writes valid 6k ones), so retry once before
+            # falling back.
+            if trace is not None:
+                trace.emit("memory.llm_summary.invalid", iteration,
+                           reason=str(exc)[:500], attempt=attempt,
+                           summary_chars=len(summary or ""),
+                           summarizer_input_chars=_total_chars(
+                               summarizer_input, count),
+                           summarizer_input_count=len(summarizer_input),
+                           boundary=boundary, char_budget=char_budget,
+                           summary_max_tokens=summary_max_tokens)
+            if attempt == 2:
+                logger.warning("memory.summary.invalid %s falling back to compact_observations", exc)
+                return compact_observations(messages, budget=char_budget,
+                                            exempt_tools=exempt_tools)
+            logger.warning("memory.summary.invalid %s retrying (%d/2)",
+                           exc, attempt + 1)
     summary_msg = {"role": "user", "content": SUMMARY_PREFIX + summary}
     view = leading + [summary_msg] + preserved + tail
     if trace is not None:
