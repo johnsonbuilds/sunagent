@@ -512,9 +512,9 @@ async def _generate_summary(messages: list[dict[str, Any]], *,
 
     ``summary_max_tokens`` caps the summarizer's output at the request
     level (pi-style bound: a snapshot is a checkpoint, not a retelling).
-    An exception from the summarizer LLM is returned as ``None`` so the
-    caller can fall back to the deterministic compactor instead of
-    aborting the turn.
+    Exceptions propagate to the caller, which records them on the trace
+    and falls back to the deterministic compactor instead of aborting
+    the turn.
     """
     history = _strip_leading_system(messages)
     instruction = prompt or SUMMARIZER_INSTRUCTION
@@ -531,12 +531,8 @@ async def _generate_summary(messages: list[dict[str, Any]], *,
         {"role": "user", "content": instruction},
     ]
     model = llm if llm is not None else await _get_summary_llm_async()
-    try:
-        response = await model.chat(summarizer_messages, tools=None,
-                                    max_tokens=summary_max_tokens)
-    except Exception as exc:
-        logger.warning("memory.summary.llm_error %s", exc)
-        return None
+    response = await model.chat(summarizer_messages, tools=None,
+                                max_tokens=summary_max_tokens)
     return response.get("content") or ""
 
 
@@ -686,16 +682,44 @@ async def summarize_history(messages: list[dict[str, Any]], *,
             return leading + [summary_msg] + preserved + tail
         return messages
 
-    summary = await _generate_summary(
-        summarizer_input, previous_summary=previous_summary,
-        summary_max_tokens=summary_max_tokens, prompt=prompt)
-    if summary is None:
-        logger.warning("memory.summary.failed falling back to compact_observations")
+    summary: str | None
+    try:
+        summary = await _generate_summary(
+            summarizer_input, previous_summary=previous_summary,
+            summary_max_tokens=summary_max_tokens, prompt=prompt)
+    except Exception as exc:
+        # The summarizer request itself failed (rate limit, context
+        # overflow on a huge segment, transport error): record the cause
+        # with the input scale so production fallbacks are diagnosable,
+        # then take the deterministic path.
+        if trace is not None:
+            trace.emit("memory.llm_summary.error", iteration,
+                       error=str(exc)[:500], error_type=type(exc).__name__,
+                       summarizer_input_chars=_total_chars(
+                           summarizer_input, count),
+                       summarizer_input_count=len(summarizer_input),
+                       boundary=boundary, char_budget=char_budget,
+                       summary_max_tokens=summary_max_tokens)
+        logger.warning("memory.summary.failed falling back to "
+                       "compact_observations: %s", exc)
         return compact_observations(messages, budget=char_budget,
                                     exempt_tools=exempt_tools)
     try:
         _validate_summary(summary, summary_max_tokens=summary_max_tokens)
     except ValueError as exc:
+        # The model answered but the snapshot is unusable (missing
+        # sections, or grown toward the history it replaces): record the
+        # output size against the cap so truncation vs gibberish is
+        # distinguishable, then fall back.
+        if trace is not None:
+            trace.emit("memory.llm_summary.invalid", iteration,
+                       reason=str(exc)[:500],
+                       summary_chars=len(summary or ""),
+                       summarizer_input_chars=_total_chars(
+                           summarizer_input, count),
+                       summarizer_input_count=len(summarizer_input),
+                       boundary=boundary, char_budget=char_budget,
+                       summary_max_tokens=summary_max_tokens)
         logger.warning("memory.summary.invalid %s falling back to compact_observations", exc)
         return compact_observations(messages, budget=char_budget,
                                     exempt_tools=exempt_tools)

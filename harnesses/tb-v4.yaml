@@ -1,6 +1,6 @@
 id: tb-v4
 parent: tb-v3
-mutation: 'memory: budget_unit chars->tokens (measured-usage anchor + ratio-calibrated estimates), user_preserve_budget 8000, summary_max_tokens 2048, incremental summary + verbatim user preservation; recovery.llm_errors.context_window hard gate (compact-to-70% + resend, max_retries 2, no backoff)'
+mutation: 'memory: budget_unit chars->tokens, context_budget 60k tokens (2x of the 30k validation setting: deepseek-v4.1-flash has 1M ctx; 60k still compacts ~3x per heavy task so the gates stay observable), user_preserve_budget 8000 chars, summary_max_tokens 2048, incremental summary + verbatim user preservation; recovery.llm_errors.context_window hard gate (compact-to-70% + resend, max_retries 2, no backoff); summarizer error/invalid trace events for fallback diagnosis'
 reason: 'tb-v3 compaction measured 60k chars blind across Ling/dsv4.1 (char/token ratio drifts 2-4x); over-limit 400s killed turns outright; re-summarization re-read the FULL history each compaction (O(full) input + full cache miss); mid-conversation user redirects only survived as summarizer paraphrase (lossy). Anchor token metering on billed usage, hard-gate on context_window rejections, incremental second compaction, verbatim user preservation. TB serves as the A/B face; the genes apply to any real-world harness.'
 prompt:
   system: |
@@ -96,7 +96,7 @@ control:
 memory:
   strategy: llm_summary
   budget_unit: tokens
-  context_budget: 30000
+  context_budget: 60000  # tokens; 2x validation setting for 1M-ctx models - still ~3 compactions/heavy-task, gates stay observable
   user_preserve_budget: 8000  # chars (either budget unit): coarse verbatim guard, no token conversion by design
   summary_max_tokens: 2048
 recovery:

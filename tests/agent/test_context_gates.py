@@ -473,6 +473,81 @@ class ForceBudgetTests(unittest.IsolatedAsyncioTestCase):
             for m in result))
 
 
+class SummarizerObservabilityTests(unittest.IsolatedAsyncioTestCase):
+    def tearDown(self) -> None:
+        set_summary_llm(None)
+
+    def _history(self, rounds: int = 6) -> list[dict[str, Any]]:
+        return build_rounds(rounds, tool_chars=1_000)
+
+    async def test_llm_error_emits_error_event(self) -> None:
+        class BrokenLLM:
+            async def chat(self, messages, tools=None, **kwargs):
+                raise RuntimeError("429 rate limit exceeded")
+
+        events: list[tuple] = []
+
+        class FakeTrace:
+            def emit(self, *args, **kwargs):
+                events.append((args, kwargs))
+
+        set_summary_llm(BrokenLLM())
+        result = await summarize_history(
+            self._history(), budget=1, tail_rounds=2,
+            trace=FakeTrace(), iteration=9)
+        # deterministic fallback keeps the turn viable ...
+        self.assertFalse(any(
+            str(m.get("content", "")).startswith(SUMMARY_PREFIX)
+            for m in result))
+        # ... and the cause is on the trace with the input scale.
+        kinds = [a[0] for a, _ in events]
+        self.assertIn("memory.llm_summary.error", kinds)
+        args, payload = next((a, k) for a, k in events
+                             if a[0] == "memory.llm_summary.error")
+        self.assertIn("429", payload["error"])
+        self.assertEqual(payload["error_type"], "RuntimeError")
+        self.assertEqual(args[1], 9)
+        self.assertGreater(payload["summarizer_input_count"], 0)
+        self.assertGreater(payload["summarizer_input_chars"], 0)
+
+    async def test_invalid_summary_emits_invalid_event(self) -> None:
+        llm = FakeSummaryLLM(summary="no sections here")
+        set_summary_llm(llm)
+        events: list[tuple] = []
+
+        class FakeTrace:
+            def emit(self, *args, **kwargs):
+                events.append((args, kwargs))
+
+        result = await summarize_history(
+            self._history(), budget=1, tail_rounds=2,
+            trace=FakeTrace(), iteration=9)
+        self.assertFalse(any(
+            str(m.get("content", "")).startswith(SUMMARY_PREFIX)
+            for m in result))
+        kinds = [a[0] for a, _ in events]
+        self.assertIn("memory.llm_summary.invalid", kinds)
+        payload = next(k for a, k in events
+                       if a[0] == "memory.llm_summary.invalid")
+        self.assertIn("missing required section", payload["reason"])
+        self.assertEqual(payload["summary_chars"], len("no sections here"))
+
+    async def test_success_still_emits_yield_only(self) -> None:
+        set_summary_llm(FakeSummaryLLM())
+        events: list[tuple] = []
+
+        class FakeTrace:
+            def emit(self, *args, **kwargs):
+                events.append((args, kwargs))
+
+        await summarize_history(self._history(), budget=1, tail_rounds=2,
+                                trace=FakeTrace(), iteration=9)
+        kinds = [a[0] for a, _ in events]
+        self.assertIn("memory.llm_summary.yield", kinds)
+        self.assertNotIn("memory.llm_summary.error", kinds)
+        self.assertNotIn("memory.llm_summary.invalid", kinds)
+
+
 class BoundaryChaseTests(unittest.IsolatedAsyncioTestCase):
     """The incremental boundary must not chase len(messages) on no-op refreshes.
 
@@ -558,7 +633,7 @@ class TB4HarnessTests(unittest.TestCase):
         from agent_runtime.harness import load_named_harness
         spec = load_named_harness("tb-v4")
         self.assertEqual(spec.memory.budget_unit, "tokens")
-        self.assertEqual(spec.memory.context_budget, 30_000)
+        self.assertEqual(spec.memory.context_budget, 60_000)
         self.assertEqual(spec.memory.user_preserve_budget, 8_000)
         self.assertEqual(spec.memory.summary_max_tokens, 2_048)
         policy = spec.recovery.llm_errors["context_window"]
