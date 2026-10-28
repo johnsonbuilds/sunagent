@@ -40,9 +40,10 @@ MEMORY_DIR = "memory"
 #: Cap on listed entries, mirroring the skills-block budgets.
 MAX_MEMORY_ENTRIES = 200
 
-#: Cap on the rendered tree section (the convention paragraph is small
-#: and fixed, so this effectively caps the whole block; the truncation
-#: marker may exceed it slightly, as with skills).
+#: Cap on the rendered tree *listing* (the one-line-per-file section).
+#: The convention paragraph and section header are small and fixed, so
+#: this effectively bounds the whole block; the truncation marker may
+#: push the listing slightly over the cap, as with skills.
 MAX_MEMORY_CHARS = 4000
 
 #: Marker appended when the listing exceeds either cap.
@@ -91,29 +92,47 @@ def memory_enabled() -> bool:
     return os.getenv(ENV_MEMORY, "").strip().lower() in {"1", "true", "on"}
 
 
+_KB = 1024
+_MB = 1024 ** 2
+_GB = 1024 ** 3
+_TB = 1024 ** 4
+
+
 def _human_size(size: int) -> str:
-    if size < 1024:
+    if size < _KB:
         return f"{size} B"
-    for unit, factor in (("KB", 1024), ("MB", 1024 ** 2), ("GB", 1024 ** 3)):
-        if size < 1024 * factor:
-            return f"{size / factor:.1f} {unit}"
-    return f"{size / 1024 ** 3:.1f} TB"
+    if size < _MB:
+        return f"{size / _KB:.1f} KB"
+    if size < _GB:
+        return f"{size / _MB:.1f} MB"
+    if size < _TB:
+        return f"{size / _GB:.1f} GB"
+    return f"{size / _TB:.1f} TB"
 
 
 def _scan_tree(memory_root: Path) -> list[tuple[str, int]]:
     """Flat, deterministically ordered (path, size) pairs under memory/.
 
-    Hidden entries (dot-prefixed files and directories) are skipped;
-    directory symlinks are not followed.  Sizes come from stat, so no
-    file contents are read while rendering.
+    Hidden entries (dot-prefixed files and directories) and symbolic
+    links (file or directory) are skipped, so a link pointing outside
+    the workspace can never leak an external file's size into the tree
+    or its hash.  Directory symlinks are additionally never followed.
+    Sizes come from stat, so no file contents are read while rendering.
     """
     entries: list[tuple[str, int]] = []
     for dirpath, dirnames, filenames in os.walk(memory_root, followlinks=False):
-        dirnames[:] = [name for name in dirnames if not name.startswith(".")]
+        dirnames[:] = [
+            name
+            for name in dirnames
+            if not name.startswith(".")
+            and not (Path(dirpath) / name).is_symlink()
+        ]
         for name in filenames:
             if name.startswith("."):
                 continue
             full = Path(dirpath) / name
+            if full.is_symlink():
+                continue
             try:
                 size = full.stat().st_size
             except OSError:  # vanished mid-scan
@@ -127,18 +146,24 @@ def _scan_tree(memory_root: Path) -> list[tuple[str, int]]:
 def _render_tree(entries: list[tuple[str, int]]) -> tuple[str, bool]:
     """Render entry lines under the entry/char caps.
 
-    Returns the rendered text and whether the caps truncated anything.
+    The char budget counts each line plus its ``"\\n"`` separator, so the
+    listing (excluding the truncation marker) never exceeds
+    ``MAX_MEMORY_CHARS``.  Returns the rendered text and whether the
+    caps truncated anything.
     """
     lines: list[str] = []
     chars = 0
     shown = 0
     for path, size in entries:
         line = f"  {path} ({_human_size(size)})"
+        # +1 for the "\n" separator join() will insert before this line
+        # (every line except the first pays one separator char).
+        cost = len(line) + (1 if lines else 0)
         if (shown >= MAX_MEMORY_ENTRIES
-                or chars + len(line) > MAX_MEMORY_CHARS):
+                or chars + cost > MAX_MEMORY_CHARS):
             break
         lines.append(line)
-        chars += len(line)
+        chars += cost
         shown += 1
     truncated = shown < len(entries)
     if truncated:
@@ -164,15 +189,22 @@ def render_memory_block(workspace: Any | None) -> MemoryView:
     absent (write_file rejects creation under a missing parent, so the
     bootstrap mkdir is required, not cosmetic) and only the tree is
     rendered — file contents are never read.
+
+    Memory is auxiliary: filesystem failures (permission denied, a
+    colliding non-directory, a vanished root) degrade to an empty view
+    instead of failing the turn.
     """
     if not memory_enabled() or workspace is None:
         return MemoryView()
     root = getattr(workspace, "root", None)
-    if root is None:
+    if root is None or not str(root).strip():
         return MemoryView()
-    memory_root = Path(root) / MEMORY_DIR
-    memory_root.mkdir(parents=True, exist_ok=True)
-    entries = _scan_tree(memory_root)
+    try:
+        memory_root = Path(root) / MEMORY_DIR
+        memory_root.mkdir(parents=True, exist_ok=True)
+        entries = _scan_tree(memory_root)
+    except OSError:
+        return MemoryView()
     tree_text, truncated = _render_tree(entries)
     if entries:
         tree_section = f"Current contents of memory/:\n\n{tree_text}"

@@ -258,13 +258,17 @@ class AgentTurn:
                                 skills_dir=self.skills_dir,
                                 harness=harness)
         skills_block = render_skills_block(skills)
-        if skills:
-            trace.emit("skills.loaded", 0, **skills_trace_meta(skills))
         memory_view = render_memory_block(getattr(tools, "workspace", None))
-        if memory_view.block:
-            trace.emit("memory.recall", 0, **memory_view.trace_meta())
-        _ensure_system_prompt(self.conversation, harness.prompt.system,
+        inserted = _ensure_system_prompt(self.conversation, harness.prompt.system,
                               skills_block, memory_view.block)
+        # Both blocks ride the single resident system message: only trace
+        # what the model will actually see, so later turns in the same
+        # conversation (no-op injection) emit neither event.
+        if inserted:
+            if skills:
+                trace.emit("skills.loaded", 0, **skills_trace_meta(skills))
+            if memory_view.block:
+                trace.emit("memory.recall", 0, **memory_view.trace_meta())
         self.conversation.append({"role": "user", "content": self.user_message})
         history = TurnHistory(self.conversation.messages)
         error_budget = SameToolErrorBudget(

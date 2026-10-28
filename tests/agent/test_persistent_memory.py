@@ -90,6 +90,24 @@ class MemorySwitchTests(unittest.TestCase):
             view = render_memory_block(object())
         self.assertEqual(view.block, "")
 
+    def test_empty_string_root_renders_empty_and_creates_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = _workspace(tmp)
+            workspace.root = ""
+            with mock.patch.dict(environ, {ENV_MEMORY: "1"}):
+                view = render_memory_block(workspace)
+            self.assertEqual(view.block, "")
+            self.assertFalse((Path(tmp) / "memory").exists())
+
+    def test_filesystem_failure_degrades_to_empty_view(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            # A regular file where the memory directory should be: mkdir
+            # must fail, and render must degrade instead of raising.
+            (Path(tmp) / "memory").write_text("in the way")
+            with mock.patch.dict(environ, {ENV_MEMORY: "1"}):
+                view = render_memory_block(_workspace(tmp))
+            self.assertEqual(view.block, "")
+
 
 class MemoryRenderTests(unittest.TestCase):
     def _render(self, tmp: str):
@@ -132,6 +150,23 @@ class MemoryRenderTests(unittest.TestCase):
             self.assertIn("memory/visible.md", view.block)
             self.assertNotIn("hidden", view.block)
 
+    def test_symlinks_are_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "memory"
+            root.mkdir()
+            (root / "real.md").write_text("yes")
+            (Path(tmp) / "outside.md").write_text("outside")
+            try:
+                (root / "link.md").symlink_to(Path(tmp) / "outside.md")
+                (root / "dirlink").symlink_to(Path(tmp))
+            except OSError:
+                self.skipTest("symlinks not supported on this platform")
+            view = self._render(tmp)
+            self.assertEqual(view.files, 1)
+            self.assertIn("memory/real.md", view.block)
+            self.assertNotIn("link.md", view.block)
+            self.assertNotIn("dirlink", view.block)
+
     def test_listing_is_deterministically_sorted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "memory"
@@ -162,8 +197,12 @@ class MemoryRenderTests(unittest.TestCase):
         from agent_runtime.memory import _human_size
         self.assertEqual(_human_size(0), "0 B")
         self.assertEqual(_human_size(512), "512 B")
+        self.assertEqual(_human_size(1023), "1023 B")
+        self.assertEqual(_human_size(1024), "1.0 KB")
         self.assertEqual(_human_size(2048), "2.0 KB")
         self.assertEqual(_human_size(5 * 1024 ** 2), "5.0 MB")
+        self.assertEqual(_human_size(2 * 1024 ** 3), "2.0 GB")
+        self.assertEqual(_human_size(3 * 1024 ** 4), "3.0 TB")
 
     def test_entry_cap_truncates_with_marker(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -254,17 +293,23 @@ class MemoryLoopIntegrationTests(unittest.IsolatedAsyncioTestCase):
             llm = FakeLLM([_plain_answer(), _plain_answer()])
             tools = ToolRegistry([], workspace=_workspace(tmp))
             conversation = Conversation()
+            trace = RunTrace(run_id="memory-two-turns")
             with mock.patch.dict(environ, {ENV_MEMORY: "1"}):
                 await run_turn("first", llm, tools, harness=HarnessSpec(),
-                               conversation=conversation)
+                               conversation=conversation, trace=trace)
                 await run_turn("second", llm, tools, harness=HarnessSpec(),
-                               conversation=conversation)
+                               conversation=conversation, trace=trace)
             systems = [message for message in conversation.messages
                        if message.get("role") == "system"]
             self.assertEqual(len(systems), 1)
             # And the second request saw that same single system message.
             self.assertEqual(llm.messages[1][0]["role"], "system")
             self.assertIn("Persistent memory", llm.messages[1][0]["content"])
+            # The no-op injection on the second turn emits no new event:
+            # one recall for the conversation, not one per turn.
+            recalls = [event for event in trace.events
+                       if event.event_type == "memory.recall"]
+            self.assertEqual(len(recalls), 1)
 
 
 if __name__ == "__main__":

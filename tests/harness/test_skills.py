@@ -118,25 +118,29 @@ class SkillLoadingTests(unittest.TestCase):
 class EnsureSystemPromptTests(unittest.TestCase):
     def test_system_and_block_combine(self) -> None:
         conversation = Conversation()
-        _ensure_system_prompt(conversation, "sys", "skill-text")
+        inserted = _ensure_system_prompt(conversation, "sys", "skill-text")
+        self.assertTrue(inserted)
         self.assertEqual(conversation.messages,
                           [{"role": "system", "content": "sys\n\nskill-text"}])
 
     def test_skill_only_becomes_system(self) -> None:
         conversation = Conversation()
-        _ensure_system_prompt(conversation, "", "skill-text")
+        inserted = _ensure_system_prompt(conversation, "", "skill-text")
+        self.assertTrue(inserted)
         self.assertEqual(conversation.messages,
                           [{"role": "system", "content": "skill-text"}])
 
     def test_empty_stays_empty(self) -> None:
         conversation = Conversation()
-        _ensure_system_prompt(conversation, "", "")
+        inserted = _ensure_system_prompt(conversation, "", "")
+        self.assertFalse(inserted)
         self.assertEqual(conversation.messages, [])
 
     def test_existing_system_not_duplicated(self) -> None:
         conversation = Conversation()
         conversation.append({"role": "system", "content": "x"})
-        _ensure_system_prompt(conversation, "y", "z")
+        inserted = _ensure_system_prompt(conversation, "y", "z")
+        self.assertFalse(inserted)
         self.assertEqual(conversation.messages,
                          [{"role": "system", "content": "x"}])
 

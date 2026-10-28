@@ -38,22 +38,31 @@ from agent_runtime.harness import ContextGenome
 
 def _ensure_system_prompt(conversation: Conversation, system: str,
                          skills_block: str = "",
-                         memory_block: str = "") -> None:
+                         memory_block: str = "") -> bool:
     """Insert the harness system prompt once, before the first user message.
 
-    ``memory_block`` (persistent-memory convention plus tree) and
-    ``skills_block`` (rendered plain skill text) are appended after
-    ``system`` as part of the same system message (injection point A),
-    in that order, so memory strategies see one resident system
-    message.
+    Returns True when a system message was inserted, False when the
+    conversation already had one (or there was nothing to insert).
+    Callers use the return value to decide whether injection-point-A
+    trace events (``skills.loaded``, ``memory.recall``) describe a
+    prompt the model will actually see.
+
+    ``memory_block`` (persistent-memory convention plus tree) comes
+    before ``skills_block`` (rendered plain skill text) after ``system``
+    as part of the same system message (injection point A): memory
+    carries session-level identity (who the user is, what persists),
+    skills carry task-level procedure (how to act) — the more stable
+    context leads.  One resident system message keeps memory
+    strategies coherent.
     """
     parts = [part for part in (system, memory_block, skills_block) if part]
     if not parts:
-        return
+        return False
     if any(message.get("role") == "system" for message in conversation.messages):
-        return
+        return False
     conversation.messages.insert(
         0, {"role": "system", "content": "\n\n".join(parts)})
+    return True
 
 
 class Conversation:
