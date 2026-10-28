@@ -14,9 +14,9 @@
 #   AGENT_RUNTIME_WEBUI_PORT  监听端口 (默认 8000)
 set -uo pipefail
 
-# ---- 基础路径（脚本所在目录的上一级，即项目根目录）----
+# ---- 基础路径（脚本所在目录，即项目根目录）----
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+ROOT_DIR="$SCRIPT_DIR"
 cd "$ROOT_DIR"
 
 # ---- 配置 ----

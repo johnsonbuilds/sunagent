@@ -16,3 +16,6 @@ jobs/
 # Agent sandbox: spilled observations and generated scripts.
 .outputs/
 .scripts/
+# WebUI runtime artifacts (run.sh start/stop)
+.webui.pid
+webui.log
