@@ -93,7 +93,7 @@ control:
   budget_reminder:
     enabled: true
     at_fractions: [0.25, 0.6, 0.85]
-memory:
+context:
   strategy: llm_summary
   budget_unit: tokens
   context_budget: 60000  # tokens; 2x validation setting for 1M-ctx models - still ~3 compactions/heavy-task, gates stay observable
