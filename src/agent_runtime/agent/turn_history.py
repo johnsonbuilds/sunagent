@@ -37,14 +37,17 @@ from agent_runtime.harness import ContextGenome
 
 
 def _ensure_system_prompt(conversation: Conversation, system: str,
-                         skills_block: str = "") -> None:
+                         skills_block: str = "",
+                         memory_block: str = "") -> None:
     """Insert the harness system prompt once, before the first user message.
 
-    ``skills_block`` (rendered plain skill text) is appended after
+    ``memory_block`` (persistent-memory convention plus tree) and
+    ``skills_block`` (rendered plain skill text) are appended after
     ``system`` as part of the same system message (injection point A),
-    so memory strategies see one resident system message.
+    in that order, so memory strategies see one resident system
+    message.
     """
-    parts = [part for part in (system, skills_block) if part]
+    parts = [part for part in (system, memory_block, skills_block) if part]
     if not parts:
         return
     if any(message.get("role") == "system" for message in conversation.messages):

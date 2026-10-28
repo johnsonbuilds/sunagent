@@ -53,6 +53,7 @@ from agent_runtime.agent.turn_history import (
 )
 from agent_runtime.events import EventEmitter
 from agent_runtime.harness import HarnessSpec, default_harness
+from agent_runtime.memory import render_memory_block
 from agent_runtime.skills import (
     render_skills_block,
     resolve_skills,
@@ -259,8 +260,11 @@ class AgentTurn:
         skills_block = render_skills_block(skills)
         if skills:
             trace.emit("skills.loaded", 0, **skills_trace_meta(skills))
+        memory_view = render_memory_block(getattr(tools, "workspace", None))
+        if memory_view.block:
+            trace.emit("memory.recall", 0, **memory_view.trace_meta())
         _ensure_system_prompt(self.conversation, harness.prompt.system,
-                              skills_block)
+                              skills_block, memory_view.block)
         self.conversation.append({"role": "user", "content": self.user_message})
         history = TurnHistory(self.conversation.messages)
         error_budget = SameToolErrorBudget(
