@@ -255,7 +255,7 @@ def manifest_text(spec: HarnessSpec) -> str:
         "control": {"max_iterations": spec.control.max_iterations,
                       "finish_violation_limit":
                           spec.control.finish_violation_limit},
-        "memory": {"strategy": spec.memory.strategy},
+        "context": {"strategy": spec.context.strategy},
         "recovery": {
             "tool_error": spec.recovery.tool_error,
             "tool_error_max_retries": spec.recovery.tool_error_max_retries,

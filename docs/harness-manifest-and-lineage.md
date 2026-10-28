@@ -3,7 +3,7 @@
 ## 1. The Idea: Harness as Versioned Data
 
 Everything that decides *how* the agent works — prompt, tools, control
-flow, memory, recovery, verification — is a **harness genome**: named
+flow, context, recovery, verification — is a **harness genome**: named
 data in a YAML manifest, not code.
 
 ```text
@@ -26,10 +26,21 @@ Seven genes (all extracted from what the code used to hardcode):
 | `prompt` | `system`, `iteration_limit_notice` | `""` (no system prompt), hardcoded notice |
 | `tools` | `enabled` | `[run_command]` |
 | `control` | `max_iterations` | `10` |
-| `memory` | `strategy` | `full_history` |
+| `context` | `strategy` | `full_history` |
 | `recovery` | `tool_error` | `feed_error_and_continue` |
 | `verification` | `enabled` | `false` |
 | `skills` | list | `[]` |
+
+> Legacy note: the `context` gene was called `memory` before the rename.
+> Existing `harnesses/*.yaml` files still carry the `memory` key and load
+> unchanged via a backwards-compatible loader (`context` wins if both are
+> present; carrying both is rejected). New manifests should use `context`.
+> `memory` is reserved for future long-term / cross-session recall and is
+> unrelated to on-disk `workspace/memory/`.
+>
+> Trace events were renamed with the gene: `context.{strategy}`,
+> `context.llm_summary.(error|invalid|yield)`. Old traces keep the `memory.*`
+> names and are not re-analyzed.
 
 Lineage metadata lives next to the genes: `id`, `parent`, `mutation`,
 `reason`. The `genes_hash` is computed over the genes only — editing

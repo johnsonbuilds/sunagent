@@ -2,7 +2,7 @@
 agent works, expressed as data instead of code.
 
 The runtime engine (loop, trace, events) stays stable; a harness spec
-selects prompt, tools, control flow, memory, recovery and verification
+selects prompt, tools, control flow, context, recovery and verification
 behavior.  Specs are loaded from YAML manifests so harness versions can
 be diffed, compared, and later mutated one gene at a time:
 
@@ -124,18 +124,24 @@ def _default_llm_errors() -> dict[str, LLMRetryPolicy]:
 MEMORY_STRATEGIES: tuple[str, ...] = (
     "full_history", "compact_observations", "llm_summary")
 
+# Backwards-compatibility alias: the gene is now called ``context``.
+# ``memory`` is reserved for future long-term / cross-session recall
+# (see ``workspace/memory/``); harness manifests may still use the
+# legacy ``memory`` key, which loads as ``context``.
+CONTEXT_STRATEGIES: tuple[str, ...] = MEMORY_STRATEGIES
+
 # Transcript-economics defaults: declared once here and consumed by the
-# memory strategies (agent.memory) and the observation boundary
+# context strategies (agent.context) and the observation boundary
 # (agent.observations).  The invariant "archive exactly what compaction
 # could truncate" is structural: the observation formatter receives
-# archive_min_chars = memory.head_chars, so the two can never drift.
-DEFAULT_HEAD_CHARS = 200                 # memory: compaction keeps this much of an old observation
-DEFAULT_CONTEXT_BUDGET = 60_000          # memory: request-view char budget that triggers compaction
-DEFAULT_WINDOW_ROUNDS = 12               # memory: compaction comfort window
-DEFAULT_KEEP_RECENT_ROUNDS = 2           # memory: rounds never compacted under budget pressure
-DEFAULT_SUMMARY_TAIL_ROUNDS = 2          # memory: llm_summary verbatim tail
-DEFAULT_USER_PRESERVE_BUDGET = 8_000     # memory: CHARS (either budget unit) of mid-conversation user messages kept verbatim (newest first). Always chars by design: the preserve pool is a coarse guard, and routing it through the anchor-calibrated char/token ratio would inject conversion noise into a threshold chars serve fine.
-DEFAULT_SUMMARY_MAX_TOKENS = 2_048       # memory: summarizer output cap; longer output is rejected, falls back
+# archive_min_chars = context.head_chars, so the two can never drift.
+DEFAULT_HEAD_CHARS = 200                 # context: compaction keeps this much of an old observation
+DEFAULT_CONTEXT_BUDGET = 60_000          # context: request-view char budget that triggers compaction
+DEFAULT_WINDOW_ROUNDS = 12               # context: compaction comfort window
+DEFAULT_KEEP_RECENT_ROUNDS = 2           # context: rounds never compacted under budget pressure
+DEFAULT_SUMMARY_TAIL_ROUNDS = 2          # context: llm_summary verbatim tail
+DEFAULT_USER_PRESERVE_BUDGET = 8_000     # context: CHARS (either budget unit) of mid-conversation user messages kept verbatim (newest first). Always chars by design: the preserve pool is a coarse guard, and routing it through the anchor-calibrated char/token ratio would inject conversion noise into a threshold chars serve fine.
+DEFAULT_SUMMARY_MAX_TOKENS = 2_048       # context: summarizer output cap; longer output is rejected, falls back
 
 # Tool names whose observations outlive the comfort window verbatim and
 # only fold under real budget pressure (last-folded, never exempt from
@@ -145,8 +151,9 @@ DEFAULT_RETRIEVAL_EXEMPT_TOOLS: tuple[str, ...] = ()
 
 # Units the request-view budget can be measured in.  ``chars`` is the
 # legacy cheap proxy; ``tokens`` combines the last measured prompt usage
-# with per-message char estimates (see agent.memory).
+# with per-message char estimates (see agent.context).
 MEMORY_BUDGET_UNITS: tuple[str, ...] = ("chars", "tokens")
+CONTEXT_BUDGET_UNITS: tuple[str, ...] = MEMORY_BUDGET_UNITS
 DEFAULT_MAX_OBSERVATION_CHARS = 16_000   # control: inline observation budget before windowing
 DEFAULT_SPILL_PREVIEW_CHARS = 4_000      # control: head/tail window half-size
 
@@ -190,7 +197,7 @@ class ControlGenome:
 
 
 @dataclass(frozen=True)
-class MemoryGenome:
+class ContextGenome:
     strategy: str = "full_history"
     budget_unit: str = "chars"
     head_chars: int = DEFAULT_HEAD_CHARS
@@ -201,6 +208,10 @@ class MemoryGenome:
     user_preserve_budget: int = DEFAULT_USER_PRESERVE_BUDGET  # chars, either budget unit (coarse guard; no token conversion)
     summary_max_tokens: int = DEFAULT_SUMMARY_MAX_TOKENS
     retrieval_exempt_tools: tuple[str, ...] = DEFAULT_RETRIEVAL_EXEMPT_TOOLS
+
+
+# Backwards-compatibility alias: ``memory`` is the legacy gene name.
+MemoryGenome = ContextGenome
 
 
 @dataclass(frozen=True)
@@ -274,12 +285,17 @@ class HarnessSpec:
     prompt: PromptGenome = field(default_factory=PromptGenome)
     tools: ToolGenome = field(default_factory=ToolGenome)
     control: ControlGenome = field(default_factory=ControlGenome)
-    memory: MemoryGenome = field(default_factory=MemoryGenome)
+    context: ContextGenome = field(default_factory=ContextGenome)
     recovery: RecoveryGenome = field(default_factory=RecoveryGenome)
     verification: VerificationGenome = field(default_factory=VerificationGenome)
     skills: tuple[str, ...] = ()
     source: str | None = None
     genes_hash: str = ""
+
+    @property
+    def memory(self) -> "ContextGenome":
+        """Legacy alias for :attr:`context` (pre-rename manifests/code)."""
+        return self.context
 
     def __post_init__(self) -> None:
         if not self.genes_hash:
@@ -291,9 +307,9 @@ class HarnessSpec:
             "prompt": asdict(self.prompt),
             "tools": {"enabled": list(self.tools.enabled)},
             "control": asdict(self.control),
-            "memory": {**asdict(self.memory),
+            "context": {**asdict(self.context),
                        "retrieval_exempt_tools":
-                           list(self.memory.retrieval_exempt_tools)},
+                           list(self.context.retrieval_exempt_tools)},
             "recovery": asdict(self.recovery),
             "verification": asdict(self.verification),
             "skills": list(self.skills),
@@ -443,51 +459,63 @@ def _budget_reminder(value: Any) -> BudgetReminder:
     return BudgetReminder(enabled=enabled, at_fractions=tuple(sorted(fractions)))
 
 
-def _memory_genome(data: Mapping[str, Any]) -> MemoryGenome:
-    section = data.get("memory") or {}
+def _context_genome(data: Mapping[str, Any]) -> ContextGenome:
+    # ``memory`` is the legacy gene name: old manifests still carry it.
+    # New manifests use ``context``. Both present is ambiguous -> reject.
+    if "context" in data and "memory" in data:
+        if data.get("context") is not None and data.get("memory") is not None:
+            raise HarnessError("use 'context', not both 'context' and legacy 'memory'")
+    section = data.get("context")
+    if section is None:
+        section = data.get("memory") or {}
     if not isinstance(section, Mapping):
-        raise HarnessError("memory must be a mapping")
+        raise HarnessError("context must be a mapping")
     _check_keys(section, {"strategy", "budget_unit", "head_chars",
                           "context_budget", "window_rounds",
                           "keep_recent_rounds", "summary_tail_rounds",
                           "user_preserve_budget", "summary_max_tokens",
                           "retrieval_exempt_tools"},
-                "memory")
-    strategy = _required_text(section, "strategy", "memory", "full_history")
-    if strategy not in MEMORY_STRATEGIES:
+                "context")
+    strategy = _required_text(section, "strategy", "context", "full_history")
+    if strategy not in CONTEXT_STRATEGIES:
         raise HarnessError(
-            f"memory.strategy must be one of {list(MEMORY_STRATEGIES)}, "
+            f"context.strategy must be one of {list(CONTEXT_STRATEGIES)}, "
             f"got {strategy!r}")
     budget_unit = section.get("budget_unit") or "chars"
-    if budget_unit not in MEMORY_BUDGET_UNITS:
+    if budget_unit not in CONTEXT_BUDGET_UNITS:
         raise HarnessError(
-            f"memory.budget_unit must be one of "
-            f"{list(MEMORY_BUDGET_UNITS)}, got {budget_unit!r}")
-    return MemoryGenome(
+            f"context.budget_unit must be one of "
+            f"{list(CONTEXT_BUDGET_UNITS)}, got {budget_unit!r}")
+    return ContextGenome(
         strategy=strategy,
         budget_unit=budget_unit,
         head_chars=_positive_int(section.get("head_chars"),
-                                 "memory.head_chars", DEFAULT_HEAD_CHARS),
+                                 "context.head_chars", DEFAULT_HEAD_CHARS),
         context_budget=_positive_int(section.get("context_budget"),
-                                     "memory.context_budget",
+                                     "context.context_budget",
                                      DEFAULT_CONTEXT_BUDGET),
         window_rounds=_positive_int(section.get("window_rounds"),
-                                    "memory.window_rounds",
+                                    "context.window_rounds",
                                     DEFAULT_WINDOW_ROUNDS),
         keep_recent_rounds=_positive_int(section.get("keep_recent_rounds"),
-                                         "memory.keep_recent_rounds",
+                                         "context.keep_recent_rounds",
                                          DEFAULT_KEEP_RECENT_ROUNDS),
         summary_tail_rounds=_positive_int(section.get("summary_tail_rounds"),
-                                          "memory.summary_tail_rounds",
+                                          "context.summary_tail_rounds",
                                           DEFAULT_SUMMARY_TAIL_ROUNDS),
         user_preserve_budget=_positive_int(
             section.get("user_preserve_budget"),
-            "memory.user_preserve_budget", DEFAULT_USER_PRESERVE_BUDGET),
+            "context.user_preserve_budget", DEFAULT_USER_PRESERVE_BUDGET),
         summary_max_tokens=_positive_int(
             section.get("summary_max_tokens"),
-            "memory.summary_max_tokens", DEFAULT_SUMMARY_MAX_TOKENS),
+            "context.summary_max_tokens", DEFAULT_SUMMARY_MAX_TOKENS),
         retrieval_exempt_tools=_name_list(
-            section, "retrieval_exempt_tools", "memory"))
+            section, "retrieval_exempt_tools", "context"))
+
+
+def _memory_genome(data: Mapping[str, Any]) -> ContextGenome:
+    """Legacy alias: old code path, now loads via :func:`_context_genome`."""
+    return _context_genome(data)
 
 
 def _recovery_genome(data: Mapping[str, Any]) -> RecoveryGenome:
@@ -585,7 +613,7 @@ def from_dict(data: Mapping[str, Any]) -> HarnessSpec:
     # "source" and "genes_hash" are outputs of to_dict(); accepted so a
     # spec can round-trip, but ignored and recomputed here.
     _check_keys(data, {"id", "parent", "mutation", "reason", "prompt", "tools",
-                       "control", "memory", "recovery", "verification", "skills",
+                       "control", "context", "memory", "recovery", "verification", "skills",
                        "source", "genes_hash"},
                 "manifest")
     harness_id = data.get("id", "baseline-v0")
@@ -599,7 +627,7 @@ def from_dict(data: Mapping[str, Any]) -> HarnessSpec:
         prompt=_prompt_genome(data),
         tools=_tools_genome(data),
         control=_control_genome(data),
-        memory=_memory_genome(data),
+        context=_context_genome(data),
         recovery=_recovery_genome(data),
         verification=_verification_genome(data),
         skills=_name_list(data, "skills", "manifest"),
@@ -798,11 +826,11 @@ if __name__ == "__main__":
 __all__ = [
     "BUILTIN_HARNESS", "DEFAULT_HARNESS_ID", "REPO_HARNESSES_DIR",
     "HarnessError", "HarnessSpec", "ITERATION_LIMIT_NOTICE",
-    "PromptGenome", "ToolGenome", "BudgetReminder", "ControlGenome", "MemoryGenome",
+    "PromptGenome", "ToolGenome", "BudgetReminder", "ControlGenome", "ContextGenome", "MemoryGenome",
     "RecoveryGenome", "VerificationGenome", "DEFAULT_VERIFICATION_REQUIRE",
     "VERIFICATION_MODES", "TOOL_ERROR_STRATEGIES",
     "LLM_RETRY_CATEGORIES", "LLMRetryPolicy", "BACKOFF_POLICIES",
-    "MEMORY_STRATEGIES", "MEMORY_BUDGET_UNITS",
+    "CONTEXT_STRATEGIES", "MEMORY_STRATEGIES", "CONTEXT_BUDGET_UNITS", "MEMORY_BUDGET_UNITS",
     "DEFAULT_USER_PRESERVE_BUDGET", "DEFAULT_SUMMARY_MAX_TOKENS",
     "DEFAULT_RETRIEVAL_EXEMPT_TOOLS",
     "default_harness", "feed_error_and_continue",

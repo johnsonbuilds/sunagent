@@ -24,11 +24,16 @@ so "where does this write?" always has the same answer.  Set
 
 `workspace/` is git-ignored: it is disposable run state.
 
+> Naming note: on-disk `workspace/memory/` is run-state persistence and is
+> unrelated to the harness `context` gene (formerly called `memory`).
+> The gene shapes the per-request view sent to the LLM; the directory
+> holds the latest compaction summary file.
+
 | Artifact | Path | Written by |
 |---|---|---|
 | Browser conversations | `workspace/sessions/sess-*.json` | `webui/sessions.py` (`SessionStore.save`) |
 | Run traces | `workspace/traces/run-*.jsonl` | `src/agent_runtime/trace.py` (`RunTrace._write_events`), via `webui/server.py` and `run_agent.py` |
-| Compaction summary | `workspace/memory/session_memory.md` | `src/agent_runtime/agent/memory.py` (`_write_session_memory`) |
+| Compaction summary | `workspace/memory/session_memory.md` | `src/agent_runtime/agent/context.py` (compaction summary emission; legacy docs said `agent/memory.py`) |
 
 An empty conversation is never written: the file appears with the
 first message and disappears with the conversation.  A session that

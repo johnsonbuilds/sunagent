@@ -7,18 +7,18 @@ import unittest
 from typing import Any
 
 from agent_runtime.agent.chat import chat_with_recovery
-from agent_runtime.agent.memory import (
+from agent_runtime.agent.context import (
     DEFAULT_SUMMARY_MAX_TOKENS,
     DEFAULT_USER_PRESERVE_BUDGET,
     SUMMARY_PREFIX,
     _anchor_chars_per_token,
     _view_size,
-    apply_memory_strategy,
+    apply_context_strategy,
     set_summary_llm,
     summarize_history,
 )
 from agent_runtime.agent.turn_history import Conversation, TurnHistory
-from agent_runtime.harness import HarnessSpec, MemoryGenome, from_dict
+from agent_runtime.harness import HarnessSpec, ContextGenome, from_dict
 from agent_runtime.providers.llm import ContextWindowExceededError
 
 
@@ -86,7 +86,7 @@ class FakeSummaryLLM:
 class ViewSizeTests(unittest.TestCase):
     def test_chars_unit_counts_characters(self) -> None:
         messages = build_rounds(2, tool_chars=50)
-        from agent_runtime.agent.memory import _total_chars
+        from agent_runtime.agent.context import _total_chars
         self.assertEqual(_view_size(messages, False, "chars", None),
                          _total_chars(messages, False))
 
@@ -270,7 +270,7 @@ class TurnHistoryAnchorTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(view_chars, 0)
 
         # A summary-producing refresh moves the boundary forward
-        genome = MemoryGenome(strategy="llm_summary", context_budget=1,
+        genome = ContextGenome(strategy="llm_summary", context_budget=1,
                               summary_tail_rounds=1)
         llm = FakeSummaryLLM()
         set_summary_llm(llm)
@@ -294,7 +294,7 @@ class RetrievalExemptionTests(unittest.TestCase):
         return out
 
     def test_exempt_survives_pass1_nonexempt_folds(self) -> None:
-        from agent_runtime.agent.memory import compact_observations, DEFAULT_HEAD_CHARS
+        from agent_runtime.agent.context import compact_observations, DEFAULT_HEAD_CHARS
         messages = self._mixed_rounds(12, tool_chars=1_000)
         # Budget just above what pass-1 folding of the non-exempt rounds
         # achieves, so passes 2/3 stay out of the picture.
@@ -311,7 +311,7 @@ class RetrievalExemptionTests(unittest.TestCase):
         self.assertLess(len(tool_contents["c1"]), DEFAULT_HEAD_CHARS + 200)
 
     def test_exempt_folds_under_hard_budget_pressure(self) -> None:
-        from agent_runtime.agent.memory import compact_observations
+        from agent_runtime.agent.context import compact_observations
         messages = self._mixed_rounds(12, tool_chars=1_000)
         # Tiny budget: pass 2 exhausts non-exempt rounds, pass 3 folds
         # the exempt ones too - exemption is a fold order, not a
@@ -328,7 +328,7 @@ class RetrievalExemptionTests(unittest.TestCase):
                          "old exempt observations must fold under budget pressure")
 
     def test_no_exemption_by_default(self) -> None:
-        from agent_runtime.agent.memory import compact_observations
+        from agent_runtime.agent.context import compact_observations
         messages = self._mixed_rounds(12, tool_chars=1_000)
         view = compact_observations(messages, budget=10_000, window_rounds=4)
         first_tool = next(m for m in view if m.get("role") == "tool")
@@ -436,7 +436,7 @@ class AnchorLifecycleTests(unittest.IsolatedAsyncioTestCase):
         history = TurnHistory(conversation.messages)
         history.record_usage(5_000)
         self.assertIsNotNone(history.usage_anchor)
-        genome = MemoryGenome(strategy="compact_observations",
+        genome = ContextGenome(strategy="compact_observations",
                               context_budget=1)
         await history.refresh_view(genome)
         self.assertIsNone(history.usage_anchor)
@@ -446,7 +446,7 @@ class AnchorLifecycleTests(unittest.IsolatedAsyncioTestCase):
         conversation.messages.extend(build_rounds(1, tool_chars=10))
         history = TurnHistory(conversation.messages)
         history.record_usage(5_000)
-        genome = MemoryGenome(strategy="compact_observations",
+        genome = ContextGenome(strategy="compact_observations",
                               context_budget=10 ** 9)
         await history.refresh_view(genome)
         self.assertIsNotNone(history.usage_anchor)
@@ -463,9 +463,9 @@ class ForceBudgetTests(unittest.IsolatedAsyncioTestCase):
         messages = build_rounds(6, tool_chars=1_000)
         llm = FakeSummaryLLM()
         set_summary_llm(llm)
-        result = await apply_memory_strategy(
+        result = await apply_context_strategy(
             messages,
-            MemoryGenome(strategy="llm_summary",
+            ContextGenome(strategy="llm_summary",
                          context_budget=10 ** 9),
             compact_messages=messages[:2], force_budget=1)
         self.assertFalse(any(
@@ -501,9 +501,9 @@ class SummarizerObservabilityTests(unittest.IsolatedAsyncioTestCase):
             for m in result))
         # ... and the cause is on the trace with the input scale.
         kinds = [a[0] for a, _ in events]
-        self.assertIn("memory.llm_summary.error", kinds)
+        self.assertIn("context.llm_summary.error", kinds)
         args, payload = next((a, k) for a, k in events
-                             if a[0] == "memory.llm_summary.error")
+                             if a[0] == "context.llm_summary.error")
         self.assertIn("429", payload["error"])
         self.assertEqual(payload["error_type"], "RuntimeError")
         self.assertEqual(args[1], 9)
@@ -526,9 +526,9 @@ class SummarizerObservabilityTests(unittest.IsolatedAsyncioTestCase):
             str(m.get("content", "")).startswith(SUMMARY_PREFIX)
             for m in result))
         kinds = [a[0] for a, _ in events]
-        self.assertIn("memory.llm_summary.invalid", kinds)
+        self.assertIn("context.llm_summary.invalid", kinds)
         payload = next(k for a, k in events
-                       if a[0] == "memory.llm_summary.invalid")
+                       if a[0] == "context.llm_summary.invalid")
         self.assertIn("missing required section", payload["reason"])
         self.assertEqual(payload["summary_chars"], len("no sections here"))
 
@@ -560,10 +560,10 @@ class SummarizerObservabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(c.startswith(SUMMARY_PREFIX) and "RECOVERED" in c
                             for c in contents))
         kinds = [a[0] for a, _ in events]
-        self.assertIn("memory.llm_summary.invalid", kinds)
-        self.assertIn("memory.llm_summary.yield", kinds)
+        self.assertIn("context.llm_summary.invalid", kinds)
+        self.assertIn("context.llm_summary.yield", kinds)
         _, payload = next((a, k) for a, k in events
-                          if a[0] == "memory.llm_summary.invalid")
+                          if a[0] == "context.llm_summary.invalid")
         self.assertEqual(payload["attempt"], 1)
 
     async def test_double_invalid_falls_back(self) -> None:
@@ -583,7 +583,7 @@ class SummarizerObservabilityTests(unittest.IsolatedAsyncioTestCase):
             str(m.get("content", "")).startswith(SUMMARY_PREFIX)
             for m in result))
         attempts = [k["attempt"] for a, k in events
-                    if a[0] == "memory.llm_summary.invalid"]
+                    if a[0] == "context.llm_summary.invalid"]
         self.assertEqual(attempts, [1, 2])
 
     async def test_success_still_emits_yield_only(self) -> None:
@@ -597,9 +597,9 @@ class SummarizerObservabilityTests(unittest.IsolatedAsyncioTestCase):
         await summarize_history(self._history(), budget=1, tail_rounds=2,
                                 trace=FakeTrace(), iteration=9)
         kinds = [a[0] for a, _ in events]
-        self.assertIn("memory.llm_summary.yield", kinds)
-        self.assertNotIn("memory.llm_summary.error", kinds)
-        self.assertNotIn("memory.llm_summary.invalid", kinds)
+        self.assertIn("context.llm_summary.yield", kinds)
+        self.assertNotIn("context.llm_summary.error", kinds)
+        self.assertNotIn("context.llm_summary.invalid", kinds)
 
 
 class BoundaryChaseTests(unittest.IsolatedAsyncioTestCase):
@@ -648,7 +648,7 @@ class BoundaryChaseTests(unittest.IsolatedAsyncioTestCase):
 
         llm = CountingLLM()
         set_summary_llm(llm)
-        genome = MemoryGenome(strategy="llm_summary", budget_unit="chars",
+        genome = ContextGenome(strategy="llm_summary", budget_unit="chars",
                               context_budget=20_000)
         history = self._history(16)
         # First compaction, like the agent loop: refresh, then work.
@@ -686,15 +686,15 @@ class TB4HarnessTests(unittest.TestCase):
     def test_tb_v4_loads_new_genes(self) -> None:
         from agent_runtime.harness import load_named_harness
         spec = load_named_harness("tb-v4")
-        self.assertEqual(spec.memory.budget_unit, "tokens")
-        self.assertEqual(spec.memory.context_budget, 60_000)
-        self.assertEqual(spec.memory.user_preserve_budget, 8_000)
-        self.assertEqual(spec.memory.summary_max_tokens, 2_048)
+        self.assertEqual(spec.context.budget_unit, "tokens")
+        self.assertEqual(spec.context.context_budget, 60_000)
+        self.assertEqual(spec.context.user_preserve_budget, 8_000)
+        self.assertEqual(spec.context.summary_max_tokens, 2_048)
         policy = spec.recovery.llm_errors["context_window"]
         self.assertEqual((policy.max_retries, policy.backoff), (2, "none"))
 
     def test_legacy_defaults_unchanged(self) -> None:
-        genome = MemoryGenome()
+        genome = ContextGenome()
         self.assertEqual(genome.budget_unit, "chars")
         self.assertEqual(genome.user_preserve_budget,
                          DEFAULT_USER_PRESERVE_BUDGET)

@@ -5,12 +5,12 @@ model on every iteration, so the transcript is the scarce resource.  The
 invariant maintained here: **any observation that compaction could ever
 truncate is archived at birth under ``.outputs/obs-<tool_call_id>.txt``**
 (Manus-style "file system as ultimate context").  Shorter observations
-can never lose data — ``memory`` compaction leaves them untouched — so
+can never lose data — ``context`` compaction leaves them untouched — so
 they skip the archive (in remote environments each write is a container
 round-trip).
 
 With the archive in place, later compaction in
-:mod:`agent_runtime.agent.memory` shortens old observations without any
+:mod:`agent_runtime.agent.context` shortens old observations without any
 I/O — the reference already travels in the message metadata — and the
 model can always page the original back with ``read_output``.
 
@@ -131,7 +131,7 @@ class ObservationFormatter:
     """Render tool results at the transcript boundary, archiving what could
     ever be lost.
 
-    ``memory`` compaction truncates observation text beyond
+    ``context`` compaction truncates observation text beyond
     ``head_chars`` — anything at or below that size can never lose data
     and skips the archive (a ``printf hello`` observation does not need a
     file, and in remote environments each write is a container
@@ -141,7 +141,7 @@ class ObservationFormatter:
 
     The knobs are injected from the harness genome: ``max_chars`` /
     ``spill_preview_chars`` come from ``control``, ``archive_min_chars``
-    is derived from ``memory.head_chars`` so the invariant is structural.
+    is derived from ``context.head_chars`` so the invariant is structural.
     """
 
     def __init__(self, workspace: Workspace | None = None,

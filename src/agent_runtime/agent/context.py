@@ -1,4 +1,4 @@
-"""Context management strategies: the request view of conversation history.
+"""Context management: the request view of conversation history.
 
 The conversation itself is the source of truth and is never mutated by
 these strategies.  A strategy only produces the *view* of the history
@@ -12,7 +12,7 @@ compacted tool message stays a tool message with the same
 ``tool_call_id`` — so the result is always a protocol-legal sequence.
 
 All knobs (budgets, windows, tail sizes) come from the harness's
-``MemoryGenome`` (see ``agent_runtime.harness``), threaded in by the
+``ContextGenome`` (see ``agent_runtime.harness``), threaded in by the
 caller; this module holds no policy constants of its own.
 """
 
@@ -29,7 +29,7 @@ from agent_runtime.harness import (
     DEFAULT_SUMMARY_TAIL_ROUNDS,
     DEFAULT_USER_PRESERVE_BUDGET,
     DEFAULT_WINDOW_ROUNDS,
-    MemoryGenome,
+    ContextGenome,
 )
 
 logger = logging.getLogger(__name__)
@@ -180,10 +180,10 @@ def _anchor_chars_per_token(anchor: tuple[int, int, int] | None) -> float:
     return anchor_chars / tokens
 
 
-def request_view_size(view: list[dict[str, Any]], memory: MemoryGenome,
+def request_view_size(view: list[dict[str, Any]], context: ContextGenome,
                       usage_anchor: tuple[int, int, int] | None = None) -> int:
     """Request-view size in the genome's unit, for gate decisions."""
-    return _view_size(view, _reasoning_replayed(), memory.budget_unit,
+    return _view_size(view, _reasoning_replayed(), context.budget_unit,
                       usage_anchor)
 
 
@@ -366,7 +366,7 @@ def compact_observations(messages: list[dict[str, Any]], *,
     return result
 
 
-async def apply_memory_strategy(messages: list[dict[str, Any]], memory: MemoryGenome, *,
+async def apply_context_strategy(messages: list[dict[str, Any]], context: ContextGenome, *,
                                 compact_messages: list[dict[str, Any]] | None = None,
                                 trace: Any = None, iteration: int | None = None,
                                 boundary: int = 0,
@@ -375,7 +375,7 @@ async def apply_memory_strategy(messages: list[dict[str, Any]], memory: MemoryGe
                                 **options: Any) -> list[dict[str, Any]]:
     """Build the request view of ``messages`` under the memory genome.
 
-    ``memory`` is the harness's :class:`MemoryGenome` — strategy plus all
+    ``context`` is the harness's :class:`ContextGenome` — strategy plus all
     view-shaping knobs (budget, windows, tail sizes); this adapter unpacks
     it into the strategy functions, which stay pure and parameter-driven.
 
@@ -386,24 +386,24 @@ async def apply_memory_strategy(messages: list[dict[str, Any]], memory: MemoryGe
     compacts the FULL history. This keeps the per-turn request bounded and
     avoids re-compacting on every iteration.
 
-    When a re-compaction actually produces a new view, a ``memory.{strategy}``
+    When a re-compaction actually produces a new view, a ``context.{strategy}``
     event is emitted on ``trace`` (if provided) so the caller stays free of
     strategy logic.
 
     Reasoning chars are budgeted only when the echo policy will replay
     them on the wire (see :func:`_reasoning_replayed`).
     """
-    strategy = memory.strategy
+    strategy = context.strategy
     if strategy == STRATEGY_FULL_HISTORY:
         return messages
     if strategy not in (STRATEGY_COMPACT_OBSERVATIONS, STRATEGY_LLM_SUMMARY):
-        raise ValueError(f"unknown memory strategy: {strategy!r}")
+        raise ValueError(f"unknown context strategy: {strategy!r}")
 
     count = _reasoning_replayed()
-    unit = memory.budget_unit
+    unit = context.budget_unit
     # force_budget (context-window hard gate) must push below the size the
     # provider just rejected, so it wins whenever it is the tighter bound.
-    budget = memory.context_budget
+    budget = context.context_budget
     if force_budget is not None:
         budget = min(budget, force_budget)
     working = compact_messages if compact_messages is not None else messages
@@ -418,21 +418,21 @@ async def apply_memory_strategy(messages: list[dict[str, Any]], memory: MemoryGe
         if unit == "tokens":
             char_budget = max(1, int(budget * _anchor_chars_per_token(usage_anchor)))
         result = compact_observations(messages, budget=char_budget,
-                                      window_rounds=memory.window_rounds,
-                                      keep_recent_rounds=memory.keep_recent_rounds,
-                                      head_chars=memory.head_chars,
-                                      exempt_tools=memory.retrieval_exempt_tools)
+                                      window_rounds=context.window_rounds,
+                                      keep_recent_rounds=context.keep_recent_rounds,
+                                      head_chars=context.head_chars,
+                                      exempt_tools=context.retrieval_exempt_tools)
     else:  # STRATEGY_LLM_SUMMARY
         previous_summary = _extract_summary(working)
         result = await summarize_history(
             messages, budget=budget,
-            tail_rounds=memory.summary_tail_rounds,
-            user_preserve_budget=memory.user_preserve_budget,
-            summary_max_tokens=memory.summary_max_tokens,
+            tail_rounds=context.summary_tail_rounds,
+            user_preserve_budget=context.user_preserve_budget,
+            summary_max_tokens=context.summary_max_tokens,
             boundary=boundary,
             previous_summary=previous_summary,
             unit=unit, usage_anchor=usage_anchor,
-            exempt_tools=memory.retrieval_exempt_tools,
+            exempt_tools=context.retrieval_exempt_tools,
             prompt=options.get("prompt"), trace=trace,
             iteration=iteration)
 
@@ -445,7 +445,7 @@ async def apply_memory_strategy(messages: list[dict[str, Any]], memory: MemoryGe
         # deterministic compactor (it folds tool observations the summary
         # path kept verbatim in its tail); if even that cannot shrink,
         # the refresh hook reports no-progress by size.
-        logger.warning("memory.force_budget.no_shrink falling back to "
+        logger.warning("context.force_budget.no_shrink falling back to "
                        "compact_observations")
         if unit == "tokens":
             force_chars = max(1, int(force_budget
@@ -454,13 +454,13 @@ async def apply_memory_strategy(messages: list[dict[str, Any]], memory: MemoryGe
             force_chars = force_budget
         result = compact_observations(
             messages, budget=force_chars,
-            window_rounds=memory.window_rounds,
-            keep_recent_rounds=memory.keep_recent_rounds,
-            head_chars=memory.head_chars,
-            exempt_tools=memory.retrieval_exempt_tools)
+            window_rounds=context.window_rounds,
+            keep_recent_rounds=context.keep_recent_rounds,
+            head_chars=context.head_chars,
+            exempt_tools=context.retrieval_exempt_tools)
 
     if trace is not None and result is not working and result is not messages:
-        trace.emit(f"memory.{strategy}", iteration,
+        trace.emit(f"context.{strategy}", iteration,
                    original_chars=_total_chars(messages, count),
                    request_chars=_total_chars(result, count),
                    original_count=len(messages),
@@ -470,7 +470,7 @@ async def apply_memory_strategy(messages: list[dict[str, Any]], memory: MemoryGe
         if summary is not None:
             # The summary text lives on the trace (per-run, queryable)
             # instead of a shared on-disk file.
-            trace.emit(f"memory.{strategy}.text", iteration, summary=summary)
+            trace.emit(f"context.{strategy}.text", iteration, summary=summary)
     return result
 
 
@@ -694,14 +694,14 @@ async def summarize_history(messages: list[dict[str, Any]], *,
             # with the input scale so production fallbacks are diagnosable,
             # then take the deterministic path.
             if trace is not None:
-                trace.emit("memory.llm_summary.error", iteration,
+                trace.emit("context.llm_summary.error", iteration,
                            error=str(exc)[:500], error_type=type(exc).__name__,
                            summarizer_input_chars=_total_chars(
                                summarizer_input, count),
                            summarizer_input_count=len(summarizer_input),
                            boundary=boundary, char_budget=char_budget,
                            summary_max_tokens=summary_max_tokens)
-            logger.warning("memory.summary.failed falling back to "
+            logger.warning("context.summary.failed falling back to "
                            "compact_observations: %s", exc)
             return compact_observations(messages, budget=char_budget,
                                         exempt_tools=exempt_tools)
@@ -717,7 +717,7 @@ async def summarize_history(messages: list[dict[str, Any]], *,
             # model that writes valid 6k ones), so retry once before
             # falling back.
             if trace is not None:
-                trace.emit("memory.llm_summary.invalid", iteration,
+                trace.emit("context.llm_summary.invalid", iteration,
                            reason=str(exc)[:500], attempt=attempt,
                            summary_chars=len(summary or ""),
                            summarizer_input_chars=_total_chars(
@@ -726,15 +726,15 @@ async def summarize_history(messages: list[dict[str, Any]], *,
                            boundary=boundary, char_budget=char_budget,
                            summary_max_tokens=summary_max_tokens)
             if attempt == 2:
-                logger.warning("memory.summary.invalid %s falling back to compact_observations", exc)
+                logger.warning("context.summary.invalid %s falling back to compact_observations", exc)
                 return compact_observations(messages, budget=char_budget,
                                             exempt_tools=exempt_tools)
-            logger.warning("memory.summary.invalid %s retrying (%d/2)",
+            logger.warning("context.summary.invalid %s retrying (%d/2)",
                            exc, attempt + 1)
     summary_msg = {"role": "user", "content": SUMMARY_PREFIX + summary}
     view = leading + [summary_msg] + preserved + tail
     if trace is not None:
-        trace.emit("memory.llm_summary.yield", iteration,
+        trace.emit("context.llm_summary.yield", iteration,
                    summary=summary, preserved_users=len(preserved),
                    summarizer_input_count=len(summarizer_input),
                    boundary=boundary, char_budget=char_budget)
@@ -747,6 +747,10 @@ __all__ = [
     "DEFAULT_USER_PRESERVE_BUDGET", "DEFAULT_SUMMARY_MAX_TOKENS",
     "STRATEGY_COMPACT_OBSERVATIONS", "STRATEGY_FULL_HISTORY", "STRATEGY_LLM_SUMMARY",
     "SUMMARY_PREFIX", "SUMMARIZER_INSTRUCTION", "request_view_size",
-    "apply_memory_strategy", "compact_observations", "set_summary_llm",
+    "apply_context_strategy", "apply_memory_strategy", "compact_observations", "set_summary_llm",
     "summarize_history",
 ]
+
+
+# Backwards-compatibility alias (pre-rename import path / function name).
+apply_memory_strategy = apply_context_strategy

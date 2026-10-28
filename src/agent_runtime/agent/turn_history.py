@@ -27,13 +27,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from agent_runtime.agent.memory import (
+from agent_runtime.agent.context import (
     _extract_summary,
     _reasoning_replayed,
     _total_chars,
-    apply_memory_strategy,
+    apply_context_strategy,
 )
-from agent_runtime.harness import MemoryGenome
+from agent_runtime.harness import ContextGenome
 
 
 def _ensure_system_prompt(conversation: Conversation, system: str,
@@ -104,17 +104,17 @@ class TurnHistory:
     def usage_anchor(self) -> tuple[int, int, int] | None:
         return self._usage_anchor
 
-    async def refresh_view(self, memory: MemoryGenome, *, trace: Any = None,
+    async def refresh_view(self, context: ContextGenome, *, trace: Any = None,
                            iteration: int | None = None,
                            force_budget: int | None = None) -> None:
-        """Rebuild the request view via the memory genome's strategy.
+        """Rebuild the request view via the context genome's strategy.
 
         ``force_budget`` (used by the context-window hard gate) shrinks
         the working budget so the strategy must compact below the size
         that the provider just rejected.
         """
-        new_view = await apply_memory_strategy(
-            self.messages, memory, compact_messages=self.view,
+        new_view = await apply_context_strategy(
+            self.messages, context, compact_messages=self.view,
             trace=trace, iteration=iteration,
             boundary=self._summary_boundary,
             usage_anchor=self._usage_anchor,

@@ -9,14 +9,14 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
 
-from agent_runtime.agent.memory import (
+from agent_runtime.agent.context import (
     SUMMARY_PREFIX,
-    apply_memory_strategy,
+    apply_context_strategy,
     compact_observations,
     set_summary_llm,
     summarize_history,
 )
-from agent_runtime.harness import DEFAULT_CONTEXT_BUDGET, MemoryGenome
+from agent_runtime.harness import DEFAULT_CONTEXT_BUDGET, ContextGenome
 
 
 def tool_message(call_id: str, content: str,
@@ -338,25 +338,25 @@ class StaleReasoningPadTests(unittest.TestCase):
                 self.assertEqual(message["reasoning_content"], " ")
 
 
-class ApplyMemoryStrategyTests(unittest.IsolatedAsyncioTestCase):
+class ApplyContextStrategyTests(unittest.IsolatedAsyncioTestCase):
     async def test_full_history_is_identity(self) -> None:
         messages = build_rounds(3, 100)
 
-        self.assertIs(await apply_memory_strategy(
-            messages, MemoryGenome(strategy="full_history")), messages)
+        self.assertIs(await apply_context_strategy(
+            messages, ContextGenome(strategy="full_history")), messages)
 
     async def test_compact_strategy_is_routed(self) -> None:
         messages = build_rounds(20, 5_000)
 
-        result = await apply_memory_strategy(
-            messages, MemoryGenome(strategy="compact_observations",
+        result = await apply_context_strategy(
+            messages, ContextGenome(strategy="compact_observations",
                                    context_budget=10_000, window_rounds=6))
 
         self.assertIn("observation compacted", result[3]["content"])
 
     async def test_unknown_strategy_is_rejected(self) -> None:
-        with self.assertRaisesRegex(ValueError, "unknown memory strategy"):
-            await apply_memory_strategy([], MemoryGenome(strategy="summarize"))
+        with self.assertRaisesRegex(ValueError, "unknown context strategy"):
+            await apply_context_strategy([], ContextGenome(strategy="summarize"))
 
 
 class FakeSummaryLLM:
@@ -451,21 +451,21 @@ class SummarizeHistoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("observation compacted", result[3]["content"])
 
 
-class ApplyMemoryStrategyLLMRoutingTests(unittest.IsolatedAsyncioTestCase):
+class ApplyContextStrategyLLMRoutingTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self) -> None:
         set_summary_llm(None)
 
     async def test_llm_summary_routes_to_summarizer(self) -> None:
         messages = build_rounds(10, 5_000)
         set_summary_llm(FakeSummaryLLM())
-        result = await apply_memory_strategy(
-            messages, MemoryGenome(strategy="llm_summary",
+        result = await apply_context_strategy(
+            messages, ContextGenome(strategy="llm_summary",
                                    context_budget=1_000, summary_tail_rounds=2))
         self.assertEqual(sum(1 for m in result if m["role"] == "tool"), 2)
 
     async def test_unknown_strategy_is_rejected(self) -> None:
         with self.assertRaises(ValueError):
-            await apply_memory_strategy([], MemoryGenome(strategy="bogus"))
+            await apply_context_strategy([], ContextGenome(strategy="bogus"))
 
 
 if __name__ == "__main__":

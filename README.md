@@ -55,7 +55,7 @@ Contains the browser front end: a FastAPI server, the session store, and the sta
 
 Contains declarative agent configuration files (YAML) used to define and run
 agent setups without changing code. Each harness describes the prompt, enabled
-tools, control limits (e.g. `max_iterations`), memory strategy, recovery
+tools, control limits (e.g. `max_iterations`), context strategy, recovery
 behavior, and verification settings. Harnesses can extend others via `parent`,
 making it easy to iterate on variants (e.g. `baseline-v0`, `meta-v3`) for
 experiments and evaluations.
@@ -180,7 +180,7 @@ The event model covers three families:
 - spans: `agent.start/end/error`, `llm.start/end/error`, `tool.start/end/error`
 - LLM streaming/retry detail: `llm.chunk`, `llm.stream.finish`, `llm.retry`,
   `llm.reasoning_budget`
-- run policy events: `memory.{strategy}`, `verification.passed/failed/rerun/aborted`,
+- run policy events: `context.{strategy}`, `verification.passed/failed/rerun/aborted`,
   `budget.reminder`, `loop.guard`, `skills.loaded`
 
 Payloads are compact but not empty: counts, names, IDs, durations, statuses,

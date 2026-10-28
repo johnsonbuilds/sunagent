@@ -69,14 +69,14 @@ class HarnessDefaultTests(unittest.TestCase):
 
 
 class TranscriptEconomicsGenesTests(unittest.TestCase):
-    """The observation/memory sizing knobs live on the genome."""
+    """The observation/context sizing knobs live on the genome."""
 
     def test_genome_defaults_match_runtime_invariants(self) -> None:
-        self.assertEqual(BUILTIN_HARNESS.memory.head_chars, 200)
-        self.assertEqual(BUILTIN_HARNESS.memory.context_budget, 60_000)
-        self.assertEqual(BUILTIN_HARNESS.memory.window_rounds, 12)
-        self.assertEqual(BUILTIN_HARNESS.memory.keep_recent_rounds, 2)
-        self.assertEqual(BUILTIN_HARNESS.memory.summary_tail_rounds, 2)
+        self.assertEqual(BUILTIN_HARNESS.context.head_chars, 200)
+        self.assertEqual(BUILTIN_HARNESS.context.context_budget, 60_000)
+        self.assertEqual(BUILTIN_HARNESS.context.window_rounds, 12)
+        self.assertEqual(BUILTIN_HARNESS.context.keep_recent_rounds, 2)
+        self.assertEqual(BUILTIN_HARNESS.context.summary_tail_rounds, 2)
         self.assertEqual(BUILTIN_HARNESS.control.max_observation_chars, 16_000)
         self.assertEqual(BUILTIN_HARNESS.control.spill_preview_chars, 4_000)
 
@@ -85,7 +85,7 @@ class TranscriptEconomicsGenesTests(unittest.TestCase):
             "control": {"max_iterations": 30,
                         "max_observation_chars": 8_000,
                         "spill_preview_chars": 2_000},
-            "memory": {"strategy": "compact_observations",
+            "context": {"strategy": "compact_observations",
                        "head_chars": 500,
                        "context_budget": 30_000,
                        "window_rounds": 6,
@@ -94,31 +94,52 @@ class TranscriptEconomicsGenesTests(unittest.TestCase):
         })
         self.assertEqual(spec.control.max_observation_chars, 8_000)
         self.assertEqual(spec.control.spill_preview_chars, 2_000)
-        self.assertEqual(spec.memory.head_chars, 500)
-        self.assertEqual(spec.memory.context_budget, 30_000)
-        self.assertEqual(spec.memory.window_rounds, 6)
-        self.assertEqual(spec.memory.keep_recent_rounds, 3)
-        self.assertEqual(spec.memory.summary_tail_rounds, 4)
+        self.assertEqual(spec.context.head_chars, 500)
+        self.assertEqual(spec.context.context_budget, 30_000)
+        self.assertEqual(spec.context.window_rounds, 6)
+        self.assertEqual(spec.context.keep_recent_rounds, 3)
+        self.assertEqual(spec.context.summary_tail_rounds, 4)
 
     def test_bad_transcript_economics_values_are_rejected(self) -> None:
         for section, key in (("control", "max_observation_chars"),
                              ("control", "spill_preview_chars"),
-                             ("memory", "head_chars"),
-                             ("memory", "context_budget"),
-                             ("memory", "window_rounds"),
-                             ("memory", "keep_recent_rounds"),
-                             ("memory", "summary_tail_rounds")):
+                             ("context", "head_chars"),
+                             ("context", "context_budget"),
+                             ("context", "window_rounds"),
+                             ("context", "keep_recent_rounds"),
+                             ("context", "summary_tail_rounds")):
             with self.subTest(section=section, key=key):
                 with self.assertRaisesRegex(HarnessError, f"{section}.{key}"):
                     from_dict({section: {key: 0}})
                 with self.assertRaisesRegex(HarnessError, f"{section}.{key}"):
                     from_dict({section: {key: "big"}})
 
+    def test_legacy_memory_key_loads_as_context(self) -> None:
+        legacy = from_dict({"memory": {"strategy": "compact_observations",
+                                       "context_budget": 12345}})
+        self.assertEqual(legacy.context.strategy, "compact_observations")
+        self.assertEqual(legacy.context.context_budget, 12345)
+        # Legacy read alias still works.
+        self.assertEqual(legacy.memory, legacy.context)
+
+    def test_context_key_is_preferred_and_both_is_rejected(self) -> None:
+        spec = from_dict({"context": {"strategy": "llm_summary"}})
+        self.assertEqual(spec.context.strategy, "llm_summary")
+        with self.assertRaisesRegex(HarnessError, "both 'context' and legacy 'memory'"):
+            from_dict({"context": {"strategy": "full_history"},
+                       "memory": {"strategy": "compact_observations"}})
+
+    def test_to_dict_writes_context_not_memory(self) -> None:
+        spec = from_dict({"memory": {"strategy": "compact_observations"}})
+        data = spec.to_dict()
+        self.assertIn("context", data)
+        self.assertNotIn("memory", data)
+
     def test_unknown_transcript_economics_keys_are_rejected(self) -> None:
         with self.assertRaisesRegex(HarnessError, "control"):
             from_dict({"control": {"max_observation_x": 1}})
-        with self.assertRaisesRegex(HarnessError, "memory"):
-            from_dict({"memory": {"head_x": 1}})
+        with self.assertRaisesRegex(HarnessError, "context"):
+            from_dict({"context": {"head_x": 1}})
 
 
 class HarnessValidationTests(unittest.TestCase):
@@ -168,13 +189,13 @@ class HarnessValidationTests(unittest.TestCase):
             "recovery.tool_error",
         )
 
-    def test_unknown_memory_strategy_is_rejected(self) -> None:
+    def test_unknown_context_strategy_is_rejected(self) -> None:
         self.assert_harness_error(
             """
-            memory:
+            context:
               strategy: summarized
             """,
-            "memory.strategy",
+            "context.strategy",
         )
 
     def test_blank_id_is_rejected(self) -> None:

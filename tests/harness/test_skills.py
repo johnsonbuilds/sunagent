@@ -184,7 +184,7 @@ class CodeV14Tests(unittest.TestCase):
         self.assertEqual(list(v14.skills), ["coder"])
         skills = resolve_skills(list(v14.skills), harness=v14)
         self.assertTrue(skills[0].content.strip())
-        for gene in ("tools", "control", "memory", "recovery",
+        for gene in ("tools", "control", "context", "recovery",
                      "verification"):
             self.assertEqual(getattr(v14, gene), getattr(v13, gene))
 

@@ -45,7 +45,7 @@ from agent_runtime.agent.verification import (
     submit_nudge,
 )
 from agent_runtime.agent.observations import ObservationFormatter
-from agent_runtime.agent.memory import request_view_size
+from agent_runtime.agent.context import request_view_size
 from agent_runtime.agent.turn_history import (
     Conversation,
     TurnHistory,
@@ -172,12 +172,12 @@ class AgentTurn:
         # its file tools); observation spilling shares that same instance
         # so references and tools always agree on where data lives.  Its
         # knobs come from the harness genome; archive_min_chars derives
-        # from memory.head_chars so the invariant is structural.
+        # from context.head_chars so the invariant is structural.
         self.observations = ObservationFormatter(
             getattr(self.tools, "workspace", None),
             max_chars=self.harness.control.max_observation_chars,
             spill_preview_chars=self.harness.control.spill_preview_chars,
-            archive_min_chars=self.harness.memory.head_chars)
+            archive_min_chars=self.harness.context.head_chars)
         self.user_message = user_message
         self.llm = llm
         self.conversation = conversation or Conversation()
@@ -200,13 +200,13 @@ class AgentTurn:
         lets the recovery loop re-raise instead of burning retries.
         """
         async def _refresh() -> bool:
-            current = request_view_size(history.view, self.harness.memory,
+            current = request_view_size(history.view, self.harness.context,
                                         history.usage_anchor)
             anchor_before = history.usage_anchor
             target = max(1, int(current * 0.7))
             view_ref = history.view
             try:
-                await history.refresh_view(self.harness.memory,
+                await history.refresh_view(self.harness.context,
                                            trace=self.trace,
                                            iteration=iteration,
                                            force_budget=target)
@@ -220,7 +220,7 @@ class AgentTurn:
             # Compare with the pre-refresh anchor: refresh clears it
             # (stale mix), and measuring old vs new with different rulers
             # would misjudge shrinkage.
-            if request_view_size(history.view, self.harness.memory,
+            if request_view_size(history.view, self.harness.context,
                                  anchor_before) >= current:
                 logger.warning(
                     "llm.context_window.no_shrink iteration=%d", iteration)
@@ -269,7 +269,7 @@ class AgentTurn:
         for iteration in range(1, self.max_iterations + 1):
             self._maybe_emit_budget_reminder(history, iteration)
             try:
-                await history.refresh_view(harness.memory,
+                await history.refresh_view(harness.context,
                                            trace=trace, iteration=iteration)
                 logger.debug(
                     "llm.request.start iteration=%d messages=%d tools=%d stream=%s",
@@ -515,7 +515,7 @@ class AgentTurn:
                         harness.prompt.iteration_limit_notice})
         iteration = self.max_iterations + 1
         try:
-            await history.refresh_view(harness.memory,
+            await history.refresh_view(harness.context,
                                        trace=trace, iteration=iteration)
             logger.debug("llm.request.start iteration=%d messages=%d tools=0 stream=%s",
                          iteration, len(history.view), self.stream)
