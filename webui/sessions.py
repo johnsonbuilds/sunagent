@@ -239,9 +239,11 @@ class SessionStore:
         moment it holds a conversation (see :meth:`save`).
         """
         now = time.time()
-        session = Session(id=f"sess-{uuid4().hex[:12]}",
-                          title=title or "New conversation",
-                          created_at=now, updated_at=now)
+        session = Session(
+            id="sess-" + time.strftime("%Y%m%d-%H%M%S", time.localtime(now)),
+            title=title or "New conversation",
+            created_at=now, updated_at=now,
+        )
         self._sessions[session.id] = session
         return session
 
