@@ -586,6 +586,37 @@ class SummarizerObservabilityTests(unittest.IsolatedAsyncioTestCase):
                     if a[0] == "context.llm_summary.invalid"]
         self.assertEqual(attempts, [1, 2])
 
+    async def test_retry_uses_capped_input(self) -> None:
+        from agent_runtime.agent.context import (
+            DEFAULT_SUMMARIZER_INPUT_CAP_CHARS,
+        )
+
+        seen_sizes: list[int] = []
+
+        class FlakyLLM:
+            async def chat(self, messages, tools=None, **kwargs):
+                seen_sizes.append(sum(len(str(m.get("content", "")))
+                                      for m in messages))
+                if len(seen_sizes) == 1:
+                    return {"content": "no sections here", "tool_calls": []}
+                return {"content": valid_summary("CAPPED-OK"),
+                        "tool_calls": []}
+
+        set_summary_llm(FlakyLLM())
+        # Segment well above the cap: attempt 1 reads it whole, attempt 2
+        # must read the folded copy.
+        messages = build_rounds(30, tool_chars=10_000)
+        view = await summarize_history(messages, budget=1, tail_rounds=2)
+        self.assertEqual(len(seen_sizes), 2)
+        self.assertGreater(seen_sizes[0],
+                           DEFAULT_SUMMARIZER_INPUT_CAP_CHARS)
+        self.assertLessEqual(seen_sizes[1],
+                             DEFAULT_SUMMARIZER_INPUT_CAP_CHARS)
+        contents = [str(m.get("content", "")) for m in view]
+        self.assertTrue(any(c.startswith(SUMMARY_PREFIX) and "CAPPED-OK" in c
+                            for c in contents))
+        set_summary_llm(None)
+
     async def test_success_still_emits_yield_only(self) -> None:
         set_summary_llm(FakeSummaryLLM())
         events: list[tuple] = []
@@ -680,6 +711,58 @@ class BoundaryChaseTests(unittest.IsolatedAsyncioTestCase):
                              for m in history.view)
         self.assertIn(f"SNAP-{llm.calls}", view_text)
         self.assertNotIn("SNAP-1", view_text)
+
+
+class ContextWindowHardGateLoopTests(unittest.IsolatedAsyncioTestCase):
+    """End-to-end hard gate: provider 400 → refresh hook compacts → resend.
+
+    The existing recovery tests hand-roll the refresh hook; this one runs
+    the REAL ``AgentTurn._context_window_refresh`` (genome-driven shrink
+    to 70%, size-based progress) through ``run_turn``.
+    """
+
+    async def test_overflow_rejection_compacts_and_resends(self) -> None:
+        from agent_runtime.agent.loop import run_turn
+        from agent_runtime.tools.tools import ToolRegistry, ToolSpec
+        from agent_runtime.trace import RunTrace
+
+        seen_chars: list[int] = []
+
+        class OverflowOnceLLM:
+            async def chat(self, messages, tools=None, **kwargs):
+                seen_chars.append(sum(len(str(m.get("content", "")))
+                                      for m in messages))
+                if len(seen_chars) == 1:
+                    raise ContextWindowExceededError(
+                        "maximum context length exceeded")
+                return {"content": "done", "tool_calls": []}
+
+        async def noop(**kwargs: Any) -> str:
+            return "ok"
+
+        registry = ToolRegistry([ToolSpec(
+            "run_command", "", {"type": "object", "properties": {}}, noop)])
+        harness = from_dict({
+            "memory": {"strategy": "compact_observations",
+                       "context_budget": 10 ** 9},
+            "recovery": {"llm_errors": {
+                "context_window": {"max_retries": 2, "backoff": "none"},
+            }},
+            "verification": {"mode": "off"},
+        })
+        conversation = Conversation()
+        conversation.messages.extend(build_rounds(10, tool_chars=5_000))
+        trace = RunTrace(run_id="hard-gate")
+        answer = await run_turn("go", OverflowOnceLLM(), registry,
+                                harness=harness, conversation=conversation,
+                                trace=trace, max_iterations=5)
+        self.assertEqual(answer, "done")
+        # One rejected request, one compacted resend — never a replay.
+        self.assertEqual(len(seen_chars), 2)
+        self.assertLess(seen_chars[1], seen_chars[0])
+        cats = [e.data.get("category") for e in trace.events
+                if e.event_type == "llm.retry"]
+        self.assertIn("context_window", cats)
 
 
 class TB4HarnessTests(unittest.TestCase):

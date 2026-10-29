@@ -142,6 +142,13 @@ DEFAULT_KEEP_RECENT_ROUNDS = 2           # context: rounds never compacted under
 DEFAULT_SUMMARY_TAIL_ROUNDS = 2          # context: llm_summary verbatim tail
 DEFAULT_USER_PRESERVE_BUDGET = 8_000     # context: CHARS (either budget unit) of mid-conversation user messages kept verbatim (newest first). Always chars by design: the preserve pool is a coarse guard, and routing it through the anchor-calibrated char/token ratio would inject conversion noise into a threshold chars serve fine.
 DEFAULT_SUMMARY_MAX_TOKENS = 2_048       # context: summarizer output cap; longer output is rejected, falls back
+# Cap (chars) for the summarizer's input on the retry attempt. Pathological
+# segments (hundreds of k chars after repeated failures stall the boundary)
+# make the model return empty/off-schema snapshots; TB-2.1 showed invalid
+# inputs at p50 177k / max 548k chars while successes cluster far below.
+# Attempt 1 always reads the full segment; only the retry folds first, so
+# normal cases never pay the coverage cost of the cap.
+DEFAULT_SUMMARIZER_INPUT_CAP_CHARS = 150_000
 
 # Tool names whose observations outlive the comfort window verbatim and
 # only fold under real budget pressure (last-folded, never exempt from
@@ -832,6 +839,7 @@ __all__ = [
     "LLM_RETRY_CATEGORIES", "LLMRetryPolicy", "BACKOFF_POLICIES",
     "CONTEXT_STRATEGIES", "MEMORY_STRATEGIES", "CONTEXT_BUDGET_UNITS", "MEMORY_BUDGET_UNITS",
     "DEFAULT_USER_PRESERVE_BUDGET", "DEFAULT_SUMMARY_MAX_TOKENS",
+    "DEFAULT_SUMMARIZER_INPUT_CAP_CHARS",
     "DEFAULT_RETRIEVAL_EXEMPT_TOOLS",
     "default_harness", "feed_error_and_continue",
     "from_dict", "load_harness", "load_named_harness", "manifest_candidates",

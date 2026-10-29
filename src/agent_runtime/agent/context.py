@@ -25,6 +25,7 @@ from agent_runtime.harness import (
     DEFAULT_CONTEXT_BUDGET,
     DEFAULT_HEAD_CHARS,
     DEFAULT_KEEP_RECENT_ROUNDS,
+    DEFAULT_SUMMARIZER_INPUT_CAP_CHARS,
     DEFAULT_SUMMARY_MAX_TOKENS,
     DEFAULT_SUMMARY_TAIL_ROUNDS,
     DEFAULT_USER_PRESERVE_BUDGET,
@@ -683,10 +684,24 @@ async def summarize_history(messages: list[dict[str, Any]], *,
         return messages
 
     summary: str | None = None
+    used_capped_input = False
+    full_input_chars = _total_chars(summarizer_input, count)
     for attempt in (1, 2):
+        attempt_input = summarizer_input
+        if attempt == 2 and full_input_chars > DEFAULT_SUMMARIZER_INPUT_CAP_CHARS:
+            # Retry on a folded copy, not a re-read of the same wall: the
+            # attempt-1 failure already proved the full segment indigestible
+            # (TB-2.1: failing inputs run 150k-550k chars). Deterministic
+            # folding keeps tool-call pairs and verbatim users intact while
+            # old observations shrink to head excerpts — the retry attacks
+            # the likely cause instead of repeating the attempt.
+            attempt_input = compact_observations(
+                summarizer_input, budget=DEFAULT_SUMMARIZER_INPUT_CAP_CHARS,
+                exempt_tools=exempt_tools)
+            used_capped_input = True
         try:
             summary = await _generate_summary(
-                summarizer_input, previous_summary=previous_summary,
+                attempt_input, previous_summary=previous_summary,
                 summary_max_tokens=summary_max_tokens, prompt=prompt)
         except Exception as exc:
             # The summarizer request itself failed (rate limit, context
@@ -696,8 +711,10 @@ async def summarize_history(messages: list[dict[str, Any]], *,
             if trace is not None:
                 trace.emit("context.llm_summary.error", iteration,
                            error=str(exc)[:500], error_type=type(exc).__name__,
-                           summarizer_input_chars=_total_chars(
-                               summarizer_input, count),
+                           summarizer_input_chars=full_input_chars,
+                           summarizer_input_chars_capped=_total_chars(
+                               attempt_input, count),
+                           input_capped=used_capped_input,
                            summarizer_input_count=len(summarizer_input),
                            boundary=boundary, char_budget=char_budget,
                            summary_max_tokens=summary_max_tokens)
@@ -720,8 +737,10 @@ async def summarize_history(messages: list[dict[str, Any]], *,
                 trace.emit("context.llm_summary.invalid", iteration,
                            reason=str(exc)[:500], attempt=attempt,
                            summary_chars=len(summary or ""),
-                           summarizer_input_chars=_total_chars(
-                               summarizer_input, count),
+                           summarizer_input_chars=full_input_chars,
+                           summarizer_input_chars_capped=_total_chars(
+                               attempt_input, count),
+                           input_capped=used_capped_input,
                            summarizer_input_count=len(summarizer_input),
                            boundary=boundary, char_budget=char_budget,
                            summary_max_tokens=summary_max_tokens)
@@ -737,6 +756,7 @@ async def summarize_history(messages: list[dict[str, Any]], *,
         trace.emit("context.llm_summary.yield", iteration,
                    summary=summary, preserved_users=len(preserved),
                    summarizer_input_count=len(summarizer_input),
+                   input_capped=used_capped_input,
                    boundary=boundary, char_budget=char_budget)
     return view
 
@@ -745,6 +765,7 @@ __all__ = [
     "DEFAULT_CONTEXT_BUDGET", "DEFAULT_HEAD_CHARS", "DEFAULT_SUMMARY_TAIL_ROUNDS",
     "DEFAULT_KEEP_RECENT_ROUNDS", "DEFAULT_WINDOW_ROUNDS",
     "DEFAULT_USER_PRESERVE_BUDGET", "DEFAULT_SUMMARY_MAX_TOKENS",
+    "DEFAULT_SUMMARIZER_INPUT_CAP_CHARS",
     "STRATEGY_COMPACT_OBSERVATIONS", "STRATEGY_FULL_HISTORY", "STRATEGY_LLM_SUMMARY",
     "SUMMARY_PREFIX", "SUMMARIZER_INSTRUCTION", "request_view_size",
     "apply_context_strategy", "apply_memory_strategy", "compact_observations", "set_summary_llm",
