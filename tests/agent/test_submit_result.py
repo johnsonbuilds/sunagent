@@ -197,6 +197,45 @@ class SubmitResultLoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(llm.messages), 3)
 
 
+class RejectedSubmitPairingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_rejected_submit_leaves_no_dangling_tool_call(self) -> None:
+        # Regression: a submit rejected by the return contract used to
+        # stay in the history as an assistant tool_calls entry with no
+        # following tool message, so the next request 400d on the
+        # provider pairing contract ("must be followed by tool
+        # messages"). The intercepted finish request must never enter
+        # the history as a tool call.
+        from agent_runtime.providers.llm import _project_messages_for_wire
+        thin = dict(GOOD_FIELDS, evidence="looks good")
+        llm = FakeLLM([submit_turn(thin, call_id="9"),
+                        run_turn_call(GOOD_FIELDS["command_to_verify"],
+                                      call_id="1"),
+                        {"content": "done", "tool_calls": []}])
+        answer = await run_turn("fix it", llm, submit_registry(),
+                                harness=submit_harness(), max_iterations=3)
+        self.assertEqual(answer, "done")
+        for request in llm.messages:
+            called = [call["id"] for message in request
+                      if message["role"] == "assistant"
+                      for call in message.get("tool_calls") or []]
+            answered = [message["tool_call_id"] for message in request
+                        if message["role"] == "tool"]
+            self.assertNotIn("9", called)
+            self.assertTrue(all(call_id in answered for call_id in called),
+                            f"dangling tool_calls in {request!r}")
+            # The wire projection must also satisfy the pairing contract.
+            projected = _project_messages_for_wire(request, echo=False)
+            projected_called = [
+                call["id"] for message in projected
+                if message.get("role") == "assistant"
+                for call in message.get("tool_calls") or []]
+            projected_answered = [
+                message["tool_call_id"] for message in projected
+                if message.get("role") == "tool"]
+            self.assertTrue(all(call_id in projected_answered
+                                for call_id in projected_called))
+
+
 class NonCodeHarnessTests(unittest.IsolatedAsyncioTestCase):
     async def test_command_optional_without_rerun(self) -> None:
         fields = {"solution_description": GOOD_FIELDS["solution_description"],

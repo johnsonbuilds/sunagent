@@ -345,7 +345,19 @@ class AgentTurn:
             reasoning_content = response.get("reasoning_content")
             if reasoning_content:
                 assistant_message["reasoning_content"] = reasoning_content
+            # A submit_result call is a finish request, not work: it is
+            # never executed (see _dispatch_tools), so it must not enter
+            # the history as a tool call — otherwise the next request
+            # carries an assistant tool_calls entry with no following
+            # tool message and the provider rejects it with 400
+            # ("must be followed by tool messages").
             canonical_calls = canonical_tool_calls(outcomes)
+            if submit_args is not None:
+                submit_ids = {outcome.validated.id for outcome in outcomes
+                              if outcome.validated is not None
+                              and outcome.validated.name == SUBMIT_TOOL}
+                canonical_calls = [call for call in canonical_calls
+                                   if call["id"] not in submit_ids]
             if canonical_calls:
                 assistant_message["tool_calls"] = canonical_calls
             if tool_calls or content or reasoning_content:

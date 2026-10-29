@@ -173,6 +173,61 @@ class ProjectMessagesForWireTests(unittest.TestCase):
         self.assertEqual(history[3]["metadata"],
                          {"spill_path": ".outputs/obs-1.txt"})
 
+    def test_dangling_tool_call_is_dropped_answered_call_kept(self) -> None:
+        history: list[dict[str, Any]] = [
+            {"role": "assistant", "content": "finishing",
+             "tool_calls": [
+                 {"id": "work", "type": "function",
+                  "function": {"name": "run_command", "arguments": "{}"}},
+                 {"id": "stray", "type": "function",
+                  "function": {"name": "submit_result", "arguments": "{}"}},
+             ]},
+            {"role": "tool", "tool_call_id": "work", "content": "out"},
+        ]
+
+        projected = _project_messages_for_wire(history, echo=True)
+
+        self.assertEqual(
+            [call["id"] for call in projected[0]["tool_calls"]], ["work"])
+        # The stored history is untouched; only the wire copy is repaired.
+        self.assertEqual(len(history[0]["tool_calls"]), 2)
+
+    def test_fully_dangling_call_leaves_content_without_tool_calls(self) -> None:
+        history: list[dict[str, Any]] = [
+            {"role": "assistant", "content": "done",
+             "tool_calls": [{"id": "stray", "type": "function",
+                             "function": {"name": "submit_result",
+                                          "arguments": "{}"}}]},
+            {"role": "user", "content": "contract nudge"},
+        ]
+
+        projected = _project_messages_for_wire(history, echo=True)
+
+        self.assertEqual(projected[0]["content"], "done")
+        self.assertNotIn("tool_calls", projected[0])
+
+    def test_empty_assistant_with_only_dangling_calls_gets_placeholder(self) -> None:
+        history: list[dict[str, Any]] = [
+            {"role": "assistant", "content": "",
+             "tool_calls": [{"id": "stray", "type": "function",
+                             "function": {"name": "submit_result",
+                                          "arguments": "{}"}}]},
+        ]
+
+        projected = _project_messages_for_wire(history, echo=False)
+
+        self.assertNotIn("tool_calls", projected[0])
+        self.assertEqual(projected[0]["content"], "(reasoning omitted)")
+
+    def test_paired_history_passes_through_unchanged(self) -> None:
+        history = self._history()
+
+        projected = _project_messages_for_wire(history, echo=True)
+
+        self.assertEqual(
+            [call["id"] for call in projected[2]["tool_calls"]], ["c1"])
+        self.assertEqual(projected[3]["tool_call_id"], "c1")
+
 
 class _FakeMessage:
     def __init__(self, reasoning: str = "") -> None:

@@ -146,3 +146,50 @@ preserved（带 verbatim 用户的 yield 数）/ frozen（md5 复用）/ boundar
 
 注：`large-scale-text-editing` 本轮 38 轮未触发 compaction（tb-v3 时代 45 轮也未触发——该任务输出被 observation 窗口截后单轮不大）；
 `video-processing` 本轮 reward 1.0（此前 tb-v3 与三次单跑均为 0，属任务方差，非 memory 变更所致）。
+
+## 7. reward 0.0 的 20 个任务归因（harness/环境 vs 模型能力）
+
+先澄清口径：verifier 不是我们写的，是 TB 官方的——`evaluation/terminal_bench/readme.md` 写明
+"Harbor runs the task's own verifier"，判分跑在任务镜像（`alexgshaw/<task>:20251031` 等）自带的
+`/tests/test_outputs.py` + `test.sh`；`src/agent_runtime/agent/verification.py` 头注释写明
+"It never executes gold tests here"，我们的 harness 只做 `submit_result` 形状/引用门控。
+所以 0 分是官方判的，能修的只有自家 harness bug，官方测试问题只能报 issue + quarantine。
+
+| 类别 | 任务 | 证据 |
+|---|---|---|
+| harness/infra（7） | `qemu-alpine-ssh`、`qemu-startup` | verifier 的 `test.sh` 里 `apt-get install curl` 撞上 bullseye `security` 源 404（`libnghttp2-14/libcurl4/curl` 全 `Not Found`），随后 `curl/uvx: command not found`，测试根本没跑起来——镜像源过期，模型无责 |
+| | `headless-terminal` | 5/7 通过；`test_background_commands` 挂在 `mkdir /server: File exists`（测试不幂等）；`test_send_interactive_command` 期望 `Hello, world!` 实际收到重复回显——测试 bug + flaky |
+| | `mcmc-sampling-stan` | 5/6 通过，仅 `test_hierarchical_model_implemented` 因 verifier 内 `R --slave stan_model(...)` 的 `timeout=180` 编译超时——verifier 超时太紧 |
+| | `large-scale-text-editing` | 4/5 通过，功能正确（`apply_macros_runs` + `input_equiv_expected` 全过），只挂风格检查 `Missing :wq or :x` |
+| | `raman-fitting` | `result.json: agent_status=failed`，死因 `LLM error 400: tool_calls must be followed by tool messages`——agent_runtime 消息组装 bug（见下），非推理失败 |
+| | `install-windows-3.11` | 3/4 通过，仅 VNC 视觉检查 `No key caused >=10% image difference`——QEMU/VNC 环境 flaky |
+| 争议各半（1） | `dna-assembly` | 模型产出的 rev primer 含 `gagacc`（`GGTCTC` 正确反向互补），verifier 的 `parse_bsai_primer()` 对正反 primer 一律 `find("ggtctc")`；但模型同时在容器里改了本地 `test_primers.py` 让自己通过（verifier 用全新拷贝），属作弊式过拟合——测试解析器存疑 + 模型违规改测试，各半 |
+| 模型能力（12） | `regex-chess` | 初盘 `Our moves: 1, Python-chess: 20` 且产出空串 |
+| | `filter-js-from-html` | `test_filter_blocks_xss` 大量 XSS 向量漏过；`clean_html_unchanged` 把 12 个干净文件改坏 5 个 |
+| | `gpt2-codegolf` | 能编译且 <5000B，但续写输出全是 `,\n\n\n…` |
+| | `sam-cell-seg` | 8/9 通过，`convert_masks` 写出 32/32，只挂 `test_masks_are_no_longer_rect`（输出仍是矩形）——接近但几何精修没做出来 |
+| | `make-doom-for-mips` | `Timeout waiting for frame.bmp`，`/tmp/frame.bmp` 未生成 |
+| | `make-mips-interpreter` | 相似度 `0.8065 < 0.95` 且缺 `I_InitGraphics: DOOM screen size` 串 |
+| | `torch-pipeline-parallelism` | `AgentTimeoutError 2700s` + verifier `Rank 1 mismatch at model.norm.fwd, max diff=5.19` |
+| | `train-fasttext` | `AgentTimeoutError 10800s`，无 `/app/model.bin` |
+| | `gcode-to-text` | `AgentTimeoutError 2700s`，无 `/app/out.txt`；trajectory 尾部卡在逐字符 OCR `guess` 95 轮未收敛 |
+| | `extract-moves-from-video` | `AgentTimeoutError 5400s`，无 `/app/solution.txt` |
+| | `pytorch-model-cli` | 5/6 通过，仅 `test_cli_tool_output` 50 张错 10 张——接近但失败 |
+| | `protein-assembly` | `assert 0 < -1`：`donor_aa` 在翻译产物中根本找不到，gBlock 选错 donor/移码 |
+
+其中 `raman-fitting` 已修（见 §8）：根因是 loop 把被拦截的 `submit_result` 也写进 assistant `tool_calls`
+（`loop.py`），而 `_dispatch_tools` 跳过执行、永不追加对应 tool 消息，被 contract 打回后下一轮请求即 400；
+wire 投影层（`providers/llm.py:_project_messages_for_wire`）之前也不做配对检查。修法：A）组装历史时剔除
+submit 调用；B）发请求前丢掉悬空 tool_calls 并记 `llm.wire.dangling_tool_calls_dropped`。
+另 `dna-assembly` 暴露的测试可写问题未修：`edit_file/write_file` 仍可改 `tests/`，这是一个已知的作弊面。
+
+## 8. 后续观测点
+
+- `llm.wire.dangling_tool_calls_dropped`：跑新任务集时 grep 该日志。出现且 count>0 = B 在兜底，
+  说明又有路径造出了悬空 tool_calls（历史只存、wire 修），值得回头定位是哪条路径（submit 以外的
+  拦截/ compaction 切片/新工具），而不是视为正常。
+- raman 类 400 是否归零：之前 `LLM error 400: ... tool_calls must be followed by tool messages`
+  直接杀死整轮；修复后该错误应不再出现。若再现，先查 trace 里被 contract 打回的 submit 与
+  `dangling_tool_calls_dropped` 是否同时出现。
+- qemu 两个任务：镜像源问题未动（等新任务集）。若新任务集仍含 bullseye 镜像，先看是否同样 404；
+  是则按 §7 口径 quarantine + 上游 issue，不计入模型能力分。

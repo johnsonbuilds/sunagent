@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
+
+
+logger = logging.getLogger(__name__)
 
 
 def _reasoning_effort() -> str | None:
@@ -201,6 +205,43 @@ def _reasoning_text(message: Any) -> str:
     return ""
 
 
+def _drop_dangling_tool_calls(
+        messages: Sequence[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    """Drop assistant tool calls that receive no tool response.
+
+    Pure repair for the provider pairing contract (every assistant
+    ``tool_calls`` entry must be followed by a ``role: tool`` message
+    with the same ``tool_call_id``).  Dangling entries arise from
+    history paths that record an assistant call without executing it
+    (e.g. an intercepted finish request) or from context compaction
+    slicing a pair apart.  Only the wire copy is repaired; the stored
+    history is untouched.  Returns the repaired list and the number of
+    dropped calls.
+    """
+    answered: set[str] = set()
+    for message in messages:
+        if message.get("role") == "tool":
+            call_id = message.get("tool_call_id")
+            if isinstance(call_id, str) and call_id:
+                answered.add(call_id)
+    repaired: list[dict[str, Any]] = []
+    dropped = 0
+    for message in messages:
+        calls = message.get("tool_calls")
+        if message.get("role") == "assistant" and calls:
+            kept = [call for call in calls
+                    if isinstance(call, dict) and call.get("id") in answered]
+            if len(kept) != len(calls):
+                dropped += len(calls) - len(kept)
+                message = dict(message)
+                if kept:
+                    message["tool_calls"] = kept
+                else:
+                    message.pop("tool_calls", None)
+        repaired.append(message)
+    return repaired, dropped
+
+
 def _project_messages_for_wire(messages: Sequence[dict[str, Any]],
                                echo: bool) -> list[dict[str, Any]]:
     """Return the request-side projection of ``messages``.
@@ -208,6 +249,9 @@ def _project_messages_for_wire(messages: Sequence[dict[str, Any]],
     Pure and non-mutating: conversation history and traces keep the full
     turn (including chain-of-thought), only the wire copy is shaped.
 
+    - Dangling assistant tool calls (no later ``role: tool`` message
+      with the same id) are dropped so the provider never 400s on the
+      pairing contract.
     - ``metadata`` (observation spill paths and other runtime side-channel
       data) is stripped unconditionally — no provider understands it.
     - ``reasoning_content`` is kept only when ``echo`` is true.  Where it
@@ -215,8 +259,11 @@ def _project_messages_for_wire(messages: Sequence[dict[str, Any]],
       empty message, so it gets a placeholder instead (the protocol
       requires assistant messages to carry something).
     """
+    paired, dropped = _drop_dangling_tool_calls(messages)
+    if dropped:
+        logger.warning("llm.wire.dangling_tool_calls_dropped count=%d", dropped)
     projected: list[dict[str, Any]] = []
-    for message in messages:
+    for message in paired:
         out = dict(message)
         out.pop("metadata", None)
         if not echo and out.get("role") == "assistant":
