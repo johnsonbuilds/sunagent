@@ -185,11 +185,11 @@ submit 调用；B）发请求前丢掉悬空 tool_calls 并记 `llm.wire.danglin
 
 ## 8. 后续观测点
 
+- 再跑全量（比如验证 cap 有没有把 MIPS 的 41 连败打下来），trace 里直接看 invalid 的 input_capped 和截后字符数就行，观测点都是现成的。
 - `llm.wire.dangling_tool_calls_dropped`：跑新任务集时 grep 该日志。出现且 count>0 = B 在兜底，
   说明又有路径造出了悬空 tool_calls（历史只存、wire 修），值得回头定位是哪条路径（submit 以外的
   拦截/ compaction 切片/新工具），而不是视为正常。
 - raman 类 400 是否归零：之前 `LLM error 400: ... tool_calls must be followed by tool messages`
   直接杀死整轮；修复后该错误应不再出现。若再现，先查 trace 里被 contract 打回的 submit 与
   `dangling_tool_calls_dropped` 是否同时出现。
-- qemu 两个任务：镜像源问题未动（等新任务集）。若新任务集仍含 bullseye 镜像，先看是否同样 404；
-  是则按 §7 口径 quarantine + 上游 issue，不计入模型能力分。
+
