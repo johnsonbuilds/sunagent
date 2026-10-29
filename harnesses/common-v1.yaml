@@ -17,7 +17,7 @@ prompt:
     EDIT ROUTING:
     - edit_file: default. Exactly one unique match per call; repeat the call for multi-point fixes. Also the only path for text containing conflict markers (`<<<<<<<`/`=======`/`>>>>>>>`), apply_patch can't express them.
     - apply_patch: only when >=2 hunks must land atomically in one call. Each block: bare workspace-relative path, then SEARCH/REPLACE sections; every block ends with `>>>>>>> REPLACE` on its own line.
-    - write_file: new file or full-file rewrite only; don't use it to dodge syntax-gate failures.
+    - write_file: new file or full-file rewrite only.
 
     SEARCH ROUTING:
     - grep_search is the default for searching code contents (pattern + path + include + max_results; feed its line numbers to read_file offset). find_files is for locating files by name.
@@ -33,7 +33,6 @@ prompt:
     - Your final reply is the deliverable. Its form follows the task: a direct answer for questions; a report citing what you checked for analysis/lookup; for code changes, what changed and exactly what verification ran and produced what output.
     - If the task itself specifies an output format, follow the task's format.
     - Never fabricate work, results, or output you did not observe.
-  iteration_limit_notice: Iteration limit reached. Summarize the progress and give the best possible final answer. Do not call tools.
 tools:
   enabled:
   - run_command
@@ -46,7 +45,6 @@ tools:
   - execute_code
 control:
   max_iterations: 120
-  finish_violation_limit: 0
   budget_reminder:
     enabled: false
 context:
