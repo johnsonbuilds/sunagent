@@ -19,8 +19,8 @@
 | 增量 summary + boundary | **frozen=0/89**（无 md5 复用）；多 yield 任务 boundary 全部严格单调递增；输入规模首压大、后续小（如 video-processing 54→21→20→36 msgs） | ✅ r1 的冻结 bug 已根除 |
 | invalid-retry（1 次） | 87 个 flaky episode 里救活 14 个（16%），分散在 14 个不同任务 | ✅ 有用，天花板明显 |
 | error/invalid 观测事件 | 160 invalid 全部分类（73 空回包 / 70 缺§2 / 17 缺§3），error 零次——传输层清白 | ✅ 靠它定位了 §3 的新问题 |
-| prompt 透传 | tb-v4 未配自定义 prompt，生产零覆盖；`apply_context_strategy` 唯一调用方 `refresh_view` 从不传 prompt，该基因位目前恒为 None | ⚠️ 仅单测 |
-| Hard gate（force-budget + refresh hook） | **4107 次调用里 `context_window` 重试零次**——60k 预算相对 1M 上下文太宽，门一次没开过 | ⚠️ 仅单测，生产未验证 |
+| prompt 透传 | tb-v4 未配自定义 prompt，生产零覆盖；`apply_context_strategy` 唯一调用方 `refresh_view` 从不传 prompt，该基因位目前恒为 None。但透传链路本身已修（`9291f51`，改名后复查健在：`context.py:437` 收、`context.py:705` 透传），配了即生效 | ⚠️ 仅单测 |
+| Hard gate（force-budget + refresh hook） | **4107 次调用里 `context_window` 重试零次**——60k 预算相对 1M 上下文太宽，门一次没开过。`442396d` 补了 AgentTurn 级集成测试（`test_overflow_rejection_compacts_and_resends`：fake LLM 首次抛 `ContextWindowExceededError`，断言走真 hook 压到 70% 后 resend 变小、turn 正常结束、trace 有 `llm.retry=context_window`），覆盖了之前手写 hook 绕过的整条 wiring；生产开火仍未验证（见 §5） | ⚠️ 集成测试有，生产未验证 |
 
 附带：7 个任务各吃满 6 次 `provider_error` retry（6/7 最终 reward 1.0），恢复基因在生产真实开火；fallback 的 compact 中位压到原文 0.38，保底有效；
 `regex-chess`（trace 278M）全程 0 真快照、纯 compact 跑完 121 轮——保底链路的极限压力测试。
@@ -37,7 +37,18 @@ invalid 输入规模：中位 17.7 万字符，145/160 超过 12 万字符，最
 重 compaction 任务有过有挂（video-processing/path-tracing 过，mips/dna 挂）：memory 决定 run 不死，不决定题做对，符合预期。
 6 个 `AgentTimeoutError`（infra 超时，其中 2 个 verifier 仍给 1.0）与 memory 无关。
 
-## 4. 逐任务明细
+## 4. 报告之后的新改动（`442396d`，待下次全量验证）
+
+- **Summarizer 输入 cap**（`DEFAULT_SUMMARIZER_INPUT_CAP_CHARS=150k`）：attempt 1 永远读全量；attempt 2 先 `compact_observations` 折叠（对子完整、verbatim 用户保留）再喂。§2 的恶性循环（失败→boundary 停→输入胀→更易失败，MIPS 胀到 54 万字符）就靠这个打破：cap 只勒病态尾巴，正常 segment（成功 yield 多在 12–124 msgs）几乎不触发。trace 记 `input_capped` + 截前/截后字符数（`.invalid` / `.yield` 均有）。
+- **AgentTurn 级 hard-gate 集成测试**：之前 `HardGateRecoveryTests` 用手写 refresh 绕过了真 hook；新测试跑完整 `run_turn`，覆盖 genome 算 70% target → `refresh_view(force_budget)` → 按 size 判进展整条 wiring。
+- **调大预算验证不了 hard gate**：预算只管 soft gate；hard gate 开火的唯一条件是 provider 400（请求 > 模型上下文）。60k vs 1M 注定零触发——这是系统正常工作的表现，不是缺验证。真要生产开火，需小上下文模型 + 大预算（见 §1 表格）。
+
+## 5. 澄清：prompt 透传 bug 已修（`9291f51`，改名后复查健在）
+
+准确表述是：**默认 prompt 一直正常工作；修的是“配了自定义 prompt 会被静默忽略”**。
+调用链 `refresh_view → apply_context_strategy(**options) → summarize_history(prompt=...) → _generate_summary(prompt=...)` 在 `812a9e1` 里第三环掉了链子（收了 `prompt` 不往下传），任何配了自定义 summary prompt 的 harness 都会无声地用回默认 `SUMMARIZER_INSTRUCTION`。tb-v4 自己没配该基因（且 `refresh_view` 从不传 `prompt`），所以 89 任务里这条路零覆盖——修的是“能配”这个能力，验证停留在单测。
+
+## 6. 逐任务明细
 
 列：iters（llm.start）/ compact（apply 事件）/ yield（真快照）/ inval（空/缺§2/缺§3）/ retry救活 /
 preserved（带 verbatim 用户的 yield 数）/ frozen（md5 复用）/ boundary（多 yield 是否单调）/ reward。
