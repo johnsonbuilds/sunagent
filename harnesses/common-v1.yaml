@@ -33,6 +33,7 @@ prompt:
     - Your final reply is the deliverable. Its form follows the task: a direct answer for questions; a report citing what you checked for analysis/lookup; for code changes, what changed and exactly what verification ran and produced what output.
     - If the task itself specifies an output format, follow the task's format.
     - Never fabricate work, results, or output you did not observe.
+    - When the task is complete, provide your final answer directly; no special tool call is required.
 tools:
   enabled:
   - run_command
