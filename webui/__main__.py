@@ -52,7 +52,23 @@ def main() -> None:
                         help="restart the server when the source changes")
     parser.add_argument("--log-level", default="info",
                         help="uvicorn log level (default: info)")
+    parser.add_argument("--harness", default=os.getenv("AGENT_RUNTIME_HARNESS"),
+                        help="harness manifest to run (file path, id under "
+                             "harnesses/, or omit for the default harness; "
+                             "also set via AGENT_RUNTIME_HARNESS)")
     args = parser.parse_args()
+
+    if args.harness:
+        # AgentRunner reads AGENT_RUNTIME_HARNESS from the environment, so
+        # publish the CLI flag there. This also covers --reload, where the
+        # reloader child builds the app itself and inherits the environment.
+        os.environ["AGENT_RUNTIME_HARNESS"] = args.harness
+        # Fail fast with a clear error instead of booting with a fallback.
+        from agent_runtime.harness import HarnessError, resolve_harness
+        try:
+            resolve_harness(args.harness)
+        except HarnessError as exc:
+            parser.error(str(exc))
 
     try:
         import uvicorn  # noqa: F401
