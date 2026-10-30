@@ -113,11 +113,10 @@ echo
 fi
 
 if [[ "$CASE_NO" == "5" || "$CASE_NO" == "0" ]]; then
-echo "===== CASE 5: apply_patch — 一次调用多文件编辑 ====="
+echo "===== CASE 5: apply_patch — 一次调用单文件多处编辑 ====="
 fresh_sandbox
-agent "用 apply_patch 工具一次性完成两处修改：1) 在 src/app.py 里把函数 serve 改名为 serve_all（函数体不变）2) 新建文件 src/version.py，内容为一行 VERSION = '1.0'。要求一次 apply_patch 调用完成，不要用 write_file 或 edit_file。完成后报告两个文件的内容。" trace-5-patch
+agent "用 apply_patch 工具一次性完成两处修改：1) 在 src/app.py 里把函数 serve 改名为 serve_all（函数体不变）2) 在同一文件里把注释版本号改为 2.0。要求一次 apply_patch 调用完成，不要用 write_file 或 edit_file。完成后报告文件内容。" trace-5-patch
 check "src/app.py 已改名" 'grep -q "def serve_all" "$SANDBOX/src/app.py"'
-check "src/version.py 已创建" 'grep -q "VERSION" "$SANDBOX/src/version.py"'
 echo
 fi
 

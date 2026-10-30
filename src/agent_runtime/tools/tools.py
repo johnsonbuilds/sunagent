@@ -197,47 +197,37 @@ def _edit_file_spec(workspace: Workspace) -> ToolSpec:
 
 def _apply_patch_spec(workspace: Workspace) -> ToolSpec:
     return ToolSpec("apply_patch",
-                    "Make batched text replacements using SEARCH/REPLACE blocks.\n"
+                    "Make batched text replacements to a single existing file "
+                    "as one atomic unit with all-or-nothing validation.\n"
                     "\n"
-                    "This tool accepts exactly one argument: \"patch\", a string.\n"
-                    "Put all file paths, SEARCH text, and replacement text inside\n"
-                    "that single string. Do not send them as separate arguments.\n"
-                    "\n"
-                    "This tool is for scenarios where multiple replacements are\n"
-                    "applied together as one atomic unit with all-or-nothing "
-                    "validation.\n"
-                    "Every SEARCH section must match its file exactly once; "
-                    "zero or ambiguous matches fail the whole patch and "
+                    "Takes a file path plus an ordered edits array of "
+                    "{old_text, new_text} objects; edits apply in order, so "
+                    "a later edit may depend on an earlier one. "
+                    "Every old_text must match exactly once; "
+                    "zero or ambiguous matches fail the whole call and "
                     "nothing is written. Edited content that no longer parses "
-                    "(Python, JSON, YAML, shell) is rejected the same way.\n"
+                    "(Python, JSON, YAML, shell) is rejected the same way. "
+                    "Existing files only (old_text must be non-empty); "
+                    "empty new_text deletes the match.\n"
                     "\n"
-                    "Format per block:\n"
-                    "path/to/file.py\n"
-                    "<<<<<<< SEARCH\n"
-                    "old_context copied from the file, with indentation,\n"
-                    "including enough surrounding lines to match one location\n"
-                    "=======\n"
-                    "new_context to replace it with\n"
-                    ">>>>>>> REPLACE\n"
-                    "\n"
-                    "Put each path and each delimiter on its own line, using a bare\n"
-                    "path without tags or quotes. End every block with >>>>>>> REPLACE.\n"
-                    "Empty SEARCH creates a new file (fails when the file already "
-                    "exists; use a non-empty SEARCH section to edit it); "
-                    "empty replacement deletes "
-                    "the match. Text containing conflict-marker lines cannot be "
-                    "expressed here — use the single-point edit path for such "
-                    "edits instead.",
+                    "Best suited for multi-point edits to one file that must "
+                    "land together.",
                     {"type": "object", "properties": {
-                        "patch": {"type": "string",
-                                  "description": "The entire patch as one "
-                                                 "string, including all file "
-                                                 "paths and SEARCH/REPLACE "
-                                                 "blocks. Every block must "
-                                                 "end with >>>>>>> REPLACE. "
-                                                 "Do not split this into "
-                                                 "multiple arguments."}},
-                     "required": ["patch"],
+                        "path": {"type": "string",
+                                 "description": "File path inside the workspace"},
+                        "edits": {"type": "array",
+                                  "description": "Ordered edits to apply",
+                                  "minItems": 1,
+                                  "items": {"type": "object", "properties": {
+                                      "old_text": {
+                                          "type": "string",
+                                          "description": "Text to replace, must match uniquely"},
+                                      "new_text": {
+                                          "type": "string",
+                                          "description": "Replacement text (empty to delete)"}},
+                                      "required": ["old_text", "new_text"],
+                                      "additionalProperties": False}}},
+                     "required": ["path", "edits"],
                      "additionalProperties": False},
                     partial(apply_patch, workspace=workspace))
 

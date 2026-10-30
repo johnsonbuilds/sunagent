@@ -37,8 +37,7 @@ async def write_file(path: str, content: str, *,
         if "error" in listing:
             raise ValueError(
                 f"write_file: parent directory {parent!r} of new file "
-                f"{path!r} does not exist; check the path spelling, or "
-                "create the directory first (e.g. mkdir -p via run_command).")
+                f"{path!r} does not exist")
     return await ws.write_file(path, content)
 
 
@@ -97,8 +96,7 @@ async def edit_file(path: str, old_str: str, new_str: str, *,
     if problem:
         raise ValueError(
             f"edit_file: {path}: edited content fails syntax check ({problem}). "
-            "Nothing was written; fix the edit, or use write_file if the "
-            "intermediate state is intentional.")
+            "Nothing was written.")
     written = await ws.write_file(path, updated)
     if "error" in written:
         return written

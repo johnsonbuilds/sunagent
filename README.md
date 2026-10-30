@@ -278,6 +278,20 @@ must comply with:
 - Maintainability: make code easy to understand and extend.
 - Reliability: handle expected failures and edge cases explicitly.
 
+### 3. Tool Feedback Principle
+
+Tool error messages state only verified facts, never guess intent.
+
+- Say what happened (`cannot read file 'x': ...`, `old_text is empty`,
+  `edit 2 matches 0 locations`), not what the model wanted
+  (maybe it meant to create a file, maybe it just typo'd the path —
+  we cannot know).
+- Do not prescribe the next tool (`use write_file ...`, `verify with
+  find_files`, `use edit_file instead`). Routing decisions belong to
+  the model and the harness prompt, not to error text.
+- The same applies to success-adjacent hints: describe the outcome,
+  let the caller decide what to do next.
+
 ## License
 
 Apache 2.0

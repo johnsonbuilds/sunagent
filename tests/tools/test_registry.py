@@ -76,9 +76,9 @@ class ToolRoutingGuidanceTests(unittest.TestCase):
         self.assertIn("exactly one occurrence", desc)
         self.assertIn("Best suited", desc)
 
-    def test_apply_patch_suits_batched_multi_file_edits(self) -> None:
+    def test_apply_patch_suits_batched_single_file_edits(self) -> None:
         desc = self.descriptions()["apply_patch"]
-        self.assertIn("SEARCH/REPLACE blocks", desc)
+        self.assertIn("single existing file", desc)
         self.assertIn("all-or-nothing", desc)
 
 

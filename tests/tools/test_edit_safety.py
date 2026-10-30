@@ -14,8 +14,6 @@ from agent_runtime.tools.patch import apply_patch
 PY_FILE = "class Foo:\n    def bar(self):\n        return 1\n"
 
 
-def block(path: str, old: str, new: str) -> str:
-    return f"{path}\n<<<<<<< SEARCH\n{old}\n=======\n{new}\n>>>>>>> REPLACE\n"
 
 
 class MatchLadderTests(unittest.TestCase):
@@ -137,19 +135,22 @@ class ApplyPatchIntegrationTests(unittest.IsolatedAsyncioTestCase):
             workspace=LocalWorkspace(directory),
             enabled=["write_file", "read_file", "apply_patch"])
 
-    async def test_conflict_marker_collision_points_to_edit_file(self) -> None:
-        # editing a file with merge-conflict markers: SEARCH text contains
-        # =======, which the block grammar cannot express
+    async def test_conflict_marker_text_is_editable(self) -> None:
+        # structured params have no block delimiters, so marker lines are
+        # plain text: matching handles them, the syntax gate decides
+        # (.txt is exempt, .py conflicted content fails the gate)
         with tempfile.TemporaryDirectory() as directory:
             registry = self._registry_files(directory)
-            conflicted = ("def a():\n<<<<<<< HEAD\n    return 1\n"
-                          "=======\n    return 2\n>>>>>>> branch\n")
-            await registry.execute("write_file", {"path": "c.py",
+            conflicted = ("a\n<<<<<<< HEAD\nb\n=======\nc\n>>>>>>> branch\n")
+            await registry.execute("write_file", {"path": "n.txt",
                                                   "content": conflicted})
-            patch = block("c.py", conflicted.rstrip("\n"), "def a():\n    return 1\n")
-            with self.assertRaises(ValueError) as ctx:
-                await registry.execute("apply_patch", {"patch": patch})
-        self.assertIn("use edit_file", str(ctx.exception))
+            result = await registry.execute("apply_patch", {
+                "path": "n.txt",
+                "edits": [{"old_text": "<<<<<<< HEAD",
+                           "new_text": "<<<<<<< LOCAL"}]})
+            read = await registry.execute("read_file", {"path": "n.txt"})
+        self.assertEqual(result["edits_applied"], 1)
+        self.assertIn("<<<<<<< LOCAL", read["content"])
 
     async def test_syntax_broken_new_str_is_blocked_before_write(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -158,9 +159,11 @@ class ApplyPatchIntegrationTests(unittest.IsolatedAsyncioTestCase):
                                                   "content": PY_FILE})
             # mixed tab/space replacement text must not land
             bad_new = "def bar(self):\n\t\treturn 2\n"
-            patch = block("app.py", "def bar(self):\n    return 1\n", bad_new)
             with self.assertRaises(ValueError) as ctx:
-                await registry.execute("apply_patch", {"patch": patch})
+                await registry.execute("apply_patch", {
+                    "path": "app.py",
+                    "edits": [{"old_text": "def bar(self):\n    return 1\n",
+                               "new_text": bad_new}]})
             self.assertIn("syntax check", str(ctx.exception))
             read = await registry.execute("read_file", {"path": "app.py"})
         self.assertEqual(read["content"], PY_FILE)  # nothing was written
@@ -170,7 +173,9 @@ class ApplyPatchIntegrationTests(unittest.IsolatedAsyncioTestCase):
             registry = self._registry_files(directory)
             await registry.execute("write_file", {"path": "m.py", "content": PY_FILE})
             result = await registry.execute("apply_patch", {
-                "patch": block("m.py", "return 1", "return 2")})
+                "path": "m.py",
+                "edits": [{"old_text": "return 1",
+                           "new_text": "return 2"}]})
         self.assertEqual(result["match_modes"], ["exact"])
 
 
