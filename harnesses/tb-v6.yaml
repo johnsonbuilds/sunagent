@@ -41,8 +41,6 @@ prompt:
       gate as edit_file. Existing files only (old_text must be non-empty; use
       write_file to create a file). Empty new_text deletes the match.
     - write_file: create a new file or replace the entire content of a file.
-      The parent directory must already exist (create it first, e.g. mkdir -p
-      via run_command).
     - submit_result: the only way to finish the task. solution_description
       states what the task required and what you did (>=20 characters).
       evidence quotes output you actually observed. command_to_verify is one
