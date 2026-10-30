@@ -30,7 +30,7 @@ def truncate_result(result: dict[str, Any]) -> dict[str, Any]:
 
 # Shared search/index constants: owned here so both the tools layer
 # (tools/search.py) and the execution layer (execution/harbor.py) import
-# from one place. Previously harbor.py imported SKIP_DIRS/_matches_path
+# from one place. Previously harbor.py imported SKIP_DIRS/match helpers
 # from tools.search (execution -> tools倒依赖); now both import from base.
 SKIP_DIRS = frozenset({
     ".git", "node_modules", "__pycache__", ".venv", "venv", ".tox",

@@ -29,11 +29,6 @@ from agent_runtime.execution.base import (
 from agent_runtime.execution.local import LocalWorkspace
 
 
-def _matches_path(path: str, pattern: str) -> bool:
-    """Backwards-compat alias: prefer ``matches_path`` from execution.base."""
-    return matches_path(path, pattern)
-
-
 async def walk_files(workspace: Workspace, path: str = ".",
                      ) -> dict[str, Any] | list[dict[str, Any]]:
     """Collect every file under ``path`` as ``{"path", "size"}`` entries.
@@ -58,24 +53,6 @@ async def walk_files(workspace: Workspace, path: str = ".",
         elif entry.get("type") == "file":
             files.append({"path": child, "size": entry.get("size", 0)})
     return files
-
-
-def _matches_path(path: str, pattern: str) -> bool:
-    """Match a workspace-relative posix path against a wildcard pattern.
-
-    ``*`` crosses directory separators (VS Code Ctrl+P behavior), and a
-    pattern without a ``/`` also matches against the basename, so both
-    ``**/*.py`` and ``models.py`` behave the way the model expects.
-    """
-    if fnmatch.fnmatchcase(path, pattern):
-        return True
-    if pattern.startswith("**/"):
-        if fnmatch.fnmatchcase(path, pattern[3:]):
-            return True
-    if "/" not in pattern and fnmatch.fnmatchcase(posixpath.basename(path),
-                                                  pattern):
-        return True
-    return False
 
 
 async def grep_search(pattern: str, path: str = ".",
