@@ -13,7 +13,7 @@
 #   ./run.sh status                   # 查看运行状态
 #   ./run.sh logs                     # 查看实时日志
 #   ./run.sh harness record <name> <model> [notes]  # 记录一次运行（等价于 uv run python -m agent_runtime.harness record jobs/<name> --model <model> --notes <notes>）
-#   ./run.sh harbor run --job-name <job-name> [--harness <harness>] [--dataset <dataset>]  # 运行 Harbor 任务
+#   ./run.sh harbor run --job-name <job-name> [--harness <harness>] [--dataset <dataset>] [-n <n>]  # 运行 Harbor 任务
 #
 # 启动时指定 harness（任选其一，优先级 CLI > 环境变量 > 默认 common-v0）:
 #   ./run.sh start --harness tb-v4
@@ -266,8 +266,8 @@ cmd_harness_record() {
   uv run python -m agent_runtime.harness record "${args[@]}"
 }
 
-# ./run.sh harbor run --job-name <job-name> [--harness <harness>] [--dataset <dataset>]
-# 示例: ./run.sh harbor run --job-name terminal-bench-2-1-tb-v4-deepseekv4.1-flash-1017 --harness tb-v4 --dataset terminal-bench/terminal-bench-2-1
+# ./run.sh harbor run --job-name <job-name> [--harness <harness>] [--dataset <dataset>] [-n <n>]
+# 示例: ./run.sh harbor run --job-name terminal-bench-2-1-tb-v4-deepseekv4.1-flash-1017 --harness tb-v4 --dataset terminal-bench/terminal-bench-2-1 -n 4
 # 默认等价于: uv run python scripts/run_with_image_gc.py --dataset terminal-bench/terminal-bench-2-1 --harness tb-v4 --job-name terminal-bench-2-1-tb-v4-deepseekv4.1-flash-1017 -n 4 --timeout-multiplier 3
 cmd_harbor_run() {
   if ! has_uv; then
@@ -278,13 +278,14 @@ cmd_harbor_run() {
   local dataset="terminal-bench/terminal-bench-2-1"
   local harness="tb-v4"
   local job_name=""
+  local n=4
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --harness)
         if [[ $# -lt 2 || -z "${2:-}" || "$2" == -* ]]; then
           echo "错误: --harness 需要一个值" >&2
-          echo "用法: $0 harbor run --job-name <job-name> [--harness <harness>] [--dataset <dataset>]" >&2
+          echo "用法: $0 harbor run --job-name <job-name> [--harness <harness>] [--dataset <dataset>] [-n <n>]" >&2
           return 1
         fi
         harness="$2"
@@ -293,7 +294,7 @@ cmd_harbor_run() {
       --job-name)
         if [[ $# -lt 2 || -z "${2:-}" || "$2" == -* ]]; then
           echo "错误: --job-name 需要一个值" >&2
-          echo "用法: $0 harbor run --job-name <job-name> [--harness <harness>] [--dataset <dataset>]" >&2
+          echo "用法: $0 harbor run --job-name <job-name> [--harness <harness>] [--dataset <dataset>] [-n <n>]" >&2
           return 1
         fi
         job_name="$2"
@@ -302,15 +303,24 @@ cmd_harbor_run() {
       --dataset)
         if [[ $# -lt 2 || -z "${2:-}" || "$2" == -* ]]; then
           echo "错误: --dataset 需要一个值" >&2
-          echo "用法: $0 harbor run --job-name <job-name> [--harness <harness>] [--dataset <dataset>]" >&2
+          echo "用法: $0 harbor run --job-name <job-name> [--harness <harness>] [--dataset <dataset>] [-n <n>]" >&2
           return 1
         fi
         dataset="$2"
         shift 2
         ;;
+      -n)
+        if [[ $# -lt 2 || -z "${2:-}" || "$2" == -* ]]; then
+          echo "错误: -n 需要一个值" >&2
+          echo "用法: $0 harbor run --job-name <job-name> [--harness <harness>] [--dataset <dataset>] [-n <n>]" >&2
+          return 1
+        fi
+        n="$2"
+        shift 2
+        ;;
       *)
         echo "错误: 未知参数 '$1'" >&2
-        echo "用法: $0 harbor run --job-name <job-name> [--harness <harness>] [--dataset <dataset>]" >&2
+        echo "用法: $0 harbor run --job-name <job-name> [--harness <harness>] [--dataset <dataset>] [-n <n>]" >&2
         return 1
         ;;
     esac
@@ -318,16 +328,16 @@ cmd_harbor_run() {
 
   if [[ -z "$job_name" ]]; then
     echo "错误: 必须指定 --job-name" >&2
-    echo "用法: $0 harbor run --job-name <job-name> [--harness <harness>] [--dataset <dataset>]" >&2
+    echo "用法: $0 harbor run --job-name <job-name> [--harness <harness>] [--dataset <dataset>] [-n <n>]" >&2
     return 1
   fi
 
-  echo "运行 Harbor 任务: dataset=$dataset harness=$harness job_name=$job_name"
+  echo "运行 Harbor 任务: dataset=$dataset harness=$harness job_name=$job_name n=$n"
   uv run python scripts/run_with_image_gc.py \
     --dataset "$dataset" \
     --harness "$harness" \
     --job-name "$job_name" \
-    -n 4 \
+    -n "$n" \
     --timeout-multiplier 3
 }
 
@@ -355,7 +365,7 @@ case "$CMD" in
     case "$subcmd" in
       run)   cmd_harbor_run "${@:2}" ;;
       *)     echo "错误: 未知的 harbor 子命令 '$subcmd'" >&2
-             echo "用法: $0 harbor run --job-name <job-name> [--harness <harness>] [--dataset <dataset>]" >&2
+             echo "用法: $0 harbor run --job-name <job-name> [--harness <harness>] [--dataset <dataset>] [-n <n>]" >&2
              exit 1 ;;
     esac
     ;;
@@ -373,8 +383,8 @@ case "$CMD" in
     echo "    record <name> <model> [notes]"
     echo "               等价于 uv run python -m agent_runtime.harness record jobs/<name> --model <model> [--notes <notes>]"
     echo "  harbor       Harbor 任务相关命令"
-    echo "    run --job-name <job-name> [--harness <harness>] [--dataset <dataset>]"
-    echo "               运行 Harbor 任务（--job-name 必填，--harness 与 --dataset 可选）"
+    echo "    run --job-name <job-name> [--harness <harness>] [--dataset <dataset>] [-n <n>]"
+    echo "               运行 Harbor 任务（--job-name 必填，--harness 与 --dataset 可选，-n 默认 4）"
     echo ""
     echo "环境变量:"
     echo "  AGENT_RUNTIME_WEBUI_HOST  监听地址 (默认 127.0.0.1)"
