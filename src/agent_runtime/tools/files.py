@@ -8,36 +8,43 @@ to ``ShellExecutor``.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import PurePosixPath
 from typing import Any
 
 from agent_runtime.execution.base import Workspace
 from agent_runtime.execution.local import LocalWorkspace
 from agent_runtime.tools.code import OUTPUTS_DIR
-from agent_runtime.tools.edit_match import apply_edit
+from agent_runtime.tools.edit_match import MatchError, apply_edit
 from agent_runtime.tools.syntax_gate import syntax_error
 
 
 DEFAULT_READ_LIMIT = 2000
 
 
+def _error_text(error: Any) -> str:
+    """Best-effort one-line rendering of a structured workspace error.
+
+    Same helper as tools.patch: keeps the factual wording identical
+    (``cannot read file 'x': FileNotFoundError: ...``) while the
+    transport is unified to ``raise ValueError`` so the loop's error
+    budget sees every model-fixable failure.
+    """
+    if isinstance(error, Mapping):
+        message = error.get("message", error)
+        err_type = error.get("type")
+        detail = str(message) if not isinstance(message, str) else message
+        return f"{err_type}: {detail}" if err_type else detail
+    return str(error)
+
+
 async def write_file(path: str, content: str, *,
                      workspace: Workspace | None = None) -> dict[str, Any]:
     """Create or overwrite a file with the given full content."""
+    # Backends create parent directories automatically (local mkdir -p /
+    # Harbor mkdir -p), so no tool-side precheck: one write, no extra RTT,
+    # no TOCTOU between list_dir and write.
     ws = workspace or LocalWorkspace()
-    # Backends auto-create parent directories, so a typo'd path would
-    # otherwise land a garbage file with a success receipt. Creation under
-    # a missing directory is rejected here (backend-agnostic: both local
-    # and Harbor workspaces expose list_dir); overwrites always pass
-    # through untouched since their parent trivially exists. Root-level
-    # paths skip the extra round trip.
-    parent = str(PurePosixPath(path).parent)
-    if parent not in ("", "."):
-        listing = await ws.list_dir(parent)
-        if "error" in listing:
-            raise ValueError(
-                f"write_file: parent directory {parent!r} of new file "
-                f"{path!r} does not exist")
     return await ws.write_file(path, content)
 
 
@@ -89,9 +96,14 @@ async def edit_file(path: str, old_str: str, new_str: str, *,
     ws = workspace or LocalWorkspace()
     read = await ws.read_file(path)
     if "error" in read:
-        return read
+        raise ValueError(
+            f"edit_file: cannot read file {path!r}: "
+            f"{_error_text(read['error'])}")
     content = read["content"]
-    updated, mode = apply_edit(content, old_str, new_str)
+    try:
+        updated, mode = apply_edit(content, old_str, new_str)
+    except MatchError as exc:
+        raise ValueError(f"edit_file: {exc}") from exc
     problem = syntax_error(path, updated)
     if problem:
         raise ValueError(
@@ -99,7 +111,9 @@ async def edit_file(path: str, old_str: str, new_str: str, *,
             "Nothing was written.")
     written = await ws.write_file(path, updated)
     if "error" in written:
-        return written
+        raise ValueError(
+            f"edit_file: cannot write file {path!r}: "
+            f"{_error_text(written['error'])}")
     return {"path": path, "occurrences_replaced": 1, "match_mode": mode,
             "bytes_written": written["bytes_written"]}
 

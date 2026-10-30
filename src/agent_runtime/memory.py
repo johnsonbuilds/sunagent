@@ -186,9 +186,7 @@ def render_memory_block(workspace: Any | None) -> MemoryView:
     Disabled (env off), missing workspace, or a workspace without a
     usable ``root`` all yield an empty :class:`MemoryView` with no
     side effects.  When enabled, the memory directory is created if
-    absent (write_file rejects creation under a missing parent, so the
-    bootstrap mkdir is required, not cosmetic) and only the tree is
-    rendered — file contents are never read.
+    absent and only the tree is rendered — file contents are never read.
 
     Memory is auxiliary: filesystem failures (permission denied, a
     colliding non-directory, a vanished root) degrade to an empty view

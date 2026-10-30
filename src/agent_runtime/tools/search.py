@@ -14,34 +14,24 @@ import posixpath
 import re
 from typing import Any
 
-from agent_runtime.execution.base import Workspace
+from agent_runtime.execution.base import (
+    DEFAULT_FIND_RESULTS,
+    DEFAULT_GREP_RESULTS,
+    MATCHES_PER_FILE,
+    MAX_FILE_BYTES,
+    MAX_FIND_RESULTS,
+    MAX_GREP_RESULTS,
+    PREVIEW_CHARS,
+    SKIP_DIRS,
+    Workspace,
+    matches_path,
+)
 from agent_runtime.execution.local import LocalWorkspace
 
 
-SKIP_DIRS = frozenset({
-    ".git", "node_modules", "__pycache__", ".venv", "venv", ".tox",
-    ".mypy_cache", ".pytest_cache", ".ruff_cache", "dist", "build",
-    "target", ".next",
-    # Agent working dirs: generated scripts and spilled observations are
-    # addressed directly (read_file / read_output), never discovered via
-    # a repo-wide search. Skipping them here (and in the Harbor rg/grep
-    # prune lists, which share this set) keeps results noise-free;
-    # an explicit path=".scripts" / path=".outputs" search still works.
-    ".scripts", ".outputs",
-    # The runtime's own state (sessions, traces, summaries) is written by
-    # the runtime, not by the model, and is noise in a repo-wide search.
-    "workspace",
-})
-
-MAX_FILE_BYTES = 1_000_000
-PREVIEW_CHARS = 240
-
-DEFAULT_GREP_RESULTS = 200
-MAX_GREP_RESULTS = 1000
-MATCHES_PER_FILE = 50
-
-DEFAULT_FIND_RESULTS = 100
-MAX_FIND_RESULTS = 1000
+def _matches_path(path: str, pattern: str) -> bool:
+    """Backwards-compat alias: prefer ``matches_path`` from execution.base."""
+    return matches_path(path, pattern)
 
 
 async def walk_files(workspace: Workspace, path: str = ".",
@@ -201,7 +191,7 @@ async def find_files(pattern: str, path: str = ".",
         return {"pattern": pattern, "path": path, **files}
 
     matches = sorted(file_entry["path"] for file_entry in files
-                     if _matches_path(file_entry["path"], pattern))
+                     if matches_path(file_entry["path"], pattern))
     truncated = len(matches) > max_results
     result: dict[str, Any] = {
         "pattern": pattern,

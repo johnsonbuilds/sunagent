@@ -12,7 +12,15 @@ import time
 from collections.abc import Awaitable
 from typing import Any, Protocol
 
-from .base import paginate_lines, truncate_result
+from .base import (
+    MATCHES_PER_FILE,
+    MAX_FILE_BYTES,
+    PREVIEW_CHARS,
+    SKIP_DIRS,
+    matches_path,
+    paginate_lines,
+    truncate_result,
+)
 
 
 class HarborEnvironment(Protocol):
@@ -218,9 +226,6 @@ class HarborWorkspace:
         borrows labs-OO-Agents fail-closed ideas: rg exit 2 (bad regex
         dialect) is reported as an error instead of guessed anchors.
         """
-        from agent_runtime.tools.search import (MATCHES_PER_FILE,
-                                                MAX_FILE_BYTES, PREVIEW_CHARS,
-                                                SKIP_DIRS)
         import fnmatch
 
         if not pattern:
@@ -374,7 +379,7 @@ class HarborWorkspace:
     async def find_paths(self, pattern: str, path: str = ".",
                          max_results: int = 100) -> dict[str, Any] | None:
         """Single-exec server-side filename listing via find."""
-        from agent_runtime.tools.search import SKIP_DIRS, _matches_path
+        # No tools-layer import: search constants live in execution.base.
 
         if not pattern:
             raise ValueError("pattern must not be empty")
@@ -403,7 +408,7 @@ class HarborWorkspace:
             if not line:
                 continue
             rel_paths.append(self._to_workspace_path(line, path, target, root))
-        matches = sorted(p for p in rel_paths if _matches_path(p, pattern))
+        matches = sorted(p for p in rel_paths if matches_path(p, pattern))
         truncated = len(matches) > max_results
         return {
             "pattern": pattern,

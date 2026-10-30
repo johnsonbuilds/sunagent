@@ -28,6 +28,57 @@ def truncate_result(result: dict[str, Any]) -> dict[str, Any]:
     return {**result, "stdout": stdout, "stderr": stderr, "truncated": True}
 
 
+# Shared search/index constants: owned here so both the tools layer
+# (tools/search.py) and the execution layer (execution/harbor.py) import
+# from one place. Previously harbor.py imported SKIP_DIRS/_matches_path
+# from tools.search (execution -> tools倒依赖); now both import from base.
+SKIP_DIRS = frozenset({
+    ".git", "node_modules", "__pycache__", ".venv", "venv", ".tox",
+    ".mypy_cache", ".pytest_cache", ".ruff_cache", "dist", "build",
+    "target", ".next",
+    # Agent working dirs: generated scripts and spilled observations are
+    # addressed directly (read_file / read_output), never discovered via
+    # a repo-wide search. Skipping them here (and in the Harbor rg/grep
+    # prune lists, which share this set) keeps results noise-free;
+    # an explicit path=".scripts" / path=".outputs" search still works.
+    ".scripts", ".outputs",
+    # The runtime's own state (sessions, traces, summaries) is written by
+    # the runtime, not by the model, and is noise in a repo-wide search.
+    "workspace",
+})
+
+MAX_FILE_BYTES = 1_000_000
+PREVIEW_CHARS = 240
+
+DEFAULT_GREP_RESULTS = 200
+MAX_GREP_RESULTS = 1000
+MATCHES_PER_FILE = 50
+
+DEFAULT_FIND_RESULTS = 100
+MAX_FIND_RESULTS = 1000
+
+
+def matches_path(path: str, pattern: str) -> bool:
+    """Match a workspace-relative posix path against a wildcard pattern.
+
+    ``*`` crosses directory separators (VS Code Ctrl+P behavior), and a
+    pattern without a ``/`` also matches against the basename, so both
+    ``**/*.py`` and ``models.py`` behave the way the model expects.
+    """
+    import fnmatch
+    import posixpath
+
+    if fnmatch.fnmatchcase(path, pattern):
+        return True
+    if pattern.startswith("**/"):
+        if fnmatch.fnmatchcase(path, pattern[3:]):
+            return True
+    if "/" not in pattern and fnmatch.fnmatchcase(posixpath.basename(path),
+                                                   pattern):
+        return True
+    return False
+
+
 class ShellExecutor(Protocol):
     async def execute(
         self,

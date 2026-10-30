@@ -30,14 +30,14 @@ class FileToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(written["bytes_written"], 6)
         self.assertEqual(read["content"], "x = 1\n")
 
-    async def test_write_in_missing_directory_is_rejected(self) -> None:
+    async def test_write_creates_missing_directories(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             registry = make_registry(directory)
-            with self.assertRaisesRegex(ValueError, "parent directory"):
-                await registry.execute("write_file", {
-                    "path": "nope/sub/new.py", "content": "x = 1\n"})
+            written = await registry.execute("write_file", {
+                "path": "nope/sub/new.py", "content": "x = 1\n"})
 
-        self.assertFalse((Path(directory) / "nope").exists())
+            self.assertEqual(written["bytes_written"], 6)
+            self.assertTrue((Path(directory) / "nope" / "sub" / "new.py").exists())
 
     async def test_write_in_existing_directory_still_works(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -115,10 +115,9 @@ class FileToolTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             registry = make_registry(directory)
 
-            edited = await registry.execute("edit_file", {
-                "path": "missing.txt", "old_str": "a", "new_str": "b"})
-
-        self.assertEqual(edited["error"]["type"], "FileNotFoundError")
+            with self.assertRaisesRegex(ValueError, "cannot read file"):
+                await registry.execute("edit_file", {
+                    "path": "missing.txt", "old_str": "a", "new_str": "b"})
 
     async def test_path_escape_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
