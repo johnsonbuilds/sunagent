@@ -24,7 +24,7 @@ from agent_runtime.tools import create_default_registry
 
 
 async def _run() -> None:
-    load_dotenv()
+    load_dotenv(override=True)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--trace",

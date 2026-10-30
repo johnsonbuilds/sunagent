@@ -197,7 +197,7 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
     # every launch path -- the console script, `python -m webui`, and
     # `uvicorn webui.server:create_app --factory` -- sees the same
     # provider configuration.
-    load_dotenv()
+    load_dotenv(override=True)
     # The web UI can run shell commands, so it is worth a password.
     # Authentication is on when the user name and the password are
     # configured, and off -- with a warning -- when they are not.

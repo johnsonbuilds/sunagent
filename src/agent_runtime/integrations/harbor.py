@@ -43,7 +43,7 @@ class HarborAgent(BaseAgent):
 
     def __init__(self, *args: Any, llm: Any | None = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        load_dotenv()
+        load_dotenv(override=True)
         _enable_runtime_logging()
         self.llm = llm if llm is not None else OpenAICompatibleLLM(model=self.model_name)
 

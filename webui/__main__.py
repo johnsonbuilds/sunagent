@@ -78,7 +78,7 @@ def main() -> None:
     # An open web UI is an open shell. Say so, without stopping the
     # server: the web UI is a local tool first, and the password is
     # there for the day it is reachable from somewhere else.
-    load_dotenv()
+    load_dotenv(override=True)
     warning = auth_warning()
     if warning is None:
         print("webui: authentication enabled")
