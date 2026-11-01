@@ -79,10 +79,11 @@ Use exactly these sections:
 # must integrate it, not replace it — earlier work state and failure
 # lessons survive every compaction (same anchoring rule as Gemini CLI /
 # opencode update mode).
-SUMMARIZER_INTEGRATION_ADDENDUM = """
+SUMMARIZER_INTEGRATION_ADDENDUM = f"""
 
-A PREVIOUS SNAPSHOT follows the conversation history (or is interleaved
-with it). You must merge it into your output:
+A PREVIOUS SNAPSHOT message — one that starts with the
+"{SUMMARY_PREFIX.strip()}" prefix — is provided before the
+conversation history. You must merge it into your output:
 - Fold the previous "Work State", "Next Move" and "Working Context &
   Anchors" into the new snapshot; keep items that are still relevant,
   mark superseded ones as completed/obsolete, never silently drop a
@@ -91,13 +92,25 @@ with it). You must merge it into your output:
   in the same section format as before."""
 
 
+def _is_summary_message(message: dict[str, Any]) -> bool:
+    """Whether ``message`` is a machine-generated compaction summary.
+
+    Summaries ride the request view as ``user`` messages so every provider
+    accepts them, which makes them indistinguishable from real user turns
+    by role alone.  The marker prefix is the only reliable discriminator;
+    keep that test in one place so no caller mistakes a snapshot for user
+    speech or preserves it as an authoritative user message.
+    """
+    return (message.get("role") == "user"
+            and str(message.get("content", "")).startswith(SUMMARY_PREFIX))
+
+
 def _extract_summary(view: list[dict[str, Any]] | None) -> str | None:
     """The previous compaction summary text carried in a request view."""
     if not view:
         return None
     for message in view:
-        if (message.get("role") == "user"
-                and str(message.get("content", "")).startswith(SUMMARY_PREFIX)):
+        if _is_summary_message(message):
             return str(message["content"])[len(SUMMARY_PREFIX):]
     return None
 
@@ -636,7 +649,18 @@ async def summarize_history(messages: list[dict[str, Any]], *,
     if _view_size(messages, count, unit, usage_anchor) <= (budget or DEFAULT_CONTEXT_BUDGET):
         return messages
 
-    leading = messages[:starts[0]]
+    # Defensive: a snapshot should never enter the source history, but if
+    # one does (imported session, future writer) it lands where this
+    # function itself would put it — right before the first round.  Such
+    # a message is a machine snapshot, not user speech: filtering it from
+    # ``leading`` keeps it from being copied into the new view (where
+    # ``_extract_summary`` would then return the stale text first and
+    # freeze the incremental boundary), and filtering it from ``segment``
+    # keeps it out of both the summarizer input and the user-preserve
+    # pool.  ``tail`` needs no filter: the snapshot position is always
+    # before ``starts[-tail_rounds]`` by construction.
+    leading = [message for message in messages[:starts[0]]
+               if not _is_summary_message(message)]
     tail_start = starts[-tail_rounds]
     tail = messages[tail_start:]
 
@@ -644,7 +668,8 @@ async def summarize_history(messages: list[dict[str, Any]], *,
     # tail, restricted to what the previous summary has NOT already
     # absorbed (incremental boundary).
     segment_start = max(starts[0], boundary)
-    segment = messages[segment_start:tail_start]
+    segment = [message for message in messages[segment_start:tail_start]
+               if not _is_summary_message(message)]
 
     # Preserve user messages verbatim, newest first within the budget
     # (chars, in either budget unit — see below); overflow users (oldest,
