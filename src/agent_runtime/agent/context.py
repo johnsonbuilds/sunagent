@@ -650,13 +650,19 @@ async def summarize_history(messages: list[dict[str, Any]], *,
         return messages
 
     # Defensive: a snapshot should never enter the source history, but if
-    # one does (imported session, future writer), filter it here so it is
-    # neither preserved nor re-fed to the summarizer as user speech.
+    # one does (imported session, future writer) it lands where this
+    # function itself would put it — right before the first round.  Such
+    # a message is a machine snapshot, not user speech: filtering it from
+    # ``leading`` keeps it from being copied into the new view (where
+    # ``_extract_summary`` would then return the stale text first and
+    # freeze the incremental boundary), and filtering it from ``segment``
+    # keeps it out of both the summarizer input and the user-preserve
+    # pool.  ``tail`` needs no filter: the snapshot position is always
+    # before ``starts[-tail_rounds]`` by construction.
     leading = [message for message in messages[:starts[0]]
                if not _is_summary_message(message)]
     tail_start = starts[-tail_rounds]
-    tail = [message for message in messages[tail_start:]
-            if not _is_summary_message(message)]
+    tail = messages[tail_start:]
 
     # Mid-segment: the part between the leading task and the verbatim
     # tail, restricted to what the previous summary has NOT already
@@ -677,8 +683,6 @@ async def summarize_history(messages: list[dict[str, Any]], *,
     novel: list[dict[str, Any]] = []
     user_chars = 0
     for message in reversed(segment):
-        if _is_summary_message(message):
-            continue  # machine snapshot, never a real user turn
         if message.get("role") == "user":
             content = str(message.get("content", ""))
             if user_chars + len(content) <= user_preserve_budget:
