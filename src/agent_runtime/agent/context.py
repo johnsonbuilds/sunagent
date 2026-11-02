@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
-from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
@@ -540,6 +539,7 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
         trace=trace,
         iteration=iteration,
         prompt=options.get("prompt"),
+        summarizer=summarizer,
     )
     result = await definition.handler(request)
 
@@ -581,25 +581,8 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
     return result
 
 
-_DEFAULT_SUMMARIZER: ContextVar[Any | None] = ContextVar(
-    "default_summarizer", default=None)
-
-
-def set_summary_llm(llm: Any) -> None:
-    """Set the context-local default summarizer (tests / legacy wiring).
-
-    Production injects a summarizer through
-    :class:`~agent_runtime.agent.turn_collaborators.TurnCollaborators`;
-    this hook exists so direct callers and tests can keep a context-local
-    default without reaching into module globals.
-    """
-    _DEFAULT_SUMMARIZER.set(llm)
-
-
 def _resolve_summarizer(llm: Any) -> Any:
-    """Resolve an explicit summarizer object or lazy factory."""
-    if llm is None:
-        llm = _DEFAULT_SUMMARIZER.get()
+    """Resolve an injected summarizer object or lazy factory."""
     if llm is None:
         return None
     # A factory (e.g. the provider builder) is called on first use; a
@@ -899,7 +882,7 @@ __all__ = [
     "CONTEXT_STRATEGY_DEFINITIONS", "ContextStrategyDefinition",
     "ContextStrategyRequest", "SUMMARY_PREFIX", "SUMMARIZER_INSTRUCTION",
     "request_view_size", "apply_context_strategy", "apply_memory_strategy",
-    "compact_observations", "register_context_strategy", "set_summary_llm",
+    "compact_observations", "register_context_strategy",
     "summarize_history", "extract_summary", "total_chars",
 ]
 

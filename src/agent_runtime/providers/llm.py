@@ -9,7 +9,6 @@ from typing import Any
 
 from agent_runtime.reasoning_echo import (
     DEFAULT_MODEL,
-    reasoning_echo_mode,
     should_echo_reasoning,
 )
 
@@ -23,13 +22,6 @@ def _reasoning_effort() -> str | None:
     the env can be toggled without rebuilding the provider."""
     value = os.getenv("AGENT_RUNTIME_REASONING_EFFORT", "").strip()
     return value or None
-
-
-_DEFAULT_MODEL = DEFAULT_MODEL
-# Historical provider-internal names; the decisions themselves live in
-# :mod:`agent_runtime.reasoning_echo` so the context-budget layer shares one source.
-_reasoning_echo_mode = reasoning_echo_mode
-_should_echo_reasoning = should_echo_reasoning
 
 
 class ContextWindowExceededError(RuntimeError):
@@ -121,8 +113,8 @@ def reasoning_echo_enabled(model: str | None = None,
     replayed. ``model``/``base_url`` default to the same env resolution
     as :class:`OpenAICompatibleLLM`.
     """
-    return _should_echo_reasoning(
-        model if model is not None else os.getenv("MODEL_ID", _DEFAULT_MODEL),
+    return should_echo_reasoning(
+        model if model is not None else os.getenv("MODEL_ID", DEFAULT_MODEL),
         base_url if base_url is not None else os.getenv("LLM_BASE_URL"))
 
 
@@ -229,7 +221,7 @@ class OpenAICompatibleLLM:
             from openai import AsyncOpenAI
         except ImportError as exc:
             raise RuntimeError("Install the openai package to use this provider") from exc
-        self.model = model or os.getenv("MODEL_ID", _DEFAULT_MODEL)
+        self.model = model or os.getenv("MODEL_ID", DEFAULT_MODEL)
         self.base_url = base_url or os.getenv("LLM_BASE_URL")
         self.temperature = float(os.getenv("LLM_TEMPERATURE", 0.0))
         self.client = AsyncOpenAI(api_key=api_key or os.getenv("LLM_API_KEY"),
@@ -239,7 +231,7 @@ class OpenAICompatibleLLM:
     async def chat(self, messages: Sequence[dict[str, Any]],
                    tools: list[dict[str, Any]] | None = None,
                    **request_kwargs: Any) -> dict[str, Any]:
-        echo = _should_echo_reasoning(self.model, self.base_url)
+        echo = should_echo_reasoning(self.model, self.base_url)
         kwargs = {"model": self.model,
                   "messages": _project_messages_for_wire(messages, echo),
                   "temperature": self.temperature, **request_kwargs}
@@ -275,7 +267,7 @@ class OpenAICompatibleLLM:
         terminated normally.  If the server cuts the stream without a
         finish marker, no such signal is emitted.
         """
-        echo = _should_echo_reasoning(self.model, self.base_url)
+        echo = should_echo_reasoning(self.model, self.base_url)
         kwargs = {"model": self.model,
                   "messages": _project_messages_for_wire(messages, echo),
                   "stream": True, "temperature": self.temperature,

@@ -15,7 +15,6 @@ from agent_runtime.agent.context import (
     apply_context_strategy,
     compact_observations,
     register_context_strategy,
-    set_summary_llm,
     summarize_history,
 )
 from agent_runtime.harness import DEFAULT_CONTEXT_BUDGET, ContextGenome
@@ -407,14 +406,11 @@ class FakeSummaryLLM:
 
 
 class SummarizeHistoryTests(unittest.IsolatedAsyncioTestCase):
-    def tearDown(self) -> None:
-        set_summary_llm(None)
-
     async def test_below_budget_is_identity(self) -> None:
         messages = build_rounds(3, 100)
         llm = FakeSummaryLLM()
-        set_summary_llm(llm)
-        result = await summarize_history(messages, budget=DEFAULT_CONTEXT_BUDGET)
+        result = await summarize_history(messages, budget=DEFAULT_CONTEXT_BUDGET,
+                                         llm=llm)
         self.assertIs(result, messages)
         self.assertEqual(llm.call_count, 0)
 
@@ -429,8 +425,8 @@ class SummarizeHistoryTests(unittest.IsolatedAsyncioTestCase):
             "- continue\n\n"
             "## 3. Working Context & Anchors\n"
             "- **Files**: ars.R"))
-        set_summary_llm(llm)
-        result = await summarize_history(messages, budget=1_000, tail_rounds=2)
+        result = await summarize_history(messages, budget=1_000, tail_rounds=2,
+                                         llm=llm)
 
         self.assertIsNot(result, messages)
         # system + original task preserved at the front
@@ -449,8 +445,8 @@ class SummarizeHistoryTests(unittest.IsolatedAsyncioTestCase):
     async def test_failure_falls_back_to_compact(self) -> None:
         messages = build_rounds(20, 5_000)
         llm = FakeSummaryLLM(error=RuntimeError("summarizer down"))
-        set_summary_llm(llm)
-        result = await summarize_history(messages, budget=10, tail_rounds=2)
+        result = await summarize_history(messages, budget=10, tail_rounds=2,
+                                         llm=llm)
         # Deterministic compaction keeps the turn viable.
         self.assertIn("observation compacted", result[3]["content"])
 
@@ -464,21 +460,18 @@ class SummarizeHistoryTests(unittest.IsolatedAsyncioTestCase):
             "- done\n\n"
             "## 2. Next Move\n"
             "- continue"))
-        set_summary_llm(llm)
-        result = await summarize_history(messages, budget=1_000, tail_rounds=2)
+        result = await summarize_history(messages, budget=1_000, tail_rounds=2,
+                                         llm=llm)
         self.assertIn("observation compacted", result[3]["content"])
 
 
 class ApplyContextStrategyLLMRoutingTests(unittest.IsolatedAsyncioTestCase):
-    def tearDown(self) -> None:
-        set_summary_llm(None)
-
     async def test_llm_summary_routes_to_summarizer(self) -> None:
         messages = build_rounds(10, 5_000)
-        set_summary_llm(FakeSummaryLLM())
         result = await apply_context_strategy(
             messages, ContextGenome(strategy="llm_summary",
-                                   context_budget=1_000, summary_tail_rounds=2))
+                                   context_budget=1_000, summary_tail_rounds=2),
+            summarizer=FakeSummaryLLM())
         self.assertEqual(sum(1 for m in result if m["role"] == "tool"), 2)
 
     async def test_unknown_strategy_is_rejected(self) -> None:

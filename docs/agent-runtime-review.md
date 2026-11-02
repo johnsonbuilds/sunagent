@@ -51,7 +51,7 @@
    - ✅ `harness.py:699` 对 `evaluation / lineage` 的函数内导入，随 harness 拆包消失；`harness/`、`lineage.py`、`evaluation.py` 已无懒导入。
    - ✅ `context.py` 已无 `from agent_runtime.providers...`（`grep` 验证）；reasoning 回放策略下沉到中性 `reasoning_echo.py:66`，provider 与预算层共用 `should_echo_reasoning / reasoning_echo_enabled`，`reasoning_replayed` 兼容名已删。
    - ✅ summarizer 改为显式注入：`TurnCollaborators.summarizer`（`turn_collaborators.py:47`）→ `TurnHistory` → `apply_context_strategy`；默认实现是 `turn_factory._default_summarizer` 的 `lru_cache` 懒工厂（`turn_factory.py:34`），不再有模块级可变全局。
-   - ✅ `set_summary_llm` 保留为 `ContextVar` 兼容 / 测试钩子（`context.py:584`），生产路径不依赖它。
+   - ✅ summarizer 只通过 `TurnCollaborators.summarizer` 显式注入；没有 `set_summary_llm` 兼容入口或模块级默认值。未注入时摘要路径记录失败并回落到 deterministic compaction。
 4. ✅ **Channels 重复（已抽取）**：`channels/tool_summary.py` 新增 `describe_tool`，`cli.py:11` 与 `webui.py:33` 共用，原 `_format_arguments` vs `describe_tool` 的分叉已收敛。
 
 ## 2. 可维护性：大文件 + 错误契约分裂
@@ -117,7 +117,7 @@
 - ✅ `execution/base.py:31-96` `ShellExecutor / Workspace(Protocol)` + `paginate_lines` + 共享搜索常量；`HarborWorkspace` 的 server-side 搜索保持。
 - ✅ `execution/base.py:13-29` `truncate_result(MAX_OUTPUT_CHARS=32000)` source-level 截断保留。
 - ❌ `execution/__init__.py:3-6` 仍重导出 `Local + Harbor` 具体类。
-- ✅ `providers/llm.py` 的 reasoning echo 策略下沉到中性 `reasoning_echo.py:66`；provider 与 `context` 共用同一判定，provider 内部保留 `_reasoning_echo_mode / _should_echo_reasoning` 历史别名。
+- ✅ `providers/llm.py` 的 reasoning echo 策略下沉到中性 `reasoning_echo.py:66`；provider 与 `context` 共用同一判定，provider 不再保留重复的内部副本。
 - ❌ `Workspace` 契约（环境失败 `{"error"}` / 非法输入 `raise ValueError`）在 `harbor.py` 的路径 containment / 写盘路径上仍未完全一致（见 §4）。
 
 ### 根模块 + `channels/` + `integrations/` 细化
@@ -162,8 +162,8 @@
 坏味道补充：
 
 - ✅ 长函数 / 大类：`AgentTurn` 现为 5 个方法（`__init__ / run / _run / _request / _summary_turn`）；rerun 三 helper 在 `turn_finisher.py`，工具执行在 `tool_runner.py`，开场注入在 `turn_opening.py`，策略在 `turn_guard.py`。`loop._run` 已从 134 行降到 73 行。
-- 🟡 全局状态：✅ `context.py` 的 `_summary_llm` 全局已删除，改为 `ContextVar` 兼容钩子 + `TurnCollaborators` 显式注入；❌ `chat.py:20,35,89` 每次调用仍读 `os.getenv`。
-- 🟡 异常吞掉 / 过宽：❌ `tool_dispatch.py:149` 仍 `except Exception` 无日志；❌ `context.py` + `loop.py:108-112` 的 `except Exception: fallback / False` 仍在。
+- 🟡 全局状态：✅ `context.py` 的 `_summary_llm` 全局与 `set_summary_llm` 兼容入口均已删除，改为 `TurnCollaborators` 显式注入；❌ `chat.py:20,35,89` 每次调用仍读 `os.getenv`。
+- 🟡 异常吞掉 / 过宽：❌ `tool_dispatch.py:149` 仍 `except Exception` 无日志；❌ `context.py` + `loop.py:216` 的 `except Exception: fallback / False` 仍在。
 - 🟡 硬编码：✅ `_FILE_TARGET_RE` 已 gene 化；❌ `turn_guard.py` 的 budget 提醒文案、`context.py` 的 summarizer prompt 仍钉死模块内；`verification.py` 的阈值仍是模块常量（可注入但未 gene 化）。
 
 ## 5. 只改三处，收益最大（P0）

@@ -14,7 +14,6 @@ from agent_runtime.agent.context import (
     _anchor_chars_per_token,
     _view_size,
     apply_context_strategy,
-    set_summary_llm,
     summarize_history,
 )
 from agent_runtime.agent.turn_history import Conversation, TurnHistory
@@ -114,15 +113,12 @@ class ViewSizeTests(unittest.TestCase):
 
 
 class UserPreservationTests(unittest.IsolatedAsyncioTestCase):
-    def tearDown(self) -> None:
-        set_summary_llm(None)
-
     async def test_mid_users_kept_verbatim_budget_order(self) -> None:
         messages = build_rounds(6, tool_chars=1_000,
                                 mid_users=["pivot to task B", "one more thing"])
         llm = FakeSummaryLLM()
-        set_summary_llm(llm)
-        result = await summarize_history(messages, budget=1, tail_rounds=2)
+        result = await summarize_history(messages, budget=1, tail_rounds=2,
+                                         llm=llm)
         contents = [str(m.get("content", "")) for m in result]
         # both user messages survive verbatim, after the summary
         self.assertIn("pivot to task B", contents)
@@ -141,9 +137,9 @@ class UserPreservationTests(unittest.IsolatedAsyncioTestCase):
         messages = build_rounds(6, tool_chars=1_000,
                                 mid_users=["old redirect", "recent redirect"])
         llm = FakeSummaryLLM()
-        set_summary_llm(llm)
         await summarize_history(messages, budget=1, tail_rounds=2,
-                                user_preserve_budget=len("recent redirect"))
+                                user_preserve_budget=len("recent redirect"),
+                                llm=llm)
         contents = [str(m.get("content", "")) for m in llm.last_messages]
         # the budget only fits the newest user message verbatim; the older
         # one is fed to the summarizer verbatim instead
@@ -155,24 +151,22 @@ class UserPreservationTests(unittest.IsolatedAsyncioTestCase):
                           and str(m.get("content", "")).startswith("do the")])
         result_contents = None  # view check via second call
         result = await summarize_history(messages, budget=1, tail_rounds=2,
-                                         user_preserve_budget=len("recent redirect"))
+                                         user_preserve_budget=len("recent redirect"),
+                                         llm=llm)
         view_contents = [str(m.get("content", "")) for m in result]
         self.assertIn("recent redirect", view_contents)
         self.assertNotIn("old redirect", view_contents)
 
 
 class IncrementalSummaryTests(unittest.IsolatedAsyncioTestCase):
-    def tearDown(self) -> None:
-        set_summary_llm(None)
-
     async def test_boundary_limits_summarizer_input(self) -> None:
         messages = build_rounds(6, tool_chars=1_000)
         llm = FakeSummaryLLM()
-        set_summary_llm(llm)
         boundary = len(messages) - 8  # two rounds summarized, two kept as tail
         await summarize_history(messages, budget=1, tail_rounds=2,
                                 boundary=boundary,
-                                previous_summary=valid_summary("OLD"))
+                                previous_summary=valid_summary("OLD"),
+                                llm=llm)
         # the summarizer sees the previous snapshot plus only the new
         # segment (the tail rounds are excluded from its input)
         fed = llm.last_messages
@@ -183,10 +177,10 @@ class IncrementalSummaryTests(unittest.IsolatedAsyncioTestCase):
     async def test_previous_summary_is_integrated_not_replaced(self) -> None:
         messages = build_rounds(4, tool_chars=1_000)
         llm = FakeSummaryLLM()
-        set_summary_llm(llm)
         result = await summarize_history(messages, budget=1, tail_rounds=1,
                                          boundary=len(messages) - 4,
-                                         previous_summary=valid_summary("OLD"))
+                                         previous_summary=valid_summary("OLD"),
+                                         llm=llm)
         contents = [str(m.get("content", "")) for m in result]
         summary = next(c for c in contents if c.startswith(SUMMARY_PREFIX))
         self.assertIn("SNAP", summary)
@@ -194,16 +188,15 @@ class IncrementalSummaryTests(unittest.IsolatedAsyncioTestCase):
     async def test_max_tokens_requested(self) -> None:
         messages = build_rounds(6, tool_chars=1_000)
         llm = FakeSummaryLLM()
-        set_summary_llm(llm)
         await summarize_history(messages, budget=1, tail_rounds=2,
-                                summary_max_tokens=512)
+                                summary_max_tokens=512, llm=llm)
         self.assertEqual(llm.last_request_kwargs.get("max_tokens"), 512)
 
     async def test_oversized_summary_falls_back(self) -> None:
         messages = build_rounds(6, tool_chars=1_000)
         llm = FakeSummaryLLM(summary="z" * (DEFAULT_SUMMARY_MAX_TOKENS * 6 + 1))
-        set_summary_llm(llm)
-        result = await summarize_history(messages, budget=1, tail_rounds=2)
+        result = await summarize_history(messages, budget=1, tail_rounds=2,
+                                         llm=llm)
         # invalid (oversized) summary -> deterministic compaction fallback:
         # no summary message in the view, old tool outputs truncated
         self.assertFalse(any(
@@ -261,7 +254,8 @@ class TurnHistoryAnchorTests(unittest.IsolatedAsyncioTestCase):
     async def test_record_usage_and_boundary(self) -> None:
         conversation = Conversation()
         conversation.messages.extend(build_rounds(3, tool_chars=50))
-        history = TurnHistory(conversation.messages)
+        llm = FakeSummaryLLM()
+        history = TurnHistory(conversation.messages, summarizer=llm)
         history.record_usage(5_000)
         anchor = history.usage_anchor
         assert anchor is not None
@@ -272,11 +266,8 @@ class TurnHistoryAnchorTests(unittest.IsolatedAsyncioTestCase):
         # A summary-producing refresh moves the boundary forward
         genome = ContextGenome(strategy="llm_summary", context_budget=1,
                               summary_tail_rounds=1)
-        llm = FakeSummaryLLM()
-        set_summary_llm(llm)
         await history.refresh_view(genome)
         self.assertGreater(history._summary_boundary, 0)
-        set_summary_llm(None)
 
 
 class RetrievalExemptionTests(unittest.TestCase):
@@ -338,23 +329,16 @@ class RetrievalExemptionTests(unittest.TestCase):
 
 
 class PromptForwardingTests(unittest.IsolatedAsyncioTestCase):
-    def tearDown(self) -> None:
-        set_summary_llm(None)
-
     async def test_custom_prompt_reaches_summarizer(self) -> None:
         messages = build_rounds(6, tool_chars=1_000)
         llm = FakeSummaryLLM()
-        set_summary_llm(llm)
         await summarize_history(messages, budget=1, tail_rounds=2,
-                                prompt="CUSTOM SCHEMA V9")
+                                prompt="CUSTOM SCHEMA V9", llm=llm)
         self.assertIn("CUSTOM SCHEMA V9",
                       str(llm.last_messages[-1].get("content", "")))
 
 
 class SummaryCoverageTests(unittest.IsolatedAsyncioTestCase):
-    def tearDown(self) -> None:
-        set_summary_llm(None)
-
     async def test_preserved_users_fed_to_summarizer(self) -> None:
         # The snapshot must cover the verbatim-kept users: the incremental
         # boundary advances past the whole segment, so anything the
@@ -362,8 +346,8 @@ class SummaryCoverageTests(unittest.IsolatedAsyncioTestCase):
         messages = build_rounds(6, tool_chars=1_000,
                                 mid_users=["pivot to task B", "one more thing"])
         llm = FakeSummaryLLM()
-        set_summary_llm(llm)
-        await summarize_history(messages, budget=1, tail_rounds=2)
+        await summarize_history(messages, budget=1, tail_rounds=2,
+                                llm=llm)
         fed = [str(m.get("content", "")) for m in llm.last_messages]
         self.assertIn("pivot to task B", fed)
         self.assertIn("one more thing", fed)
@@ -373,10 +357,10 @@ class SummaryCoverageTests(unittest.IsolatedAsyncioTestCase):
         # previous snapshot is carried forward with zero LLM calls.
         messages = build_rounds(4, tool_chars=50, mid_users=["U1"])
         llm = FakeSummaryLLM()
-        set_summary_llm(llm)
         view = await summarize_history(messages, budget=1, tail_rounds=3,
                                        boundary=4,
-                                       previous_summary=valid_summary("OLD"))
+                                       previous_summary=valid_summary("OLD"),
+                                       llm=llm)
         self.assertEqual(llm.call_count, 0)
         contents = [str(m.get("content", "")) for m in view]
         self.assertIn("U1", contents)
@@ -424,9 +408,6 @@ class OverflowClassifierTests(unittest.TestCase):
 
 
 class AnchorLifecycleTests(unittest.IsolatedAsyncioTestCase):
-    def tearDown(self) -> None:
-        set_summary_llm(None)
-
     async def test_anchor_cleared_on_compaction(self) -> None:
         # The anchor measures the pre-compaction mix; carrying it onto a
         # summary-heavy view would drift worse than the default ratio, so
@@ -453,30 +434,24 @@ class AnchorLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ForceBudgetTests(unittest.IsolatedAsyncioTestCase):
-    def tearDown(self) -> None:
-        set_summary_llm(None)
-
     async def test_no_shrink_falls_back_to_compact(self) -> None:
         # Working view already tiny; the summary path can only grow it, so
         # the hard-gate fallback must kick in (deterministic compaction,
         # no summary marker) instead of reporting illusory progress.
         messages = build_rounds(6, tool_chars=1_000)
         llm = FakeSummaryLLM()
-        set_summary_llm(llm)
         result = await apply_context_strategy(
             messages,
             ContextGenome(strategy="llm_summary",
                          context_budget=10 ** 9),
-            compact_messages=messages[:2], force_budget=1)
+            compact_messages=messages[:2], force_budget=1,
+            summarizer=llm)
         self.assertFalse(any(
             str(m.get("content", "")).startswith(SUMMARY_PREFIX)
             for m in result))
 
 
 class SummarizerObservabilityTests(unittest.IsolatedAsyncioTestCase):
-    def tearDown(self) -> None:
-        set_summary_llm(None)
-
     def _history(self, rounds: int = 6) -> list[dict[str, Any]]:
         return build_rounds(rounds, tool_chars=1_000)
 
@@ -491,10 +466,9 @@ class SummarizerObservabilityTests(unittest.IsolatedAsyncioTestCase):
             def emit(self, *args, **kwargs):
                 events.append((args, kwargs))
 
-        set_summary_llm(BrokenLLM())
         result = await summarize_history(
             self._history(), budget=1, tail_rounds=2,
-            trace=FakeTrace(), iteration=9)
+            trace=FakeTrace(), iteration=9, llm=BrokenLLM())
         # deterministic fallback keeps the turn viable ...
         self.assertFalse(any(
             str(m.get("content", "")).startswith(SUMMARY_PREFIX)
@@ -512,7 +486,6 @@ class SummarizerObservabilityTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_invalid_summary_emits_invalid_event(self) -> None:
         llm = FakeSummaryLLM(summary="no sections here")
-        set_summary_llm(llm)
         events: list[tuple] = []
 
         class FakeTrace:
@@ -521,7 +494,7 @@ class SummarizerObservabilityTests(unittest.IsolatedAsyncioTestCase):
 
         result = await summarize_history(
             self._history(), budget=1, tail_rounds=2,
-            trace=FakeTrace(), iteration=9)
+            trace=FakeTrace(), iteration=9, llm=llm)
         self.assertFalse(any(
             str(m.get("content", "")).startswith(SUMMARY_PREFIX)
             for m in result))
@@ -545,7 +518,6 @@ class SummarizerObservabilityTests(unittest.IsolatedAsyncioTestCase):
                         "tool_calls": []}
 
         llm = FlakyLLM()
-        set_summary_llm(llm)
         events: list[tuple] = []
 
         class FakeTrace:
@@ -554,7 +526,7 @@ class SummarizerObservabilityTests(unittest.IsolatedAsyncioTestCase):
 
         result = await summarize_history(
             self._history(), budget=1, tail_rounds=2,
-            trace=FakeTrace(), iteration=9)
+            trace=FakeTrace(), iteration=9, llm=llm)
         self.assertEqual(llm.calls, 2)
         contents = [str(m.get("content", "")) for m in result]
         self.assertTrue(any(c.startswith(SUMMARY_PREFIX) and "RECOVERED" in c
@@ -568,7 +540,6 @@ class SummarizerObservabilityTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_double_invalid_falls_back(self) -> None:
         llm = FakeSummaryLLM(summary="no sections here")
-        set_summary_llm(llm)
         events: list[tuple] = []
 
         class FakeTrace:
@@ -577,7 +548,7 @@ class SummarizerObservabilityTests(unittest.IsolatedAsyncioTestCase):
 
         result = await summarize_history(
             self._history(), budget=1, tail_rounds=2,
-            trace=FakeTrace(), iteration=9)
+            trace=FakeTrace(), iteration=9, llm=llm)
         self.assertEqual(llm.call_count, 2)
         self.assertFalse(any(
             str(m.get("content", "")).startswith(SUMMARY_PREFIX)
@@ -602,11 +573,11 @@ class SummarizerObservabilityTests(unittest.IsolatedAsyncioTestCase):
                 return {"content": valid_summary("CAPPED-OK"),
                         "tool_calls": []}
 
-        set_summary_llm(FlakyLLM())
         # Segment well above the cap: attempt 1 reads it whole, attempt 2
         # must read the folded copy.
         messages = build_rounds(30, tool_chars=10_000)
-        view = await summarize_history(messages, budget=1, tail_rounds=2)
+        view = await summarize_history(messages, budget=1, tail_rounds=2,
+                                       llm=FlakyLLM())
         self.assertEqual(len(seen_sizes), 2)
         self.assertGreater(seen_sizes[0],
                            DEFAULT_SUMMARIZER_INPUT_CAP_CHARS)
@@ -615,10 +586,8 @@ class SummarizerObservabilityTests(unittest.IsolatedAsyncioTestCase):
         contents = [str(m.get("content", "")) for m in view]
         self.assertTrue(any(c.startswith(SUMMARY_PREFIX) and "CAPPED-OK" in c
                             for c in contents))
-        set_summary_llm(None)
 
     async def test_success_still_emits_yield_only(self) -> None:
-        set_summary_llm(FakeSummaryLLM())
         events: list[tuple] = []
 
         class FakeTrace:
@@ -626,7 +595,8 @@ class SummarizerObservabilityTests(unittest.IsolatedAsyncioTestCase):
                 events.append((args, kwargs))
 
         await summarize_history(self._history(), budget=1, tail_rounds=2,
-                                trace=FakeTrace(), iteration=9)
+                                trace=FakeTrace(), iteration=9,
+                                llm=FakeSummaryLLM())
         kinds = [a[0] for a, _ in events]
         self.assertIn("context.llm_summary.yield", kinds)
         self.assertNotIn("context.llm_summary.error", kinds)
@@ -643,10 +613,8 @@ class BoundaryChaseTests(unittest.IsolatedAsyncioTestCase):
     every later compaction reused the first snapshot byte-identically.
     """
 
-    def tearDown(self) -> None:
-        set_summary_llm(None)
-
-    def _history(self, rounds: int, chars: int = 3000) -> TurnHistory:
+    def _history(self, rounds: int, chars: int = 3000,
+                 summarizer: Any = None) -> TurnHistory:
         conversation = Conversation()
         conversation.messages.extend([
             {"role": "system", "content": "sys"},
@@ -664,7 +632,7 @@ class BoundaryChaseTests(unittest.IsolatedAsyncioTestCase):
                 "role": "tool", "tool_call_id": f"call-{i}",
                 "content": "x" * chars,
             })
-        return TurnHistory(conversation.messages)
+        return TurnHistory(conversation.messages, summarizer=summarizer)
 
     async def test_noop_refreshes_do_not_freeze_next_summary(self) -> None:
         class CountingLLM:
@@ -678,10 +646,9 @@ class BoundaryChaseTests(unittest.IsolatedAsyncioTestCase):
                         "tool_calls": []}
 
         llm = CountingLLM()
-        set_summary_llm(llm)
         genome = ContextGenome(strategy="llm_summary", budget_unit="chars",
                               context_budget=20_000)
-        history = self._history(16)
+        history = self._history(16, summarizer=llm)
         # First compaction, like the agent loop: refresh, then work.
         await history.refresh_view(genome)
         self.assertEqual(llm.calls, 1)
