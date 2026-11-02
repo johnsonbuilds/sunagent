@@ -1,15 +1,19 @@
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from textwrap import dedent
+from types import SimpleNamespace
+from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
 
 from agent_runtime.harness import HarnessError, from_dict
 from agent_runtime.evaluation import (
+    _git_commit,
     annotate_record,
     build_report,
     extract_record,
@@ -63,6 +67,23 @@ def make_job(root: Path, name: str, *, passed: bool, harness_id: str = "baseline
                       "task_names": ["terminal-bench/fix-git"]}],
     }))
     return job_dir
+
+
+class GitCommitTests(unittest.TestCase):
+    def test_git_runs_in_the_job_directory(self) -> None:
+        job_path = Path("/tmp/example-job")
+        with mock.patch("agent_runtime.evaluation.subprocess.run") as run:
+            run.return_value = SimpleNamespace(stdout="abc123\n")
+            self.assertEqual(_git_commit(job_path), "abc123")
+        self.assertEqual(run.call_args.args[0],
+                         ["git", "rev-parse", "--short", "HEAD"])
+        self.assertEqual(run.call_args.kwargs["cwd"], job_path)
+
+    def test_missing_repository_returns_none(self) -> None:
+        with mock.patch(
+                "agent_runtime.evaluation.subprocess.run",
+                side_effect=subprocess.CalledProcessError(128, "git")):
+            self.assertIsNone(_git_commit(Path("/tmp/missing-job")))
 
 
 class ExtractRecordTests(unittest.TestCase):

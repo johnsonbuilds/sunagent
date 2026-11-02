@@ -243,35 +243,23 @@ def derive(parent: HarnessSpec, child_id: str, mutation: str, reason: str | None
 
 
 def manifest_text(spec: HarnessSpec) -> str:
-    """Serialize a spec back to manifest YAML in canonical field order."""
+    """Serialize a spec back to manifest YAML in canonical field order.
+
+    The genes come straight from :meth:`HarnessSpec.genes_dict`, so this
+    cannot drift from the schema: every gene a derived harness carries is
+    written back, and nothing is re-listed by hand.  Lineage metadata
+    (``id``/``parent``/``mutation``/``reason``) leads; ``source`` and
+    ``genes_hash`` are derived outputs and stay out of the file.
+    """
     data: dict[str, Any] = {
         "id": spec.id,
         "parent": spec.parent,
         "mutation": spec.mutation,
         "reason": spec.reason,
-        "prompt": {"system": spec.prompt.system,
-                   "iteration_limit_notice": spec.prompt.iteration_limit_notice},
-        "tools": {"enabled": list(spec.tools.enabled)},
-        "control": {"max_iterations": spec.control.max_iterations,
-                      "finish_violation_limit":
-                          spec.control.finish_violation_limit},
-        "context": {"strategy": spec.context.strategy},
-        "recovery": {
-            "tool_error": spec.recovery.tool_error,
-            "tool_error_max_retries": spec.recovery.tool_error_max_retries,
-            "llm_errors": {
-                category: {"max_retries": policy.max_retries,
-                           "backoff": policy.backoff,
-                           "base_delay": policy.base_delay}
-                for category, policy in sorted(spec.recovery.llm_errors.items())
-            },
-        },
-        "verification": {"enabled": spec.verification.enabled,
-                          "mode": spec.verification.mode,
-                          "require": list(spec.verification.require)},
-        "skills": list(spec.skills),
+        **spec.genes_dict(),
     }
-    return yaml.safe_dump(data, sort_keys=False, allow_unicode=True, default_flow_style=False)
+    return yaml.safe_dump(data, sort_keys=False, allow_unicode=True,
+                          default_flow_style=False)
 
 
 __all__ = [

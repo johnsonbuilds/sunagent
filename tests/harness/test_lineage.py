@@ -181,6 +181,70 @@ class GeneDiffTests(unittest.TestCase):
         self.assertIn("verification.enabled: False -> True", diff)
 
 
+class ManifestTextTests(unittest.TestCase):
+    FULL_GENES = {
+        "prompt": {"system": "You are a shell agent.",
+                   "iteration_limit_notice": "Stop and summarize now."},
+        "tools": {"enabled": ["run_command", "read_file"]},
+        "control": {
+            "max_iterations": 7,
+            "max_observation_chars": 1234,
+            "spill_preview_chars": 99,
+            "finish_violation_limit": 2,
+            "budget_reminder": {"enabled": True,
+                                "at_fractions": [0.5, 0.8]},
+        },
+        "context": {
+            "strategy": "compact_observations",
+            "budget_unit": "tokens",
+            "head_chars": 111,
+            "context_budget": 5000,
+            "window_rounds": 7,
+            "keep_recent_rounds": 3,
+            "summary_tail_rounds": 4,
+            "user_preserve_budget": 1200,
+            "summary_max_tokens": 512,
+            "retrieval_exempt_tools": ["grep_search", "read_file"],
+        },
+        "recovery": {
+            "tool_error": "feed_error_and_continue",
+            "tool_error_max_retries": 2,
+            "llm_errors": {"stream_truncated": {
+                "max_retries": 2, "backoff": "fixed", "base_delay": 0.25}},
+        },
+        "verification": {
+            "enabled": True,
+            "mode": "task_result",
+            "require": ["solution_description", "evidence",
+                        "command_to_verify"],
+        },
+        "skills": ["python", "shell"],
+    }
+
+    def test_manifest_text_roundtrips_every_gene(self) -> None:
+        spec = from_dict(self.FULL_GENES)
+        reloaded = from_dict(yaml.safe_load(manifest_text(spec)))
+        self.assertEqual(reloaded.genes_dict(), spec.genes_dict())
+        self.assertEqual(reloaded.genes_hash, spec.genes_hash)
+
+    def test_derive_write_and_reload_keeps_non_default_genes(self) -> None:
+        parent = from_dict(self.FULL_GENES)
+        child, _ = derive(parent, "child-v1", "bump iterations", None,
+                          [("control.max_iterations", "9")])
+        reloaded = from_dict(yaml.safe_load(manifest_text(child)))
+        self.assertEqual(reloaded.genes_dict(), child.genes_dict())
+        self.assertEqual(reloaded.context.head_chars, 111)
+        self.assertEqual(reloaded.control.spill_preview_chars, 99)
+
+    def test_derived_outputs_are_not_written_as_genes(self) -> None:
+        spec = from_dict({})
+        data = yaml.safe_load(manifest_text(spec))
+        self.assertNotIn("source", data)
+        self.assertNotIn("genes_hash", data)
+        self.assertEqual(list(data)[:4],
+                         ["id", "parent", "mutation", "reason"])
+
+
 class DeriveTests(unittest.TestCase):
     def test_derive_single_gene_change(self) -> None:
         parent = from_dict({})

@@ -189,6 +189,7 @@ def _git_commit(job_path: Path) -> str | None:
     try:
         return subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
+            cwd=job_path,
             capture_output=True, text=True, check=True,
         ).stdout.strip()
     except (OSError, subprocess.CalledProcessError):
