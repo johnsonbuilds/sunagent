@@ -1,9 +1,12 @@
 """Persistent cross-session memory: workspace files the agent owns.
 
 Enabled by ``AGENT_RUNTIME_MEMORY=1`` (any of ``1``/``true``/``on``,
-case-insensitive; default off).  When enabled, the agent loop renders a
-memory block into the system prompt at session start — injection point
-A, the same channel as the skills block — consisting of:
+case-insensitive; default off).  This environment switch is the only
+control over whether memory is rendered: callers always supply a
+workspace, and the workspace's presence is never used as a hidden
+on/off switch.  When enabled, the agent loop renders a memory block into
+the system prompt at session start — injection point A, the same channel
+as the skills block — consisting of:
 
 * a short convention paragraph (what memory is, how to update it), and
 * a flat listing of ``workspace/memory/`` (one line per file, path plus
@@ -26,10 +29,15 @@ tracked by git alone.
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from agent_runtime.execution.base import Workspace
+
+logger = logging.getLogger(__name__)
 
 #: Environment switch; off unless explicitly enabled.
 ENV_MEMORY = "AGENT_RUNTIME_MEMORY"
@@ -180,22 +188,36 @@ def _tree_hash(entries: list[tuple[str, int]]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
-def render_memory_block(workspace: Any | None) -> MemoryView:
+def render_memory_block(workspace: Workspace) -> MemoryView:
     """Render the memory block for the given workspace.
 
-    Disabled (env off), missing workspace, or a workspace without a
-    usable ``root`` all yield an empty :class:`MemoryView` with no
-    side effects.  When enabled, the memory directory is created if
-    absent and only the tree is rendered — file contents are never read.
+    Whether memory is rendered is controlled solely by the
+    ``AGENT_RUNTIME_MEMORY`` environment switch.  ``workspace`` is a
+    required collaborator: missing storage is a wiring error, not a
+    second way to turn the feature off.
 
-    Memory is auxiliary: filesystem failures (permission denied, a
-    colliding non-directory, a vanished root) degrade to an empty view
-    instead of failing the turn.
+    A workspace without a ``root`` (Harbor's free-roaming mode) cannot
+    host persistent memory because the renderer scans the local
+    filesystem; that case is reported once at warning level and yields
+    an empty view instead of failing the whole task.
+
+    When enabled, the memory directory is created if absent and only the
+    tree is rendered — file contents are never read.  Filesystem
+    failures (permission denied, a colliding non-directory, a vanished
+    root) degrade to an empty view instead of failing the turn.
     """
-    if not memory_enabled() or workspace is None:
+    if workspace is None:
+        raise ValueError(
+            "render_memory_block requires a workspace; memory enablement "
+            "is controlled by AGENT_RUNTIME_MEMORY, not by workspace presence")
+    if not memory_enabled():
         return MemoryView()
-    root = getattr(workspace, "root", None)
+    root = workspace.root
     if root is None or not str(root).strip():
+        logger.warning(
+            "memory.unsupported_workspace: AGENT_RUNTIME_MEMORY is on but "
+            "the workspace has no root; persistent memory requires a rooted "
+            "workspace and will be skipped")
         return MemoryView()
     try:
         memory_root = Path(root) / MEMORY_DIR

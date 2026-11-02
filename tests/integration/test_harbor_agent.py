@@ -54,6 +54,7 @@ def install_harbor_stubs() -> None:
 install_harbor_stubs()
 
 from agent_runtime.integrations.harbor import HarborAgent
+from agent_runtime.memory import ENV_MEMORY
 
 
 class FakeLLM:
@@ -73,6 +74,20 @@ class FakeLLM:
 
 
 class HarborAgentSmokeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_persistent_memory_is_force_disabled(self) -> None:
+        previous = environ.get(ENV_MEMORY)
+        environ[ENV_MEMORY] = "1"
+        try:
+            with TemporaryDirectory() as directory:
+                HarborAgent(Path(directory), model_name="test-model",
+                            llm=FakeLLM())
+                self.assertEqual(environ[ENV_MEMORY], "0")
+        finally:
+            if previous is None:
+                environ.pop(ENV_MEMORY, None)
+            else:
+                environ[ENV_MEMORY] = previous
+
     async def test_runtime_logging_can_be_enabled_for_task_and_stream(self) -> None:
         output = StringIO()
         previous = environ.get("AGENT_RUNTIME_LOG_STREAM")

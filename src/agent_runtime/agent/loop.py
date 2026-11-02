@@ -49,15 +49,13 @@ from agent_runtime.agent.verification_rerun import (
     rerun_failure_detail,
     rerun_outcome,
 )
-from agent_runtime.agent.observations import ObservationFormatter
 from agent_runtime.agent.context import request_view_size
+from agent_runtime.agent.turn_collaborators import TurnCollaborators
 from agent_runtime.agent.turn_history import (
     Conversation,
     TurnHistory,
     _ensure_system_prompt,
 )
-from agent_runtime.events import EventEmitter
-from agent_runtime.harness import HarnessSpec, default_harness
 from agent_runtime.memory import render_memory_block
 from agent_runtime.skills import (
     render_skills_block,
@@ -65,7 +63,6 @@ from agent_runtime.skills import (
     skills_trace_meta,
 )
 from agent_runtime.tools import ToolExecutor
-from agent_runtime.trace import RunTrace
 
 logger = logging.getLogger(__name__)
 
@@ -81,40 +78,27 @@ class _TurnFailure(Exception):
 class AgentTurn:
     """One agent turn: collaborators and policy bound as attributes.
 
-    ``run`` drives the tool-calling loop; helpers read ``self`` instead
+    Instances are assembled by
+    :func:`agent_runtime.agent.turn_factory.create_agent_turn`; ``run``
+    then drives the tool-calling loop, and helpers read ``self`` instead
     of threading a dozen parameters through every call.
     """
 
-    def __init__(self, user_message: str, llm: ChatModel, tools: ToolExecutor,
-                 max_iterations: int | None = None, *,
-                 harness: HarnessSpec | None = None,
-                 conversation: Conversation | None = None,
-                 stream: bool = False,
-                 trace: RunTrace | None = None,
-                 events: EventEmitter | None = None,
-                 skills_dir: Any | None = None) -> None:
-        self.harness = harness or default_harness()
-        self.skills_dir = skills_dir
-        self.max_iterations = (
-            max_iterations if max_iterations is not None
-            else self.harness.control.max_iterations)
-        self.trace = trace or RunTrace(harness=self.harness)
-        self.events = events or EventEmitter(run_id=self.trace.run_id)
-        self.tools = tools
-        # The tool executor owns the workspace (ToolRegistry binds it for
-        # its file tools); observation spilling shares that same instance
-        # so references and tools always agree on where data lives.  Its
-        # knobs come from the harness genome; archive_min_chars derives
-        # from context.head_chars so the invariant is structural.
-        self.observations = ObservationFormatter(
-            getattr(self.tools, "workspace", None),
-            max_chars=self.harness.control.max_observation_chars,
-            spill_preview_chars=self.harness.control.spill_preview_chars,
-            archive_min_chars=self.harness.context.head_chars)
+    def __init__(self, user_message: str,
+                 collaborators: TurnCollaborators) -> None:
         self.user_message = user_message
-        self.llm = llm
-        self.conversation = conversation or Conversation()
-        self.stream = stream
+        self.collaborators = collaborators
+        self.llm = collaborators.llm
+        self.tools = collaborators.tools
+        self.workspace = collaborators.workspace
+        self.harness = collaborators.harness
+        self.conversation = collaborators.conversation
+        self.trace = collaborators.trace
+        self.events = collaborators.events
+        self.observations = collaborators.observations
+        self.stream = collaborators.stream
+        self.max_iterations = collaborators.max_iterations
+        self.skills_dir = collaborators.skills_dir
         # Consecutive finish attempts rejected without interleaving work
         # (plain-text finishes, invalid submissions). At the limit the
         # turn aborts instead of burning the iteration budget on prose.
@@ -190,7 +174,7 @@ class AgentTurn:
                                 skills_dir=self.skills_dir,
                                 harness=harness)
         skills_block = render_skills_block(skills)
-        memory_view = render_memory_block(getattr(tools, "workspace", None))
+        memory_view = render_memory_block(self.workspace)
         inserted = _ensure_system_prompt(self.conversation, harness.prompt.system,
                               skills_block, memory_view.block)
         # Both blocks ride the single resident system message: only trace
@@ -733,26 +717,6 @@ class AgentTurn:
         return _rejected_observation_message(tool_call, observation)
 
 
-async def run_turn(user_message: str, llm: ChatModel, tools: ToolExecutor,
-               max_iterations: int | None = None, *,
-               harness: HarnessSpec | None = None,
-               conversation: Conversation | None = None,
-               stream: bool = False,
-               trace: RunTrace | None = None,
-               events: EventEmitter | None = None,
-               skills_dir: Any | None = None) -> str:
-    """Run one agent turn under the given harness.
-
-    Convenience wrapper around :class:`AgentTurn`. ``max_iterations``
-    explicitly overrides ``harness.control``; the harness is otherwise
-    the source of truth for how the agent behaves.
-    """
-    return await AgentTurn(user_message, llm, tools, max_iterations,
-                           harness=harness, conversation=conversation,
-                           stream=stream, trace=trace, events=events,
-                           skills_dir=skills_dir).run()
-
-
 __all__ = [
     "AgentTurn",
     "ChatModel",
@@ -763,7 +727,6 @@ __all__ = [
     "ValidatedToolCall",
     "canonical_tool_calls",
     "classify_tool_calls",
-    "run_turn",
     "use_streaming",
     "validate_tool_call",
 ]

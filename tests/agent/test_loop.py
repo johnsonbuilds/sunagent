@@ -11,8 +11,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
 
 import agent_runtime.agent.chat as chat_module
-import agent_runtime.agent.loop as loop_module
-from agent_runtime.agent.loop import AgentTurn, Conversation, run_turn, use_streaming
+from agent_runtime.agent.loop import Conversation, use_streaming
+from agent_runtime.agent.turn_factory import create_agent_turn, run_turn
 from agent_runtime.harness import (
     ControlGenome,
     HarnessSpec,
@@ -748,8 +748,8 @@ class AgentTurnClassTests(unittest.IsolatedAsyncioTestCase):
         ])
         trace = RunTrace(run_id="r-turn")
 
-        answer = await AgentTurn("weather", llm, make_registry(),
-                                 trace=trace).run()
+        answer = await create_agent_turn("weather", llm, make_registry(),
+                                         trace=trace).run()
 
         self.assertEqual(answer, "It is sunny")
         self.assertEqual(
@@ -760,7 +760,7 @@ class AgentTurnClassTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_class_attributes_bind_harness_defaults(self) -> None:
         llm = FakeLLM([{"content": "hi", "tool_calls": []}])
-        turn = AgentTurn("hello", llm, make_registry())
+        turn = create_agent_turn("hello", llm, make_registry())
 
         self.assertEqual(turn.max_iterations, turn.harness.control.max_iterations)
         self.assertIs(turn.trace.harness, turn.harness)
@@ -775,8 +775,8 @@ class AgentTurnClassTests(unittest.IsolatedAsyncioTestCase):
         ])
         harness = HarnessSpec(control=ControlGenome(max_iterations=1))
 
-        answer = await AgentTurn("weather", llm, make_registry(),
-                                 harness=harness).run()
+        answer = await create_agent_turn("weather", llm, make_registry(),
+                                         harness=harness).run()
 
         self.assertEqual(answer, "summarized")
         self.assertEqual(len(llm.messages), 2)

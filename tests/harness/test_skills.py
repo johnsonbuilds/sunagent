@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
 
-from agent_runtime.agent.loop import run_turn
+from agent_runtime.agent.turn_factory import run_turn
 from agent_runtime.agent.turn_history import (
     Conversation,
     _ensure_system_prompt,

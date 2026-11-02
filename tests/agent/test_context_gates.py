@@ -722,7 +722,7 @@ class ContextWindowHardGateLoopTests(unittest.IsolatedAsyncioTestCase):
     """
 
     async def test_overflow_rejection_compacts_and_resends(self) -> None:
-        from agent_runtime.agent.loop import run_turn
+        from agent_runtime.agent.turn_factory import run_turn
         from agent_runtime.tools.tools import ToolRegistry, ToolSpec
         from agent_runtime.trace import RunTrace
 

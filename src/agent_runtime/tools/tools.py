@@ -20,10 +20,18 @@ from .symbols import TreeSitterIndex, find_references, find_symbol
 
 
 class ToolExecutor(Protocol):
-    """What the agent loop needs from a tool layer: schemas to advertise
-    and ``execute`` to run one call.  :class:`ToolRegistry` is the
-    built-in implementation; tests and integrations may supply their own.
+    """What the agent loop needs from a tool layer: the workspace its file
+    tools are bound to, schemas to advertise, and ``execute`` to run one
+    call.  :class:`ToolRegistry` is the built-in implementation; tests and
+    integrations may supply their own.
+
+    ``workspace`` is a required part of the contract: observation
+    spilling must target the same storage the file tools read and write,
+    so the runtime never guesses it from incidental attributes, and it is
+    never absent.
     """
+
+    workspace: Workspace
 
     @property
     def schemas(self) -> list[dict[str, Any]]: ...
@@ -54,8 +62,10 @@ class ToolRegistry:
             self.register(spec)
         # The registry owns the shared workspace: file tools bind it, and
         # harness layers (e.g. observation spilling) read it from here so
-        # there is exactly one workspace instance per run.
-        self.workspace = workspace
+        # there is exactly one workspace instance per run.  A registry
+        # built without one gets a local workspace now, so ``workspace``
+        # is always present and spilling never has to guess.
+        self.workspace = workspace if workspace is not None else LocalWorkspace()
 
     @property
     def schemas(self) -> list[dict[str, Any]]:

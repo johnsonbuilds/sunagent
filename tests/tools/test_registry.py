@@ -7,7 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
 
 from agent_runtime.execution.local import LocalWorkspace
-from agent_runtime.tools.tools import create_default_registry
+from agent_runtime.tools.tools import ToolRegistry, create_default_registry
 
 
 BUILTIN_TOOLS = ["run_command", "write_file", "read_file", "read_output",
@@ -17,6 +17,10 @@ BUILTIN_TOOLS = ["run_command", "write_file", "read_file", "read_output",
 
 
 class DefaultRegistryTests(unittest.TestCase):
+    def test_registry_built_without_workspace_gets_one(self) -> None:
+        registry = ToolRegistry([])
+        self.assertIsInstance(registry.workspace, LocalWorkspace)
+
     def test_default_registry_exposes_all_builtins(self) -> None:
         registry = create_default_registry()
         self.assertEqual([schema["function"]["name"] for schema in registry.schemas],

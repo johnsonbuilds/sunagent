@@ -15,6 +15,7 @@ from harbor.models.agent.context import AgentContext
 from agent_runtime.agent import run_turn, use_streaming
 from agent_runtime.execution.harbor import HarborShellExecutor, HarborWorkspace
 from agent_runtime.harness import HarnessSpec, resolve_harness
+from agent_runtime.memory import ENV_MEMORY
 from agent_runtime.providers import OpenAICompatibleLLM
 from agent_runtime.tools import create_default_registry
 from agent_runtime.trace import RunEvent, RunTrace
@@ -44,6 +45,11 @@ class HarborAgent(BaseAgent):
     def __init__(self, *args: Any, llm: Any | None = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         load_dotenv(override=True)
+        # Harbor tasks must never receive persistent memory: the memory
+        # tree is host-local state, and injecting it would leak context
+        # across tasks.  Set this after load_dotenv so .env cannot turn
+        # it back on.
+        os.environ[ENV_MEMORY] = "0"
         _enable_runtime_logging()
         self.llm = llm if llm is not None else OpenAICompatibleLLM(model=self.model_name)
 

@@ -15,13 +15,15 @@ import tempfile
 import unittest
 from os import environ
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
 
 import agent_runtime.memory as memory_module
-from agent_runtime.agent.loop import Conversation, run_turn
+from agent_runtime.agent.loop import Conversation
+from agent_runtime.agent.turn_factory import run_turn
 from agent_runtime.execution.local import LocalWorkspace
 from agent_runtime.harness import HarnessSpec
 from agent_runtime.memory import (
@@ -80,22 +82,34 @@ class MemorySwitchTests(unittest.TestCase):
             self.assertEqual(view.block, "")
             self.assertFalse((Path(tmp) / "memory").exists())
 
-    def test_none_workspace_renders_empty(self) -> None:
+    def test_none_workspace_is_a_wiring_error(self) -> None:
+        with mock.patch.dict(environ, {}, clear=False):
+            environ.pop(ENV_MEMORY, None)
+            with self.assertRaisesRegex(ValueError, "requires a workspace"):
+                render_memory_block(None)
         with mock.patch.dict(environ, {ENV_MEMORY: "1"}):
-            view = render_memory_block(None)
+            with self.assertRaisesRegex(ValueError, "requires a workspace"):
+                render_memory_block(None)
+
+    def test_workspace_without_root_skips_memory_with_warning(self) -> None:
+        with mock.patch.dict(environ, {ENV_MEMORY: "1"}):
+            with self.assertLogs("agent_runtime.memory", level="WARNING"):
+                view = render_memory_block(SimpleNamespace(root=None))
         self.assertEqual(view.block, "")
 
-    def test_workspace_without_root_renders_empty(self) -> None:
-        with mock.patch.dict(environ, {ENV_MEMORY: "1"}):
-            view = render_memory_block(object())
+    def test_workspace_without_root_is_ignored_when_memory_is_off(self) -> None:
+        with mock.patch.dict(environ, {}, clear=False):
+            environ.pop(ENV_MEMORY, None)
+            view = render_memory_block(SimpleNamespace(root=None))
         self.assertEqual(view.block, "")
 
-    def test_empty_string_root_renders_empty_and_creates_nothing(self) -> None:
+    def test_empty_string_root_skips_memory_with_warning(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             workspace = _workspace(tmp)
             workspace.root = ""
             with mock.patch.dict(environ, {ENV_MEMORY: "1"}):
-                view = render_memory_block(workspace)
+                with self.assertLogs("agent_runtime.memory", level="WARNING"):
+                    view = render_memory_block(workspace)
             self.assertEqual(view.block, "")
             self.assertFalse((Path(tmp) / "memory").exists())
 

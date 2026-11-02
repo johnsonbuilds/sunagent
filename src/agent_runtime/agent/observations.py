@@ -27,7 +27,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from agent_runtime.execution.base import Workspace
-from agent_runtime.execution.local import LocalWorkspace
 from agent_runtime.harness import (
     DEFAULT_HEAD_CHARS,
     DEFAULT_MAX_OBSERVATION_CHARS,
@@ -112,8 +111,8 @@ class OutputSpill:
     ever needed to find the next name.
     """
 
-    def __init__(self, workspace: Workspace | None = None) -> None:
-        self.workspace = workspace if workspace is not None else LocalWorkspace()
+    def __init__(self, workspace: Workspace) -> None:
+        self.workspace = workspace
 
     async def write(self, text: str, call_id: str) -> str | None:
         """Archive ``text`` for ``call_id``; returns the path, or ``None``
@@ -144,7 +143,7 @@ class ObservationFormatter:
     is derived from ``context.head_chars`` so the invariant is structural.
     """
 
-    def __init__(self, workspace: Workspace | None = None,
+    def __init__(self, workspace: Workspace,
                  max_chars: int | None = None,
                  spill_preview_chars: int | None = None,
                  archive_min_chars: int | None = None) -> None:

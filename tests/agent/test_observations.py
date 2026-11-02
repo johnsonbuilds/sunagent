@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
 
-from agent_runtime.agent.loop import run_turn
+from agent_runtime.agent.turn_factory import run_turn
 from agent_runtime.agent.observations import ObservationFormatter, format_tool_result
 from agent_runtime.execution.local import LocalWorkspace
 from agent_runtime.tools.files import read_output
@@ -159,6 +159,27 @@ class LoopObservationIntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(f"full output saved to .outputs/obs-1.txt", observation)
             archived = await read_output(".outputs/obs-1.txt",
                                          workspace=LocalWorkspace(directory))
+        self.assertEqual(archived["content"], "y" * 20_000)
+
+    async def test_explicit_workspace_enables_archiving(self) -> None:
+        async def huge(_location: str = "") -> str:
+            return "y" * 20_000
+
+        llm = _FakeLLM([
+            {"content": "", "tool_calls": [{"id": "1", "function": {
+                "name": "produce", "arguments": "{}"}}]},
+            {"content": "done", "tool_calls": []},
+        ])
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = LocalWorkspace(directory)
+            await run_turn("go", llm, _registry_with(huge),
+                           workspace=workspace, max_iterations=3)
+            message = llm.messages[1][-1]
+
+            self.assertEqual(message["metadata"]["spill_path"],
+                             ".outputs/obs-1.txt")
+            archived = await read_output(".outputs/obs-1.txt",
+                                         workspace=workspace)
         self.assertEqual(archived["content"], "y" * 20_000)
 
     async def test_loop_archives_small_observation_verbatim(self) -> None:
