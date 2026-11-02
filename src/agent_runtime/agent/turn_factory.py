@@ -18,6 +18,7 @@ from agent_runtime.agent.observations import ObservationFormatter
 from agent_runtime.agent.turn_collaborators import TurnCollaborators
 from agent_runtime.agent.turn_finisher import TurnFinisher
 from agent_runtime.agent.turn_history import Conversation
+from agent_runtime.agent.verification import SubmissionRules
 from agent_runtime.events import EventEmitter
 from agent_runtime.execution.base import Workspace
 from agent_runtime.harness import HarnessSpec, default_harness
@@ -65,7 +66,7 @@ def create_agent_turn(
         archive_min_chars=resolved_harness.context.head_chars)
     # One finisher per turn: its violation counter is turn-local state.
     finisher = TurnFinisher(
-        verification=resolved_harness.verification,
+        rules=SubmissionRules.from_genome(resolved_harness.verification),
         tools=tools,
         trace=resolved_trace,
         events=resolved_events,

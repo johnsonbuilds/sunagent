@@ -7,7 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
 
 from agent_runtime.agent.turn_factory import run_turn
-from agent_runtime.agent.verification import render_submission
+from agent_runtime.agent.verification import SubmissionRules, render_submission
 from agent_runtime.harness import (
     ControlGenome,
     HarnessSpec,
@@ -27,6 +27,7 @@ GOOD_FIELDS = {
 }
 
 REQUIRE = ("solution_description", "evidence", "command_to_verify")
+RULES = SubmissionRules(mode="task_result", require=REQUIRE)
 
 # Mirrors the real submit_result spec: command_to_verify is optional at
 # the schema level so non-code harnesses can omit it; code harnesses
@@ -52,7 +53,7 @@ async def fake_edit(path: str = "") -> dict:
 
 
 async def exploding_submit(**kwargs) -> dict:
-    raise AssertionError("submit_result must be intercepted, never executed")
+    raise AssertionError("the submit tool must be intercepted, never executed")
 
 
 def submit_registry(run_handler=None) -> ToolRegistry:
@@ -63,10 +64,11 @@ def submit_registry(run_handler=None) -> ToolRegistry:
     ])
 
 
-def submit_turn(fields: dict, call_id: str = "9") -> dict:
+def submit_turn(fields: dict, call_id: str = "9",
+                tool: str = "submit_result") -> dict:
     return {"content": "", "tool_calls": [{
         "id": call_id, "function": {
-            "name": "submit_result", "arguments": json.dumps(fields)}}]}
+            "name": tool, "arguments": json.dumps(fields)}}]}
 
 
 def edit_turn(call_id: str = "0") -> dict:
@@ -95,13 +97,16 @@ class MatchCommandTests(unittest.TestCase):
     def test_substring_declaration_accepted(self) -> None:
         from agent_runtime.agent.verification import _command_grounded
         self.assertTrue(_command_grounded(
-            "pytest tests/test_x.py -q", ["cd /testbed && pytest tests/test_x.py -q 2>&1 | tail -5"]))
+            "pytest tests/test_x.py -q",
+            ["cd /testbed && pytest tests/test_x.py -q 2>&1 | tail -5"],
+            RULES))
 
     def test_program_only_similarity_rejected(self) -> None:
         from agent_runtime.agent.verification import _command_grounded
         self.assertFalse(_command_grounded(
-            "pytest tests/test_x.py -q", ["pytest tests/other/ -q -x"]))
-        self.assertFalse(_command_grounded("npm test", ["pytest tests/test_x.py -q"]))
+            "pytest tests/test_x.py -q", ["pytest tests/other/ -q -x"], RULES))
+        self.assertFalse(_command_grounded(
+            "npm test", ["pytest tests/test_x.py -q"], RULES))
 
 
 class SubmitResultLoopTests(unittest.IsolatedAsyncioTestCase):
@@ -445,7 +450,8 @@ class SubmitRerunTests(unittest.IsolatedAsyncioTestCase):
     async def test_contract_nudge_states_reasons_only(self) -> None:
         from agent_runtime.agent.verification import contract_nudge
         nudge = contract_nudge({"solution_description": "no source edits yet",
-                                "command_to_verify": "was never run"})
+                                "command_to_verify": "was never run"},
+                               "submit_result")
         self.assertIn("no source edits yet", nudge)
         self.assertIn("was never run", nudge)
         self.assertIn("submit_result requires", nudge)
@@ -563,6 +569,25 @@ class SubmitModeGatingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen, [])
         self.assertEqual(len(llm.messages), 4)
         self.assertIn("submit_result", llm.messages[3][-1]["content"])
+
+
+class CustomSubmissionContractTests(unittest.IsolatedAsyncioTestCase):
+    async def test_custom_submit_tool_is_intercepted(self) -> None:
+        registry = ToolRegistry([
+            ToolSpec("run_command", "", RUN_SCHEMA, fake_ok_run),
+            ToolSpec("edit_file", "", EDIT_SCHEMA, fake_edit),
+            ToolSpec("finish_task", "", SUBMIT_SCHEMA, exploding_submit),
+        ])
+        harness = HarnessSpec(verification=VerificationGenome(
+            enabled=True, mode="task_result", require=REQUIRE,
+            submit_tool="finish_task"))
+        llm = FakeLLM([
+            edit_turn(),
+            run_turn_call(GOOD_FIELDS["command_to_verify"]),
+            submit_turn(GOOD_FIELDS, tool="finish_task"),
+        ])
+        answer = await run_turn("fix it", llm, registry, harness=harness)
+        self.assertEqual(answer, render_submission(GOOD_FIELDS))
 
 
 class TaskResultGenomeTests(unittest.TestCase):

@@ -2,20 +2,33 @@
 
 labs-OO-Agents BenchAgent pattern as a typed tool call: the model must
 submit solution_description / evidence / command_to_verify via the
-submit_result tool when finishing. The harness checks *shape* (field
-present plus minimal content) and *grounding* (evidence quotes observed
-tool output; the declared command was actually executed; at least one
-source edit was made via edit_file / apply_patch / write_file). It never executes gold tests here.
+configured submit tool when finishing (``submit_result`` by default). The
+harness checks *shape* (field present plus minimal content) and
+*grounding* (evidence quotes observed tool output; the declared command
+was actually executed; at least one source edit was made via one of the
+configured edit tools). It never executes gold tests here.
 The declared command is model-authored per task, so the gate stays generic
 across benchmarks; the finish instruction itself lives in the prompt gene
 (harness ``prompt.system``) and the tool description, not here.
+
+Tool names, the test-target pattern and the thresholds are injected as
+:class:`SubmissionRules`, resolved once from the harness genome.  The
+pure helpers below therefore never read module-level policy.
 """
 
 from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass, field
 from typing import Any, Mapping
+
+from agent_runtime.harness import (
+    DEFAULT_EDIT_TOOLS,
+    DEFAULT_SUBMIT_TOOL,
+    DEFAULT_TEST_TARGET_PATTERN,
+    VerificationGenome,
+)
 
 MIN_FIELD_CHARS = 20
 MIN_COMMAND_CHARS = 3
@@ -24,20 +37,43 @@ MIN_COMMAND_CHARS = 3
 QUOTE_CHARS = 16
 TOKEN_OVERLAP = 2
 
-# Finish-signal tool honored only while the verification gate is enabled;
-# elsewhere it is inert registry data.  The turn loop and the turn
-# finisher both route on this name, so it lives with the contract it
-# belongs to rather than in either caller.
-SUBMIT_TOOL = "submit_result"
-
-# Canonical submit_result parameters, in contract order. The free-text
-# gate and the submit_result tool share these: a submission is rendered
-# to the three-section answer shape before checking.
+# Canonical submit tool parameters, in contract order. The free-text
+# gate and the submit tool share these: a submission is rendered to the
+# three-section answer shape before checking.
 SUBMIT_FIELDS = ("solution_description", "evidence", "command_to_verify")
-# Edit-necessity: a real fix necessarily writes; any attempted source edit
-# via these tools counts (success is not parsed — the rerun gate checks
-# the declared command actually passes).
-EDIT_TOOLS = frozenset({"edit_file", "apply_patch", "write_file"})
+
+
+@dataclass(frozen=True)
+class SubmissionRules:
+    """Resolved submission contract: genome values plus compiled matching.
+
+    Built once per turn by :meth:`from_genome`.  The threshold fields are
+    not genes (they are gate mechanics, not deployment policy), but they
+    are injectable here so tests and future genes can vary them without
+    rewriting the helpers.
+    """
+
+    mode: str = "off"
+    require: tuple[str, ...] = ()
+    submit_tool: str = DEFAULT_SUBMIT_TOOL
+    edit_tools: frozenset[str] = frozenset(DEFAULT_EDIT_TOOLS)
+    test_target_pattern: re.Pattern[str] = field(
+        default_factory=lambda: re.compile(DEFAULT_TEST_TARGET_PATTERN))
+    min_field_chars: int = MIN_FIELD_CHARS
+    min_command_chars: int = MIN_COMMAND_CHARS
+    quote_chars: int = QUOTE_CHARS
+    token_overlap: int = TOKEN_OVERLAP
+
+    @classmethod
+    def from_genome(cls, genome: VerificationGenome) -> SubmissionRules:
+        return cls(
+            mode=genome.mode,
+            require=tuple(genome.require),
+            submit_tool=genome.submit_tool,
+            edit_tools=frozenset(genome.edit_tools),
+            test_target_pattern=re.compile(genome.test_target_pattern),
+        )
+
 
 # Generic boilerplate that proves nothing when shared between evidence and
 # outputs; grounding requires *specific* overlap (names, numbers, lines).
@@ -51,10 +87,11 @@ _STOPWORDS = frozenset({
 _TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9_\-\.]{4,}")
 
 
-def _field_min_chars(field: str) -> int:
+def _field_min_chars(field: str, rules: SubmissionRules) -> int:
     # A legit verify command can be short ("pytest -q"); descriptions and
     # evidence may not.
-    return MIN_COMMAND_CHARS if field.lower() == "command_to_verify" else MIN_FIELD_CHARS
+    return (rules.min_command_chars if field.lower() == "command_to_verify"
+            else rules.min_field_chars)
 
 
 def _field_value(fields: Mapping[str, Any], field: str) -> str:
@@ -63,7 +100,7 @@ def _field_value(fields: Mapping[str, Any], field: str) -> str:
     return raw if isinstance(raw, str) else str(raw)
 
 
-def contract_nudge(gaps: dict[str, str] | list[str]) -> str:
+def contract_nudge(gaps: dict[str, str] | list[str], submit_tool: str) -> str:
     """User-channel retry message naming each failing contract field + why.
 
     Result + reason + contract shape only: no prescribed action — the
@@ -75,7 +112,7 @@ def contract_nudge(gaps: dict[str, str] | list[str]) -> str:
         fields = ", ".join(gaps)
     return (
         f"Your submission fails the return contract: {fields}. "
-        "submit_result requires: "
+        f"{submit_tool} requires: "
         "solution_description (root cause + fix), "
         "evidence (quote the actual shell output you observed: test names, counts, "
         "key lines — do not invent results), "
@@ -85,7 +122,7 @@ def contract_nudge(gaps: dict[str, str] | list[str]) -> str:
 
 
 def render_submission(fields: Mapping[str, Any]) -> str:
-    """Render submit_result parameters to the three-section answer shape.
+    """Render submit parameters to the three-section answer shape.
 
     The recorded answer keeps the established format so traces stay
     comparable across harness versions.
@@ -99,10 +136,10 @@ def render_submission(fields: Mapping[str, Any]) -> str:
             f"command_to_verify: {value('command_to_verify')}")
 
 
-def submit_nudge() -> str:
-    """User-channel retry message: finish via the submit_result tool."""
+def submit_nudge(submit_tool: str) -> str:
+    """User-channel retry message: finish via the configured submit tool."""
     return (
-        "To finish, call the submit_result tool (and only that tool) with all "
+        f"To finish, call the {submit_tool} tool (and only that tool) with all "
         "three parameters: solution_description (root cause + fix), "
         "evidence (quote the actual shell output you observed: test names, counts, "
         "key lines — do not invent results), "
@@ -143,8 +180,9 @@ def executed_commands(messages: list[Mapping[str, Any]]) -> list[str]:
     return commands
 
 
-def has_source_edit(messages: list[Mapping[str, Any]] | None) -> bool:
-    """One attempted ``edit_file`` / ``apply_patch`` / ``write_file`` call."""
+def has_source_edit(messages: list[Mapping[str, Any]] | None,
+                    rules: SubmissionRules) -> bool:
+    """One attempted call to a configured source-edit tool."""
     for message in messages or []:
         if not isinstance(message, Mapping) or message.get("role") != "assistant":
             continue
@@ -152,7 +190,8 @@ def has_source_edit(messages: list[Mapping[str, Any]] | None) -> bool:
             if not isinstance(call, Mapping):
                 continue
             function = call.get("function")
-            if isinstance(function, Mapping) and function.get("name") in EDIT_TOOLS:
+            if (isinstance(function, Mapping)
+                    and function.get("name") in rules.edit_tools):
                 return True
     return False
 
@@ -169,20 +208,21 @@ def observation_texts(messages: list[Mapping[str, Any]]) -> list[str]:
     return texts
 
 
-def _evidence_grounded(evidence: str, observations: list[str]) -> bool:
+def _evidence_grounded(evidence: str, observations: list[str],
+                       rules: SubmissionRules) -> bool:
     """Evidence quotes (verbatim span) or shares specific tokens with output."""
     norm_evidence = _normalize(evidence)
-    if len(norm_evidence) < MIN_FIELD_CHARS:
+    if len(norm_evidence) < rules.min_field_chars:
         return False
     norm_observations = [_normalize(obs) for obs in observations
-                         if len(_normalize(obs)) >= QUOTE_CHARS]
+                         if len(_normalize(obs)) >= rules.quote_chars]
     # Short outputs quoted in full count immediately.
     if any(obs in norm_evidence for obs in norm_observations if len(obs) <= 64):
         return True
-    # Otherwise any verbatim quote of QUOTE_CHARS from the evidence found
-    # in output (step 4 guarantees a window lands inside any quoted run).
-    for i in range(0, len(norm_evidence) - QUOTE_CHARS + 1, 4):
-        span = norm_evidence[i:i + QUOTE_CHARS]
+    # Otherwise any verbatim quote of ``quote_chars`` from the evidence
+    # found in output (step 4 guarantees a window lands inside any quoted run).
+    for i in range(0, len(norm_evidence) - rules.quote_chars + 1, 4):
+        span = norm_evidence[i:i + rules.quote_chars]
         if any(span in obs for obs in norm_observations):
             return True
     obs_tokens: set[str] = set()
@@ -190,10 +230,11 @@ def _evidence_grounded(evidence: str, observations: list[str]) -> bool:
         obs_tokens |= _significant_tokens(obs)
     if not obs_tokens:
         return False
-    return len(_significant_tokens(evidence) & obs_tokens) >= TOKEN_OVERLAP
+    return len(_significant_tokens(evidence) & obs_tokens) >= rules.token_overlap
 
 
-def _command_grounded(command: str, executed: list[str]) -> bool:
+def _command_grounded(command: str, executed: list[str],
+                      rules: SubmissionRules) -> bool:
     """Declared command matches a history run (exact or substring).
 
     Cheap pre-filter only: the rerun executes the declared string itself,
@@ -201,7 +242,7 @@ def _command_grounded(command: str, executed: list[str]) -> bool:
     No program/token heuristics — those misfire on shell-prefixed commands.
     """
     norm = _normalize(command)
-    if len(norm) < MIN_COMMAND_CHARS:
+    if len(norm) < rules.min_command_chars:
         return False
     return any(norm in _normalize(cmd) or _normalize(cmd) in norm
                for cmd in executed)
@@ -209,20 +250,19 @@ def _command_grounded(command: str, executed: list[str]) -> bool:
 
 _QUOTED_SPAN_RE = re.compile(r"'[^']*'|\"[^\"]*\"")
 
-_FILE_TARGET_RE = re.compile(r"[\w\-/]+\.(?:py|sh)\b|tests?/[\w\-/.]+|test_[\w\-/]+")
 
-
-def _is_file_level(command: str) -> bool:
+def _is_file_level(command: str, rules: SubmissionRules) -> bool:
     """Declared command targets test files.
 
     Only the last ``&&`` segment is checked so ``cd`` / ``source``
     prefixes stay allowed. Which files (and how many) is the model's
     call per the skill contract — the gate only requires that the
     command names test files instead of running an unnamed suite.
+    The pattern is a gene so non-Python repositories can verify too.
     """
     bare = _QUOTED_SPAN_RE.sub("", command)
     last = bare.split("&&")[-1]
-    return bool(_FILE_TARGET_RE.search(last))
+    return bool(rules.test_target_pattern.search(last))
 
 
 def _masks_exit_code(command: str) -> bool:
@@ -240,9 +280,9 @@ def _masks_exit_code(command: str) -> bool:
 
 
 def check_submission(fields: Mapping[str, Any],
-                     require: tuple[str, ...] | list[str],
+                     rules: SubmissionRules,
                      messages: list[Mapping[str, Any]] | None = None) -> dict[str, str]:
-    """Full gate on typed submit_result parameters: shape plus grounding.
+    """Full gate on typed submit parameters: shape plus grounding.
 
     Returns ``{field: reason}`` for every failing field; empty means accept.
     Without trajectory (``messages=None``) only the shape check applies.
@@ -253,22 +293,25 @@ def check_submission(fields: Mapping[str, Any],
     (prompt contract); the gate verifies authenticity (run, passing,
     quoted), never the runner's identity.
     """
+    require = rules.require
     gaps: dict[str, str] = {}
     for field in require or []:
-        if len(_field_value(fields, field).strip()) < _field_min_chars(field):
+        if len(_field_value(fields, field).strip()) < _field_min_chars(field, rules):
             gaps[field] = "missing or too short"
     if messages is None:
         return gaps
     if "solution_description" in (require or []) and "solution_description" not in gaps:
-        if not has_source_edit(messages):
+        if not has_source_edit(messages, rules):
+            edit_tools = "/".join(sorted(rules.edit_tools)) or "the edit tools"
             gaps["solution_description"] = (
                 "no source edits yet — make a code change with "
-                "edit_file/apply_patch/write_file before finishing")
+                f"{edit_tools} before finishing")
     if "evidence" in (require or []) and "evidence" not in gaps:
         observations = observation_texts(messages)
         if not observations:
             gaps["evidence"] = "no tool output observed at all — run the tests first"
-        elif not _evidence_grounded(_field_value(fields, "evidence"), observations):
+        elif not _evidence_grounded(_field_value(fields, "evidence"), observations,
+                                    rules):
             gaps["evidence"] = ("cites no observed tool output — quote actual lines "
                                 "from a command you ran")
     if "command_to_verify" in (require or []) and "command_to_verify" not in gaps:
@@ -276,7 +319,7 @@ def check_submission(fields: Mapping[str, Any],
         command = _field_value(fields, "command_to_verify")
         if not executed:
             gaps["command_to_verify"] = "no shell command run yet — run it first"
-        elif not _command_grounded(command, executed):
+        elif not _command_grounded(command, executed, rules):
             gaps["command_to_verify"] = ("was never run — run that exact command "
                                           "before claiming it verifies the fix")
         elif _masks_exit_code(command):
@@ -284,7 +327,7 @@ def check_submission(fields: Mapping[str, Any],
                 "output pipes mask the test exit code (the exit code "
                 "becomes the pipe's, not the tests') — declare the command "
                 "without pipes; redirect to a file if you need the log")
-        elif not _is_file_level(command):
+        elif not _is_file_level(command, rules):
             gaps["command_to_verify"] = (
                 "file-less command — declare a test command naming test "
                 "files, e.g. cd /testbed && pytest tests/test_auth.py "
@@ -292,7 +335,7 @@ def check_submission(fields: Mapping[str, Any],
     return gaps
 
 
-__all__ = ["MIN_FIELD_CHARS", "MIN_COMMAND_CHARS", "EDIT_TOOLS", "SUBMIT_FIELDS",
-           "SUBMIT_TOOL", "executed_commands", "has_source_edit",
+__all__ = ["MIN_FIELD_CHARS", "MIN_COMMAND_CHARS", "SUBMIT_FIELDS",
+           "SubmissionRules", "executed_commands", "has_source_edit",
            "observation_texts", "render_submission", "check_submission",
            "contract_nudge", "submit_nudge"]

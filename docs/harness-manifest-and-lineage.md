@@ -28,7 +28,7 @@ Seven genes (all extracted from what the code used to hardcode):
 | `control` | `max_iterations` | `10` |
 | `context` | `strategy` | `full_history` |
 | `recovery` | `tool_error` | `feed_error_and_continue` |
-| `verification` | `enabled` | `false` |
+| `verification` | `enabled`, `mode`, `require`, `submit_tool`, `edit_tools`, `test_target_pattern` | `false` (submit tool `submit_result`; edits via `edit_file`/`apply_patch`/`write_file`; Python test-file pattern) |
 | `skills` | list | `[]` |
 
 > Legacy note: the `context` gene was called `memory` before the rename.

@@ -18,7 +18,7 @@ from agent_runtime.agent.turn_finisher import (
     _rerun_outcome,
 )
 from agent_runtime.agent.turn_history import TurnHistory
-from agent_runtime.agent.verification import SUBMIT_TOOL, render_submission
+from agent_runtime.agent.verification import SubmissionRules, render_submission
 from agent_runtime.events import EventEmitter
 from agent_runtime.harness import HarnessSpec, VerificationGenome
 from agent_runtime.tools.tools import ToolRegistry, ToolSpec
@@ -36,11 +36,14 @@ GOOD_FIELDS = {
 
 ENABLED = VerificationGenome(enabled=True, mode="task_result", require=REQUIRE)
 OFF = VerificationGenome()
+ENABLED_RULES = SubmissionRules.from_genome(ENABLED)
+OFF_RULES = SubmissionRules.from_genome(OFF)
 
 
-def submit_outcome(fields: dict | None = None, call_id: str = "1"
+def submit_outcome(fields: dict | None = None, call_id: str = "1",
+                   submit_tool: str = ENABLED_RULES.submit_tool
                    ) -> ToolCallOutcome:
-    validated = ValidatedToolCall(call_id, SUBMIT_TOOL,
+    validated = ValidatedToolCall(call_id, submit_tool,
                                   dict(fields or GOOD_FIELDS))
     return ToolCallOutcome(tool_call={"id": call_id}, validated=validated,
                            rejection=None)
@@ -89,7 +92,7 @@ class RerunHelperTests(unittest.TestCase):
 
 
 class TurnFinisherTests(unittest.IsolatedAsyncioTestCase):
-    def make_finisher(self, *, verification: VerificationGenome = ENABLED,
+    def make_finisher(self, *, rules: SubmissionRules = ENABLED_RULES,
                       handler=None, max_iterations: int = 10,
                       finish_violation_limit: int = 3):
         async def passing(command: str, timeout: float | None = None) -> dict:
@@ -99,7 +102,7 @@ class TurnFinisherTests(unittest.IsolatedAsyncioTestCase):
         trace = RunTrace()
         events = EventEmitter(run_id=trace.run_id)
         finisher = TurnFinisher(
-            verification=verification,
+            rules=rules,
             tools=tools,
             trace=trace,
             events=events,
@@ -111,7 +114,7 @@ class TurnFinisherTests(unittest.IsolatedAsyncioTestCase):
     # -- submit interception ------------------------------------------------
 
     def test_off_mode_does_not_intercept_submit(self) -> None:
-        finisher, *_ = self.make_finisher(verification=OFF)
+        finisher, *_ = self.make_finisher(rules=OFF_RULES)
         self.assertIsNone(finisher.take_submit_arguments([submit_outcome()]))
 
     def test_first_validated_submit_arguments_are_copied(self) -> None:
@@ -133,7 +136,7 @@ class TurnFinisherTests(unittest.IsolatedAsyncioTestCase):
     # -- plain-text answers ------------------------------------------------
 
     def test_plain_answer_finishes_when_verification_is_off(self) -> None:
-        finisher, _, _, events = self.make_finisher(verification=OFF)
+        finisher, _, _, events = self.make_finisher(rules=OFF_RULES)
         answer = finisher.answer_without_tools(
             {"content": "done"}, 1, TurnHistory([]))
         self.assertEqual(answer, "done")
@@ -260,7 +263,7 @@ class TurnFinisherTests(unittest.IsolatedAsyncioTestCase):
     # -- contract outcome ----------------------------------------------------
 
     def test_contract_outcome_is_silent_when_verification_is_off(self) -> None:
-        finisher, _, trace, _ = self.make_finisher(verification=OFF)
+        finisher, _, trace, _ = self.make_finisher(rules=OFF_RULES)
         finisher.emit_contract_outcome(11)
         self.assertEqual(trace.events, [])
 
@@ -268,7 +271,8 @@ class TurnFinisherTests(unittest.IsolatedAsyncioTestCase):
         finisher, _, trace, _ = self.make_finisher()
         finisher.emit_contract_outcome(11)
         self.assertEqual(trace.events[-1].event_type, "verification.failed")
-        self.assertEqual(trace.events[-1].data["missing"], [SUBMIT_TOOL])
+        self.assertEqual(trace.events[-1].data["missing"],
+                         [ENABLED_RULES.submit_tool])
 
 
 class TurnFinisherWiringTests(unittest.TestCase):
@@ -295,4 +299,5 @@ class TurnFinisherWiringTests(unittest.TestCase):
         self.assertEqual(turn.finisher.max_iterations, 4)
         self.assertEqual(turn.finisher.finish_violation_limit,
                          harness.control.finish_violation_limit)
-        self.assertIs(turn.finisher.verification, harness.verification)
+        self.assertEqual(turn.finisher.rules,
+                         SubmissionRules.from_genome(harness.verification))

@@ -142,6 +142,50 @@ class TranscriptEconomicsGenesTests(unittest.TestCase):
             from_dict({"context": {"head_x": 1}})
 
 
+class SubmissionGenesTests(unittest.TestCase):
+    """Tool names and the test-target pattern are deployment policy."""
+
+    def test_defaults_match_runtime_contract(self) -> None:
+        verification = BUILTIN_HARNESS.verification
+        self.assertEqual(verification.submit_tool, "submit_result")
+        self.assertEqual(verification.edit_tools,
+                         ("edit_file", "apply_patch", "write_file"))
+        self.assertTrue(verification.test_target_pattern)
+
+    def test_custom_tools_and_pattern_are_parsed(self) -> None:
+        spec = from_dict({"verification": {
+            "mode": "task_result",
+            "submit_tool": "finish_task",
+            "edit_tools": ["patch_repo"],
+            "test_target_pattern": r"_test\.go\b",
+        }})
+        self.assertEqual(spec.verification.submit_tool, "finish_task")
+        self.assertEqual(spec.verification.edit_tools, ("patch_repo",))
+        self.assertEqual(spec.verification.test_target_pattern,
+                         r"_test\.go\b")
+
+    def test_empty_edit_tools_is_explicit_and_allowed(self) -> None:
+        spec = from_dict({"verification": {"edit_tools": []}})
+        self.assertEqual(spec.verification.edit_tools, ())
+
+    def test_bad_tool_names_and_pattern_are_rejected(self) -> None:
+        for section in ({"submit_tool": ""},
+                        {"submit_tool": 3},
+                        {"edit_tools": "edit_file"},
+                        {"edit_tools": [""]},
+                        {"test_target_pattern": ""},
+                        {"test_target_pattern": "["}):
+            with self.subTest(section=section):
+                with self.assertRaisesRegex(HarnessError, "verification"):
+                    from_dict({"verification": section})
+
+    def test_submission_genes_are_hashed(self) -> None:
+        base = from_dict({"verification": {"mode": "task_result"}})
+        changed = from_dict({"verification": {
+            "mode": "task_result", "submit_tool": "finish_task"}})
+        self.assertNotEqual(base.genes_hash, changed.genes_hash)
+
+
 class HarnessValidationTests(unittest.TestCase):
     def assert_harness_error(self, yaml_text: str, fragment: str) -> None:
         with tempfile.TemporaryDirectory() as directory:

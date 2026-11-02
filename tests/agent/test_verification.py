@@ -1,4 +1,5 @@
 import json
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -9,8 +10,11 @@ sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
 from agent_runtime.agent.turn_factory import run_turn
 from agent_runtime.agent.verification import (
     SUBMIT_FIELDS,
+    SubmissionRules,
+    _is_file_level,
     check_submission,
     executed_commands,
+    has_source_edit,
 )
 from agent_runtime.harness import HarnessSpec, VerificationGenome, from_dict
 from agent_runtime.tools.tools import ToolRegistry, ToolSpec
@@ -24,6 +28,7 @@ FIELDS = {
 }
 
 REQUIRE = ("solution_description", "evidence", "command_to_verify")
+RULES = SubmissionRules(mode="task_result", require=REQUIRE)
 
 RUN_SCHEMA = {
     "type": "object",
@@ -64,19 +69,21 @@ EDIT_SCHEMA = {
 
 class ShapeTests(unittest.TestCase):
     def test_full_fields_pass_shape(self) -> None:
-        self.assertEqual(check_submission(FIELDS, REQUIRE, None), {})
+        self.assertEqual(check_submission(FIELDS, RULES, None), {})
 
     def test_thin_values_flagged(self) -> None:
         gaps = check_submission({"solution_description": "fix", "evidence": "ok",
                                  "command_to_verify": "pytest tests/test_x.py -q"},
-                                REQUIRE, None)
+                                RULES, None)
         self.assertIn("solution_description", gaps)
         self.assertIn("evidence", gaps)
         self.assertNotIn("command_to_verify", gaps)
 
     def test_require_subset_checked(self) -> None:
+        rules = SubmissionRules(mode="task_result",
+                                require=("solution_description",))
         self.assertEqual(check_submission({"solution_description": "x" * 25},
-                                          ("solution_description",), None), {})
+                                          rules, None), {})
 
 
 class GroundingTests(unittest.TestCase):
@@ -87,34 +94,34 @@ class GroundingTests(unittest.TestCase):
                  "content": "5 passed in 1.2s"}]
 
     def test_grounded_submission_accepted(self) -> None:
-        self.assertEqual(check_submission(FIELDS, REQUIRE, self._messages()), {})
+        self.assertEqual(check_submission(FIELDS, RULES, self._messages()), {})
 
     def test_edit_less_submission_rejected_as_solution_description(self) -> None:
         messages = [assistant_run("pytest tests/test_x.py -q"),
                     {"role": "tool", "tool_call_id": "1",
                      "content": "5 passed in 1.2s"}]
-        gaps = check_submission(FIELDS, REQUIRE, messages)
+        gaps = check_submission(FIELDS, RULES, messages)
         self.assertIn("solution_description", gaps)
 
     def test_each_edit_tool_counts(self) -> None:
-        from agent_runtime.agent.verification import has_source_edit
         for tool in ("edit_file", "apply_patch", "write_file"):
-            self.assertTrue(has_source_edit([assistant_edit(tool)]))
-        self.assertFalse(has_source_edit([assistant_run("pytest tests/test_x.py -q")]))
-        self.assertFalse(has_source_edit([]))
+            self.assertTrue(has_source_edit([assistant_edit(tool)], RULES))
+        self.assertFalse(has_source_edit(
+            [assistant_run("pytest tests/test_x.py -q")], RULES))
+        self.assertFalse(has_source_edit([], RULES))
 
     def test_invented_evidence_rejected(self) -> None:
         fields = dict(FIELDS, evidence="all 200 integration tests green here")
-        gaps = check_submission(fields, REQUIRE, self._messages())
+        gaps = check_submission(fields, RULES, self._messages())
         self.assertIn("evidence", gaps)
 
     def test_unrun_command_rejected(self) -> None:
         fields = dict(FIELDS, command_to_verify="npm test")
-        gaps = check_submission(fields, REQUIRE, self._messages())
+        gaps = check_submission(fields, RULES, self._messages())
         self.assertIn("command_to_verify", gaps)
 
     def test_no_trajectory_at_all_rejected(self) -> None:
-        gaps = check_submission(FIELDS, REQUIRE, [])
+        gaps = check_submission(FIELDS, RULES, [])
         self.assertIn("solution_description", gaps)
         self.assertIn("evidence", gaps)
         self.assertIn("command_to_verify", gaps)
@@ -135,7 +142,7 @@ class AuthenticityTests(unittest.TestCase):
             fields = {"solution_description": FIELDS["solution_description"],
                       "evidence": evidence,
                       "command_to_verify": command}
-            gaps = check_submission(fields, REQUIRE, messages)
+            gaps = check_submission(fields, RULES, messages)
             self.assertNotIn("command_to_verify", gaps, command)
 
     def test_history_commands_listed(self) -> None:
@@ -153,7 +160,7 @@ class AuthenticityTests(unittest.TestCase):
                     assistant_run("pytest tests/other/ -q -x"),
                     {"role": "tool", "tool_call_id": "1",
                      "content": "5 passed in 1.2s"}]
-        gaps = check_submission(FIELDS, REQUIRE, messages)
+        gaps = check_submission(FIELDS, RULES, messages)
         self.assertIn("command_to_verify", gaps)
 
 
@@ -167,7 +174,7 @@ class ExitCodeMaskingTests(unittest.TestCase):
         fields = {"solution_description": FIELDS["solution_description"],
                   "evidence": evidence,
                   "command_to_verify": command}
-        return check_submission(fields, REQUIRE, messages)
+        return check_submission(fields, RULES, messages)
 
     def test_piped_declaration_rejected(self) -> None:
         gaps = self._piped("pytest -q 2>&1 | tail -20")
@@ -204,7 +211,7 @@ class FileLevelTests(unittest.TestCase):
         fields = {"solution_description": FIELDS["solution_description"],
                   "evidence": evidence,
                   "command_to_verify": command}
-        return check_submission(fields, REQUIRE, messages)
+        return check_submission(fields, RULES, messages)
 
     def test_narrow_k_allowed_with_file(self) -> None:
         # Narrowing is the skill's call, not the gate's: file-level
@@ -246,6 +253,27 @@ class BudgetReminderGenomeTests(unittest.TestCase):
         with self.assertRaises(HarnessError):
             from_dict({"control": {"budget_reminder": {
                 "enabled": True, "at_fractions": [1.5]}}})
+
+
+class SubmissionRulesTests(unittest.TestCase):
+    def test_custom_edit_tools_only_match_configured_names(self) -> None:
+        rules = SubmissionRules(mode="task_result", require=REQUIRE,
+                                edit_tools=frozenset({"patch_repo"}))
+        self.assertTrue(has_source_edit([assistant_edit("patch_repo")], rules))
+        self.assertFalse(has_source_edit([assistant_edit("edit_file")], rules))
+
+    def test_custom_test_target_pattern_accepts_other_languages(self) -> None:
+        rules = SubmissionRules(
+            mode="task_result", require=REQUIRE,
+            test_target_pattern=re.compile(r"_test\.go\b"))
+        self.assertTrue(_is_file_level("go test ./pkg/foo_test.go", rules))
+        self.assertFalse(_is_file_level("go test ./...", rules))
+
+    def test_custom_submit_tool_reaches_the_rules(self) -> None:
+        spec = from_dict({"verification": {
+            "mode": "task_result", "submit_tool": "finish_task"}})
+        rules = SubmissionRules.from_genome(spec.verification)
+        self.assertEqual(rules.submit_tool, "finish_task")
 
 
 class VerificationGenomeTests(unittest.TestCase):

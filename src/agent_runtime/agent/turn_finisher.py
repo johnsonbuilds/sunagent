@@ -27,14 +27,13 @@ from agent_runtime.agent.tool_dispatch import ToolCallOutcome
 from agent_runtime.agent.turn_failure import TurnFailure
 from agent_runtime.agent.turn_history import TurnHistory
 from agent_runtime.agent.verification import (
-    SUBMIT_TOOL,
+    SubmissionRules,
     check_submission,
     contract_nudge,
     render_submission,
     submit_nudge,
 )
 from agent_runtime.events import EventEmitter
-from agent_runtime.harness import VerificationGenome
 from agent_runtime.tools import ToolExecutor
 from agent_runtime.trace import RunTrace
 
@@ -124,13 +123,13 @@ class TurnFinisher:
     """
 
     def __init__(self, *,
-                 verification: VerificationGenome,
+                 rules: SubmissionRules,
                  tools: ToolExecutor,
                  trace: RunTrace,
                  events: EventEmitter,
                  max_iterations: int,
                  finish_violation_limit: int) -> None:
-        self.verification = verification
+        self.rules = rules
         self.tools = tools
         self.trace = trace
         self.events = events
@@ -143,16 +142,16 @@ class TurnFinisher:
 
     def take_submit_arguments(
             self, outcomes: list[ToolCallOutcome]) -> dict[str, Any] | None:
-        """First validated submit_result arguments, if this harness honors them.
+        """First validated submit-call arguments, if this harness honors them.
 
         Any enabled verification mode intercepts the tool; ``off`` lets a
         call through to the placeholder handler.
         """
-        if self.verification.mode == "off":
+        if self.rules.mode == "off":
             return None
         for outcome in outcomes:
             if (outcome.validated is not None
-                    and outcome.validated.name == SUBMIT_TOOL):
+                    and outcome.validated.name == self.rules.submit_tool):
                 return dict(outcome.validated.arguments)
         return None
 
@@ -161,12 +160,12 @@ class TurnFinisher:
         """Handle an answer with no tool calls; ``None`` means nudge + continue.
 
         Under ``verification.mode == "off"`` the plain answer ends the turn;
-        an enabled harness only accepts a typed submit_result call, so a bare
+        an enabled harness only accepts a typed submit call, so a bare
         message is either the budget-exhausted fallback or a contract miss
         worth one nudge.
         """
         answer = response.get("content", "")
-        if self.verification.mode == "off":
+        if self.rules.mode == "off":
             logger.debug("agent.final iteration=%d answer_chars=%d",
                          iteration, len(answer))
             self.events.emit("agent.completed", iteration, iterations=iteration,
@@ -174,34 +173,35 @@ class TurnFinisher:
             return answer
         # Labs-OO-Agents BenchAgent pattern: a bare message can
         # never finish the turn — the model must submit via the
-        # submit_result tool, whose parameters are typed. Legacy
+        # configured submit tool, whose parameters are typed. Legacy
         # return_contract prompts describe text sections, but the
         # runtime no longer accepts them either.
         if iteration >= self.max_iterations:
             # No budget left for a retry; accept as-is and record
             # the miss on the summary turn instead of overrunning.
             self.trace.emit("verification.failed", iteration,
-                            missing=["submit_result"],
-                            reasons={"submit_result":
+                            missing=[self.rules.submit_tool],
+                            reasons={self.rules.submit_tool:
                                      "budget exhausted without a valid "
-                                     "submit_result call"})
+                                     f"{self.rules.submit_tool} call"})
             logger.debug("agent.final iteration=%d answer_chars=%d "
                          "unsubmitted", iteration, len(answer))
             self.events.emit("agent.completed", iteration, iterations=iteration,
                              answer=answer)
             return answer
         self.note_finish_violation(iteration)
-        gaps = {"submit_result": "plain-text answer cannot finish "
-                                 "the task — call submit_result"}
+        gaps = {self.rules.submit_tool: "plain-text answer cannot finish "
+                                       f"the task — call {self.rules.submit_tool}"}
         self.trace.emit("verification.failed", iteration,
                         missing=sorted(gaps), reasons=gaps)
-        history.append({"role": "user", "content": submit_nudge()})
+        history.append({"role": "user", "content": submit_nudge(
+            self.rules.submit_tool)})
         return None
 
     async def finish_or_nudge(self, submit_arguments: dict[str, Any],
                               iteration: int,
                               history: TurnHistory) -> str | None:
-        """Validate the turn's submit_result attempt; ``None`` means nudge.
+        """Validate the turn's submit attempt; ``None`` means nudge.
 
         The nudge is appended to the history and the loop continues; a
         rendered submission is the final answer of the turn.
@@ -221,19 +221,19 @@ class TurnFinisher:
     async def validate_submission(self, fields: dict[str, Any], iteration: int,
                                   messages: list[dict[str, Any]] | None = None
                                   ) -> str | None:
-        """Validate a submit_result finish attempt; ``None`` means accept.
+        """Validate a submit finish attempt; ``None`` means accept.
 
         Checks shape plus grounding on the typed parameters, then always
         re-executes a declared command once. Non-code harnesses (no
         ``command_to_verify`` declared) skip the rerun: there is nothing
         to confirm.
         """
-        gaps = check_submission(fields, self.verification.require, messages)
+        gaps = check_submission(fields, self.rules, messages)
         if gaps:
             self.note_finish_violation(iteration)
             self.trace.emit("verification.failed", iteration,
                             missing=sorted(gaps), reasons=gaps)
-            return contract_nudge(gaps)
+            return contract_nudge(gaps, self.rules.submit_tool)
         raw = fields.get("command_to_verify", "")
         command = raw if isinstance(raw, str) else str(raw)
         if not command.strip():
@@ -256,7 +256,7 @@ class TurnFinisher:
             gaps = {"command_to_verify": "missing or too short"}
             self.trace.emit("verification.failed", iteration,
                             missing=sorted(gaps), reasons=gaps)
-            return contract_nudge(gaps)
+            return contract_nudge(gaps, self.rules.submit_tool)
         try:
             result = await self.tools.execute(
                 "run_command", {"command": command,
@@ -269,7 +269,7 @@ class TurnFinisher:
                             success=False, error=str(exc))
             self.trace.emit("verification.failed", iteration,
                             missing=sorted(gaps), reasons=gaps)
-            return contract_nudge(gaps)
+            return contract_nudge(gaps, self.rules.submit_tool)
         success, exit_code, excerpt = _rerun_outcome(result)
         self.trace.emit("verification.rerun", iteration, command=command,
                         success=success, exit_code=exit_code, output=excerpt)
@@ -300,7 +300,7 @@ class TurnFinisher:
                 "a submission is only accepted when that command exits 0"}
         self.trace.emit("verification.failed", iteration,
                         missing=sorted(gaps), reasons=gaps)
-        nudge = contract_nudge(gaps)
+        nudge = contract_nudge(gaps, self.rules.submit_tool)
         if excerpt:
             nudge += f" Rerun output of `{command}`: {excerpt}"
         return nudge
@@ -323,8 +323,8 @@ class TurnFinisher:
             raise TurnFailure(
                 f"ABORTED_REPEATED_FINISH_VIOLATIONS: {self._finish_violations} "
                 f"consecutive finish attempts rejected without interleaving work "
-                f"(limit {limit}). Finish by calling submit_result with valid "
-                f"parameters after running the tests.")
+                f"(limit {limit}). Finish by calling {self.rules.submit_tool} "
+                f"with valid parameters after running the tests.")
 
     def note_work_executed(self) -> None:
         """Reset the fuse: an executed tool call produced new information."""
@@ -336,13 +336,13 @@ class TurnFinisher:
         The summary turn carries no tools, so a submission is impossible:
         the outcome is always a miss.
         """
-        if self.verification.mode == "off":
+        if self.rules.mode == "off":
             return
         self.trace.emit("verification.failed", iteration,
-                        missing=["submit_result"],
-                        reasons={"submit_result":
+                        missing=[self.rules.submit_tool],
+                        reasons={self.rules.submit_tool:
                                  "budget exhausted without a valid "
-                                 "submit_result call"})
+                                 f"{self.rules.submit_tool} call"})
 
 
 __all__ = ["TurnFinisher"]

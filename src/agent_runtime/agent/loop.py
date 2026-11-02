@@ -36,7 +36,7 @@ from agent_runtime.agent.tool_error_budget import (
     SameToolErrorBudget,
     resolve_max_retries,
 )
-from agent_runtime.agent.verification import SUBMIT_TOOL, has_source_edit
+from agent_runtime.agent.verification import has_source_edit
 from agent_runtime.agent.context import request_view_size
 from agent_runtime.agent.turn_collaborators import TurnCollaborators
 from agent_runtime.agent.turn_failure import TurnFailure
@@ -227,7 +227,7 @@ class AgentTurn:
                 raise TurnFailure(error) from exc
 
             outcomes = classify_tool_calls(tool_calls, tools.schemas)
-            # A submit_result call is a finish attempt, not work: other
+            # A submit call is a finish attempt, not work: other
             # calls in the same turn still execute first, then the first
             # submission is validated against the updated history.
             submit_args = self.finisher.take_submit_arguments(outcomes)
@@ -239,7 +239,7 @@ class AgentTurn:
             reasoning_content = response.get("reasoning_content")
             if reasoning_content:
                 assistant_message["reasoning_content"] = reasoning_content
-            # A submit_result call is a finish request, not work: it is
+            # A submit call is a finish request, not work: it is
             # never executed (see _dispatch_tools), so it must not enter
             # the history as a tool call — otherwise the next request
             # carries an assistant tool_calls entry with no following
@@ -247,9 +247,10 @@ class AgentTurn:
             # ("must be followed by tool messages").
             canonical_calls = canonical_tool_calls(outcomes)
             if submit_args is not None:
+                submit_tool = self.finisher.rules.submit_tool
                 submit_ids = {outcome.validated.id for outcome in outcomes
                               if outcome.validated is not None
-                              and outcome.validated.name == SUBMIT_TOOL}
+                              and outcome.validated.name == submit_tool}
                 canonical_calls = [call for call in canonical_calls
                                    if call["id"] not in submit_ids]
             if canonical_calls:
@@ -283,16 +284,17 @@ class AgentTurn:
                               error_budget: SameToolErrorBudget) -> str | None:
         """Execute this iteration's tool calls in order; ``None`` lets it on.
 
-        A validated submit_result call is skipped here — it is a finish
+        A validated submit call is skipped here — it is a finish
         attempt, validated against the updated history afterwards. A
         returned string is a guard stop (same-tool error budget) for the
         caller to return as the turn's answer.
         """
         events, trace = self.events, self.trace
         tools, harness = self.tools, self.harness
+        submit_tool = self.finisher.rules.submit_tool
         for outcome in outcomes:
             if (submit_args is not None and outcome.validated is not None
-                    and outcome.validated.name == SUBMIT_TOOL):
+                    and outcome.validated.name == submit_tool):
                 continue  # finish attempt, validated below
             tool_call = outcome.tool_call
             tool_meta = _tool_trace_metadata(tool_call)
@@ -306,7 +308,7 @@ class AgentTurn:
             if outcome.rejection is not None:
                 observation = self._reject_tool_call(outcome, iteration)
                 history.append(observation)
-                if payload["tool"] == SUBMIT_TOOL:
+                if payload["tool"] == submit_tool:
                     # Malformed finish attempt, not work: no reset.
                     self.finisher.note_finish_violation(iteration)
                 stop = self._check_error_budget(
@@ -422,18 +424,19 @@ class AgentTurn:
         )
         if not triggered:
             return
-        edited = has_source_edit(history.messages)
+        rules = self.finisher.rules
+        edited = has_source_edit(history.messages, rules)
         remaining = self.max_iterations - iteration
+        edit_tools = ", ".join(sorted(rules.edit_tools)) or "the edit tools"
         history.append({
             "role": "user",
             "content": (
                 f"Budget {iteration}/{self.max_iterations} "
                 f"({remaining} left). Source edit so far: {edited}. "
                 "Close the loop: 1) make >=1 source edit with the right tool "
-                "(edit_file default single-point, apply_patch only for atomic "
-                "multi-hunk, write_file new/full rewrite), "
+                f"({edit_tools}), "
                 "2) run a FILE-LEVEL test command naming test files, "
-                "3) submit_result with that exact command."
+                f"3) call {rules.submit_tool} with that exact command."
             ),
         })
         self.trace.emit("budget.reminder", iteration,

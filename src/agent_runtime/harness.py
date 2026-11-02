@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
 from functools import lru_cache
@@ -232,6 +233,16 @@ class RecoveryGenome:
         default_factory=_default_llm_errors)
 
 
+# Defaults for the submission contract.  Tool names and the test-target
+# pattern are genes because deployments may add write tools, rename the
+# submit tool, or verify a non-Python repository.
+DEFAULT_SUBMIT_TOOL = "submit_result"
+DEFAULT_EDIT_TOOLS: tuple[str, ...] = (
+    "edit_file", "apply_patch", "write_file")
+DEFAULT_TEST_TARGET_PATTERN = (
+    r"[\w\-/]+\.(?:py|sh)\b|tests?/[\w\-/.]+|test_[\w\-/]+")
+
+
 @dataclass(frozen=True)
 class VerificationGenome:
     """Return-contract gate enforced at the turn boundary, not in the loop.
@@ -249,9 +260,10 @@ class VerificationGenome:
     fences or trailing prose), exit 0 accepts, anything else rejects as
     a ``command_to_verify`` gap with the rerun output quoted.
     ``task_result`` mode (code-v13) moves the declaration into the
-    ``submit_result`` tool: finishing requires one call with all three
-    parameters as typed arguments — no answer-string parsing — while the
-    same shape/grounding pipeline validates the submission. Which
+    configured submit tool (``submit_result`` by default): finishing
+    requires one call with all three parameters as typed arguments — no
+    answer-string parsing — while the same shape/grounding pipeline
+    validates the submission. Which
     command counts as the verify command is the model's call per task
     (prompt contract: whatever runner this repo uses, declared exactly as
     run). A declared command is always re-executed verbatim via
@@ -267,6 +279,9 @@ class VerificationGenome:
     enabled: bool = False
     mode: str = "off"
     require: tuple[str, ...] = ()
+    submit_tool: str = DEFAULT_SUBMIT_TOOL
+    edit_tools: tuple[str, ...] = DEFAULT_EDIT_TOOLS
+    test_target_pattern: str = DEFAULT_TEST_TARGET_PATTERN
 
 
 VERIFICATION_MODES: tuple[str, ...] = ("off", "return_contract", "task_result")
@@ -318,7 +333,10 @@ class HarnessSpec:
                        "retrieval_exempt_tools":
                            list(self.context.retrieval_exempt_tools)},
             "recovery": asdict(self.recovery),
-            "verification": asdict(self.verification),
+            "verification": {
+                **asdict(self.verification),
+                "edit_tools": list(self.verification.edit_tools),
+            },
             "skills": list(self.skills),
         }
 
@@ -584,7 +602,9 @@ def _verification_genome(data: Mapping[str, Any]) -> VerificationGenome:
     if not isinstance(section, Mapping):
         raise HarnessError("verification must be a mapping")
     _check_keys(section, {"enabled", "mode", "require",
-                          "rerun_declared_command"}, "verification")
+                          "rerun_declared_command", "submit_tool",
+                          "edit_tools", "test_target_pattern"},
+                "verification")
     # Legacy (code-v10..v12): accepted so old manifests load for lineage,
     # otherwise ignored — since code-v13 a declared command is always
     # re-executed, no flag needed.
@@ -609,8 +629,24 @@ def _verification_genome(data: Mapping[str, Any]) -> VerificationGenome:
         require.append(item.strip())
     if mode in ("return_contract", "task_result") and not require:
         require = list(DEFAULT_VERIFICATION_REQUIRE)
+    submit_tool = _required_text(section, "submit_tool", "verification",
+                                 DEFAULT_SUBMIT_TOOL)
+    edit_tools = (DEFAULT_EDIT_TOOLS if "edit_tools" not in section
+                  else _name_list(section, "edit_tools", "verification"))
+    test_target_pattern = _required_text(
+        section, "test_target_pattern", "verification",
+        DEFAULT_TEST_TARGET_PATTERN)
+    try:
+        re.compile(test_target_pattern)
+    except re.error as exc:
+        raise HarnessError(
+            "verification.test_target_pattern must be a valid regular "
+            f"expression: {exc}") from exc
     return VerificationGenome(enabled=enabled, mode=mode,
-                              require=tuple(require))
+                              require=tuple(require),
+                              submit_tool=submit_tool,
+                              edit_tools=tuple(edit_tools),
+                              test_target_pattern=test_target_pattern)
 
 
 def from_dict(data: Mapping[str, Any]) -> HarnessSpec:
@@ -841,6 +877,8 @@ __all__ = [
     "DEFAULT_USER_PRESERVE_BUDGET", "DEFAULT_SUMMARY_MAX_TOKENS",
     "DEFAULT_SUMMARIZER_INPUT_CAP_CHARS",
     "DEFAULT_RETRIEVAL_EXEMPT_TOOLS",
+    "DEFAULT_SUBMIT_TOOL", "DEFAULT_EDIT_TOOLS",
+    "DEFAULT_TEST_TARGET_PATTERN",
     "default_harness", "feed_error_and_continue",
     "from_dict", "load_harness", "load_named_harness", "manifest_candidates",
     "resolve_harness", "_main",
