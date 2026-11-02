@@ -16,20 +16,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from agent_runtime.execution.base import Workspace
+from agent_runtime.execution.base import Workspace, error_text
 from agent_runtime.execution.local import LocalWorkspace
 from agent_runtime.tools.edit_match import MatchError, apply_edit
 from agent_runtime.tools.syntax_gate import syntax_error
-
-
-def _error_text(error: Any) -> str:
-    """Best-effort one-line rendering of a structured workspace error."""
-    if isinstance(error, Mapping):
-        message = error.get("message", error)
-        err_type = error.get("type")
-        detail = str(message) if not isinstance(message, str) else message
-        return f"{err_type}: {detail}" if err_type else detail
-    return str(error)
 
 
 def _validate_edits(edits: Any) -> list[dict[str, str]]:
@@ -72,7 +62,7 @@ async def apply_patch(path: str, edits: list[dict[str, str]], *,
     if "error" in read:
         raise ValueError(
             f"apply_patch: cannot read file {path!r}: "
-            f"{_error_text(read['error'])}")
+            f"{error_text(read['error'])}")
 
     content = read["content"]
     match_modes: list[str] = []  # per-edit, in order; audit trail
@@ -94,7 +84,7 @@ async def apply_patch(path: str, edits: list[dict[str, str]], *,
     if "error" in written:
         raise ValueError(
             f"apply_patch: cannot write file {path!r}: "
-            f"{_error_text(written['error'])}")
+            f"{error_text(written['error'])}")
 
     return {
         "path": path,

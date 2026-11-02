@@ -233,21 +233,15 @@ async def execute_code(code: str, language: str = "python",
     ws = workspace or LocalWorkspace()
     ex = executor or LocalShellExecutor()
     if language not in LANGUAGES:
-        return {"stdout": "", "stderr": "", "exit_code": None,
-                "duration": 0.0,
-                "error": {"type": "UnsupportedLanguage",
-                          "message": f"unsupported language: {language!r} "
-                                     f"(choose from {sorted(LANGUAGES)})"},
-                "language": language}
+        raise ValueError(
+            f"execute_code: unsupported language: {language!r} "
+            f"(choose from {sorted(LANGUAGES)})")
 
     if path is not None:
         script, reason = validate_script_path(path, ws.root)
         if reason is not None or script is None:
-            return {"stdout": "", "stderr": "", "exit_code": None,
-                    "duration": 0.0,
-                    "error": {"type": "InvalidPath",
-                              "message": reason or "invalid path"},
-                    "script_path": path, "language": language}
+            raise ValueError(
+                f"execute_code: {reason or 'invalid script path'}")
         written = await ws.write_file(script, code)
     else:
         async with _SCRIPT_LOCK:

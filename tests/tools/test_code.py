@@ -75,12 +75,9 @@ class ExecuteCodeTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             registry = make_registry(directory)
 
-            result = await registry.execute("execute_code", {
-                "code": "print('x')\n", "path": "analysis/run.py"})
-
-        self.assertEqual(result["error"]["type"], "InvalidPath")
-        self.assertIn("must be under .scripts/", result["error"]["message"])
-        self.assertNotIn("escapes", result["error"]["message"])
+            with self.assertRaisesRegex(ValueError, "must be under .scripts/"):
+                await registry.execute("execute_code", {
+                    "code": "print('x')\n", "path": "analysis/run.py"})
 
     async def test_absolute_path_inside_root_is_relativized(self) -> None:
         import os
@@ -102,21 +99,17 @@ class ExecuteCodeTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             registry = make_registry(directory)
 
-            result = await registry.execute("execute_code", {
-                "code": "print('x')\n", "path": "/etc/scripts/evil.py"})
-
-        self.assertEqual(result["error"]["type"], "InvalidPath")
-        self.assertIn("escapes the workspace", result["error"]["message"])
+            with self.assertRaisesRegex(ValueError, "escapes the workspace"):
+                await registry.execute("execute_code", {
+                    "code": "print('x')\n", "path": "/etc/scripts/evil.py"})
 
     async def test_parent_escape_is_reported_as_escape(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             registry = make_registry(directory)
 
-            result = await registry.execute("execute_code", {
-                "code": "print('x')\n", "path": "../outside.py"})
-
-        self.assertEqual(result["error"]["type"], "InvalidPath")
-        self.assertIn("escapes the workspace", result["error"]["message"])
+            with self.assertRaisesRegex(ValueError, "escapes the workspace"):
+                await registry.execute("execute_code", {
+                    "code": "print('x')\n", "path": "../outside.py"})
 
     async def test_python_footgun_import_is_blocked(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -158,11 +151,9 @@ class ExecuteCodeTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             registry = make_registry(directory)
 
-            result = await registry.execute("execute_code", {
-                "code": "print('x')\n", "language": "cobol"})
-
-        self.assertEqual(result["error"]["type"], "UnsupportedLanguage")
-        self.assertIn("unsupported language", result["error"]["message"])
+            with self.assertRaisesRegex(ValueError, "unsupported language"):
+                await registry.execute("execute_code", {
+                    "code": "print('x')\n", "language": "cobol"})
 
     async def test_oversized_stdout_is_capped_at_source(self) -> None:
         # The executor caps each stream at MAX_OUTPUT_CHARS so a runaway

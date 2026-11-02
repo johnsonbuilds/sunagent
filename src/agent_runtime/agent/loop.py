@@ -14,7 +14,7 @@ from typing import Any
 
 from agent_runtime.agent.chat import (
     ChatModel,
-    _ReasoningBudgetExceeded,
+    ReasoningBudgetExceeded,
     chat_with_recovery,
     use_streaming,
 )
@@ -24,13 +24,13 @@ from agent_runtime.agent.tool_dispatch import (
     canonical_tool_calls,
     classify_tool_calls,
     validate_tool_call,
-    _rejected_observation_content,
-    _rejected_observation_message,
-    _tool_call_payload,
-    _tool_observation_message,
-    _tool_result_summary,
-    _tool_trace_metadata,
-    _trace_tool_rejection,
+    rejected_observation_content,
+    rejected_observation_message,
+    tool_call_payload,
+    tool_observation_message,
+    tool_result_summary,
+    tool_trace_metadata,
+    trace_tool_rejection,
 )
 from agent_runtime.agent.tool_error_budget import (
     SameToolErrorBudget,
@@ -43,7 +43,7 @@ from agent_runtime.agent.turn_failure import TurnFailure
 from agent_runtime.agent.turn_history import (
     Conversation,
     TurnHistory,
-    _ensure_system_prompt,
+    ensure_system_prompt,
 )
 from agent_runtime.memory import render_memory_block
 from agent_runtime.skills import (
@@ -153,7 +153,7 @@ class AgentTurn:
                                 harness=harness)
         skills_block = render_skills_block(skills)
         memory_view = render_memory_block(self.workspace)
-        inserted = _ensure_system_prompt(self.conversation, harness.prompt.system,
+        inserted = ensure_system_prompt(self.conversation, harness.prompt.system,
                               skills_block, memory_view.block)
         # Both blocks ride the single resident system message: only trace
         # what the model will actually see, so later turns in the same
@@ -193,15 +193,15 @@ class AgentTurn:
 
                     span_meta.update(
                         tool_count=len(tool_calls),
-                        tools=[_tool_trace_metadata(call).get("tool")
+                        tools=[tool_trace_metadata(call).get("tool")
                                for call in tool_calls],
                         final=not tool_calls,
                     )
                     logger.debug(
                         "llm.request.end iteration=%d content_chars=%d tool_calls=%s",
                         iteration, len(content),
-                        [_tool_trace_metadata(call).get("tool") for call in tool_calls])
-            except _ReasoningBudgetExceeded as exc:
+                        [tool_trace_metadata(call).get("tool") for call in tool_calls])
+            except ReasoningBudgetExceeded as exc:
                 # The model spiralled into thinking without acting. Append
                 # an assistant placeholder plus a nudge and retry on the
                 # next iteration (consuming one iteration of the budget) —
@@ -297,11 +297,11 @@ class AgentTurn:
                     and outcome.validated.name == submit_tool):
                 continue  # finish attempt, validated below
             tool_call = outcome.tool_call
-            tool_meta = _tool_trace_metadata(tool_call)
+            tool_meta = tool_trace_metadata(tool_call)
             logger.debug("tool.dispatch iteration=%d tool=%r tool_call_id=%r",
                          iteration, tool_meta.get("tool"),
                          tool_meta.get("tool_call_id"))
-            payload = _tool_call_payload(tool_call)
+            payload = tool_call_payload(tool_call)
             events.emit("tool.started", iteration, call_id=payload["call_id"],
                         tool=payload["tool"], arguments=payload["arguments"])
             tool_started = time.monotonic()
@@ -330,7 +330,7 @@ class AgentTurn:
                     iteration, validated.name, len(str(result)))
                 events.emit("tool.completed", iteration, call_id=payload["call_id"],
                             duration=round(time.monotonic() - tool_started, 3),
-                            **_tool_result_summary(result))
+                            **tool_result_summary(result))
             except Exception as exc:
                 logger.error("tool.error iteration=%d tool=%r error=%s",
                              iteration, validated.name, exc)
@@ -338,7 +338,7 @@ class AgentTurn:
                             tool=payload["tool"], error=str(exc))
                 observation = harness.tool_error_observation(
                     exc, tool=payload["tool"])
-                history.append(_tool_observation_message(tool_call, observation))
+                history.append(tool_observation_message(tool_call, observation))
                 self.finisher.note_work_executed()  # executed: new information
                 stop = self._check_error_budget(
                     error_budget, iteration, validated.name, exc)
@@ -348,7 +348,7 @@ class AgentTurn:
             rendered = await self.observations.render(result, validated.id)
             metadata = ({"spill_path": rendered.spill_path}
                         if rendered.spill_path else None)
-            history.append(_tool_observation_message(
+            history.append(tool_observation_message(
                 tool_call, rendered.text, metadata))
             error_budget.note_success()
             self.finisher.note_work_executed()  # executed work resets the fuse
@@ -383,7 +383,7 @@ class AgentTurn:
                 span_meta.update(tool_count=0, tools=[], final=True)
                 logger.debug("llm.request.end iteration=%d content_chars=%d tool_calls=[]",
                              iteration, len(response.get("content") or ""))
-        except _ReasoningBudgetExceeded as exc:
+        except ReasoningBudgetExceeded as exc:
             # The forced summary turn has no tools, so nudging makes no
             # sense; surface the partial reasoning as the final answer
             # instead of failing the whole task at the finish line.
@@ -481,17 +481,17 @@ class AgentTurn:
         tool_call = outcome.tool_call
         rejection = outcome.rejection
         assert rejection is not None
-        payload = _tool_call_payload(tool_call)
+        payload = tool_call_payload(tool_call)
         logger.error("tool.error iteration=%d tool=%r error=%s",
                      iteration, payload["tool"], rejection)
-        _trace_tool_rejection(self.trace, iteration,
-                              _tool_trace_metadata(tool_call), rejection)
+        trace_tool_rejection(self.trace, iteration,
+                              tool_trace_metadata(tool_call), rejection)
         self.events.emit("tool.failed", iteration, call_id=payload["call_id"],
                          tool=payload["tool"], error=str(rejection))
-        observation = _rejected_observation_content(
+        observation = rejected_observation_content(
             tool_call,
             self.harness.tool_error_observation(rejection, tool=payload["tool"]))
-        return _rejected_observation_message(tool_call, observation)
+        return rejected_observation_message(tool_call, observation)
 
 
 __all__ = [

@@ -8,11 +8,10 @@ to ``ShellExecutor``.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from pathlib import PurePosixPath
 from typing import Any
 
-from agent_runtime.execution.base import Workspace
+from agent_runtime.execution.base import Workspace, error_text
 from agent_runtime.execution.local import LocalWorkspace
 from agent_runtime.tools.code import OUTPUTS_DIR
 from agent_runtime.tools.edit_match import MatchError, apply_edit
@@ -20,22 +19,6 @@ from agent_runtime.tools.syntax_gate import syntax_error
 
 
 DEFAULT_READ_LIMIT = 2000
-
-
-def _error_text(error: Any) -> str:
-    """Best-effort one-line rendering of a structured workspace error.
-
-    Same helper as tools.patch: keeps the factual wording identical
-    (``cannot read file 'x': FileNotFoundError: ...``) while the
-    transport is unified to ``raise ValueError`` so the loop's error
-    budget sees every model-fixable failure.
-    """
-    if isinstance(error, Mapping):
-        message = error.get("message", error)
-        err_type = error.get("type")
-        detail = str(message) if not isinstance(message, str) else message
-        return f"{err_type}: {detail}" if err_type else detail
-    return str(error)
 
 
 async def write_file(path: str, content: str, *,
@@ -62,14 +45,14 @@ async def read_output(path: str, offset: int = 1,
     Companion to the observation spiller: when a tool result exceeds the
     transcript budget, its full text lands in ``.outputs/`` and the model
     pages through it here instead of re-running the tool.  Paths outside
-    ``.outputs/`` are rejected.
+    ``.outputs/`` raise ``ValueError`` (model-fixable input, so the loop
+    error budget sees it).
     """
     candidate = PurePosixPath(path)
     if (candidate.is_absolute() or ".." in candidate.parts
             or not candidate.parts or candidate.parts[0] != OUTPUTS_DIR):
-        return {"path": path,
-                "error": {"type": "InvalidPath",
-                          "message": f"read_output only reads files under {OUTPUTS_DIR}/"}}
+        raise ValueError(
+            f"read_output only reads files under {OUTPUTS_DIR}/")
     return await (workspace or LocalWorkspace()).read_file(path, offset, limit)
 
 
@@ -98,7 +81,7 @@ async def edit_file(path: str, old_str: str, new_str: str, *,
     if "error" in read:
         raise ValueError(
             f"edit_file: cannot read file {path!r}: "
-            f"{_error_text(read['error'])}")
+            f"{error_text(read['error'])}")
     content = read["content"]
     try:
         updated, mode = apply_edit(content, old_str, new_str)
@@ -113,7 +96,7 @@ async def edit_file(path: str, old_str: str, new_str: str, *,
     if "error" in written:
         raise ValueError(
             f"edit_file: cannot write file {path!r}: "
-            f"{_error_text(written['error'])}")
+            f"{error_text(written['error'])}")
     return {"path": path, "occurrences_replaced": 1, "match_mode": mode,
             "bytes_written": written["bytes_written"]}
 

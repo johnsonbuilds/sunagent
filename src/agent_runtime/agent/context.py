@@ -105,7 +105,7 @@ def _is_summary_message(message: dict[str, Any]) -> bool:
             and str(message.get("content", "")).startswith(SUMMARY_PREFIX))
 
 
-def _extract_summary(view: list[dict[str, Any]] | None) -> str | None:
+def extract_summary(view: list[dict[str, Any]] | None) -> str | None:
     """The previous compaction summary text carried in a request view."""
     if not view:
         return None
@@ -115,7 +115,7 @@ def _extract_summary(view: list[dict[str, Any]] | None) -> str | None:
     return None
 
 
-def _reasoning_replayed() -> bool:
+def reasoning_replayed() -> bool:
     """Whether reasoning_content rides the wire for the configured endpoint.
 
     Budget accounting must match the wire (providers/llm.py projection):
@@ -142,7 +142,7 @@ def _message_chars(message: dict[str, Any],
     return total
 
 
-def _total_chars(messages: list[dict[str, Any]],
+def total_chars(messages: list[dict[str, Any]],
                  count_reasoning: bool = True) -> int:
     return sum(_message_chars(message, count_reasoning)
                for message in messages)
@@ -167,9 +167,9 @@ def _view_size(messages: list[dict[str, Any]], count_reasoning: bool,
     accumulate.
     """
     if unit != "tokens":
-        return _total_chars(messages, count_reasoning)
+        return total_chars(messages, count_reasoning)
     if anchor is None:
-        return _estimate_tokens(_total_chars(messages, count_reasoning))
+        return _estimate_tokens(total_chars(messages, count_reasoning))
     tokens, anchor_len, anchor_chars = anchor
     ratio = tokens / anchor_chars if anchor_chars > 0 else 0.25
     if len(messages) == anchor_len:
@@ -179,8 +179,8 @@ def _view_size(messages: list[dict[str, Any]], count_reasoning: bool,
     if len(messages) < anchor_len:
         # View only shrank since the measurement: scale the measured
         # number down by the calibrated ratio.
-        return max(1, int(_total_chars(messages, count_reasoning) * ratio))
-    tail_chars = _total_chars(messages[anchor_len:], count_reasoning)
+        return max(1, int(total_chars(messages, count_reasoning) * ratio))
+    tail_chars = total_chars(messages[anchor_len:], count_reasoning)
     return tokens + int(tail_chars * ratio)
 
 
@@ -197,7 +197,7 @@ def _anchor_chars_per_token(anchor: tuple[int, int, int] | None) -> float:
 def request_view_size(view: list[dict[str, Any]], context: ContextGenome,
                       usage_anchor: tuple[int, int, int] | None = None) -> int:
     """Request-view size in the genome's unit, for gate decisions."""
-    return _view_size(view, _reasoning_replayed(), context.budget_unit,
+    return _view_size(view, reasoning_replayed(), context.budget_unit,
                       usage_anchor)
 
 
@@ -307,12 +307,12 @@ def compact_observations(messages: list[dict[str, Any]], *,
        from the budget.
 
     Reasoning chars count toward ``budget`` only when the echo policy
-    will actually replay them on the wire (see :func:`_reasoning_replayed`
+    will actually replay them on the wire (see :func:`reasoning_replayed`
     — the single source of truth).  Below budget the original list is
     returned unchanged.
     """
-    count = _reasoning_replayed()
-    if _total_chars(messages, count) <= budget:
+    count = reasoning_replayed()
+    if total_chars(messages, count) <= budget:
         return messages
     starts = _round_starts(messages)
     if not starts:
@@ -364,7 +364,7 @@ def compact_observations(messages: list[dict[str, Any]], *,
     # until the budget is met or only the keep-recent core remains.
     # Exempt observations keep surviving this pass.
     cutoff = window_cutoff
-    while (_total_chars(result, count) > budget
+    while (total_chars(result, count) > budget
            and cutoff < never_touch_from_round):
         cutoff += 1
         result, compacted_any = _compact_at(cutoff)
@@ -375,7 +375,7 @@ def compact_observations(messages: list[dict[str, Any]], *,
     # The exemption is a fold ORDER (retrieval anchors fold last), not
     # an exemption from the budget; keep_recent_rounds still yields
     # nothing (the budget yields to the working core, as before).
-    if exempt and _total_chars(result, count) > budget:
+    if exempt and total_chars(result, count) > budget:
         result, compacted_any = _compact_at(cutoff, fold_exempt=True)
     return result
 
@@ -405,7 +405,7 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
     strategy logic.
 
     Reasoning chars are budgeted only when the echo policy will replay
-    them on the wire (see :func:`_reasoning_replayed`).
+    them on the wire (see :func:`reasoning_replayed`).
     """
     strategy = context.strategy
     if strategy == STRATEGY_FULL_HISTORY:
@@ -413,7 +413,7 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
     if strategy not in (STRATEGY_COMPACT_OBSERVATIONS, STRATEGY_LLM_SUMMARY):
         raise ValueError(f"unknown context strategy: {strategy!r}")
 
-    count = _reasoning_replayed()
+    count = reasoning_replayed()
     unit = context.budget_unit
     # force_budget (context-window hard gate) must push below the size the
     # provider just rejected, so it wins whenever it is the tighter bound.
@@ -437,7 +437,7 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
                                       head_chars=context.head_chars,
                                       exempt_tools=context.retrieval_exempt_tools)
     else:  # STRATEGY_LLM_SUMMARY
-        previous_summary = _extract_summary(working)
+        previous_summary = extract_summary(working)
         result = await summarize_history(
             messages, budget=budget,
             tail_rounds=context.summary_tail_rounds,
@@ -475,12 +475,12 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
 
     if trace is not None and result is not working and result is not messages:
         trace.emit(f"context.{strategy}", iteration,
-                   original_chars=_total_chars(messages, count),
-                   request_chars=_total_chars(result, count),
+                   original_chars=total_chars(messages, count),
+                   request_chars=total_chars(result, count),
                    original_count=len(messages),
                    request_count=len(result),
                    budget_unit=unit, budget=budget)
-        summary = _extract_summary(result)
+        summary = extract_summary(result)
         if summary is not None:
             # The summary text lives on the trace (per-run, queryable)
             # instead of a shared on-disk file.
@@ -633,7 +633,7 @@ async def summarize_history(messages: list[dict[str, Any]], *,
     Observability: the summary text is emitted on ``trace`` (per-run)
     rather than written to a shared file.
     """
-    count = _reasoning_replayed()
+    count = reasoning_replayed()
     if unit == "tokens":
         chars_per_token = _anchor_chars_per_token(usage_anchor)
         char_budget = int((budget or DEFAULT_CONTEXT_BUDGET) * chars_per_token)
@@ -654,7 +654,7 @@ async def summarize_history(messages: list[dict[str, Any]], *,
     # function itself would put it — right before the first round.  Such
     # a message is a machine snapshot, not user speech: filtering it from
     # ``leading`` keeps it from being copied into the new view (where
-    # ``_extract_summary`` would then return the stale text first and
+    # ``extract_summary`` would then return the stale text first and
     # freeze the incremental boundary), and filtering it from ``segment``
     # keeps it out of both the summarizer input and the user-preserve
     # pool.  ``tail`` needs no filter: the snapshot position is always
@@ -710,7 +710,7 @@ async def summarize_history(messages: list[dict[str, Any]], *,
 
     summary: str | None = None
     used_capped_input = False
-    full_input_chars = _total_chars(summarizer_input, count)
+    full_input_chars = total_chars(summarizer_input, count)
     for attempt in (1, 2):
         attempt_input = summarizer_input
         if attempt == 2 and full_input_chars > DEFAULT_SUMMARIZER_INPUT_CAP_CHARS:
@@ -737,7 +737,7 @@ async def summarize_history(messages: list[dict[str, Any]], *,
                 trace.emit("context.llm_summary.error", iteration,
                            error=str(exc)[:500], error_type=type(exc).__name__,
                            summarizer_input_chars=full_input_chars,
-                           summarizer_input_chars_capped=_total_chars(
+                           summarizer_input_chars_capped=total_chars(
                                attempt_input, count),
                            input_capped=used_capped_input,
                            summarizer_input_count=len(summarizer_input),
@@ -763,7 +763,7 @@ async def summarize_history(messages: list[dict[str, Any]], *,
                            reason=str(exc)[:500], attempt=attempt,
                            summary_chars=len(summary or ""),
                            summarizer_input_chars=full_input_chars,
-                           summarizer_input_chars_capped=_total_chars(
+                           summarizer_input_chars_capped=total_chars(
                                attempt_input, count),
                            input_capped=used_capped_input,
                            summarizer_input_count=len(summarizer_input),
@@ -794,7 +794,7 @@ __all__ = [
     "STRATEGY_COMPACT_OBSERVATIONS", "STRATEGY_FULL_HISTORY", "STRATEGY_LLM_SUMMARY",
     "SUMMARY_PREFIX", "SUMMARIZER_INSTRUCTION", "request_view_size",
     "apply_context_strategy", "apply_memory_strategy", "compact_observations", "set_summary_llm",
-    "summarize_history",
+    "summarize_history", "extract_summary", "reasoning_replayed", "total_chars",
 ]
 
 

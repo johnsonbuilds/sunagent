@@ -44,7 +44,7 @@ def _schema_for_tool(schemas: list[dict[str, Any]], name: str) -> Mapping[str, A
     return None
 
 
-def _available_tools_hint(schemas: list[dict[str, Any]]) -> str:
+def available_tools_hint(schemas: list[dict[str, Any]]) -> str:
     """Factual one-line catalog of registered tools, built from schemas.
 
     Programmatic (never hand-written) so it cannot go stale when tools
@@ -98,7 +98,7 @@ def validate_tool_call(tool_call: Any, schemas: list[dict[str, Any]]) -> Validat
     if schema is None:
         raise ValueError(
             f"unknown tool: {name}. "
-            f"Available tools: {_available_tools_hint(schemas)}.")
+            f"Available tools: {available_tools_hint(schemas)}.")
 
     raw_arguments = function.get("arguments") or "{}"
     if not isinstance(raw_arguments, str):
@@ -166,7 +166,7 @@ def canonical_tool_calls(outcomes: list[ToolCallOutcome]) -> list[dict[str, Any]
             for outcome in outcomes if outcome.validated is not None]
 
 
-def _tool_observation_message(tool_call: Any, content: str,
+def tool_observation_message(tool_call: Any, content: str,
                               metadata: dict[str, Any] | None = None
                               ) -> dict[str, Any]:
     """Build the observation message for a tool call's outcome.
@@ -189,14 +189,14 @@ def _tool_observation_message(tool_call: Any, content: str,
     }
 
 
-def _rejected_observation_content(tool_call: Any, observation: str) -> str:
+def rejected_observation_content(tool_call: Any, observation: str) -> str:
     """Name the rejected tool so the model can retry the corrected call."""
-    tool = _tool_call_payload(tool_call).get("tool")
+    tool = tool_call_payload(tool_call).get("tool")
     name = tool if isinstance(tool, str) and tool else "an unknown tool"
     return f"Tool call to {name} was rejected and not executed. {observation}"
 
 
-def _rejected_observation_message(tool_call: Any, content: str) -> dict[str, Any]:
+def rejected_observation_message(tool_call: Any, content: str) -> dict[str, Any]:
     """Build the observation message for a tool call rejected before execution.
 
     The rejected call never enters the conversation history, so the observation
@@ -211,7 +211,7 @@ def _rejected_observation_message(tool_call: Any, content: str) -> dict[str, Any
     return {"role": "user", "content": f"{content} {retry}"}
 
 
-def _trace_tool_rejection(trace: RunTrace, iteration: int,
+def trace_tool_rejection(trace: RunTrace, iteration: int,
                           tool_meta: dict[str, Any], error: Exception) -> None:
     """Record a rejected tool call with the normal tool span lifecycle."""
     trace.emit("tool.start", iteration, **tool_meta)
@@ -221,7 +221,7 @@ def _trace_tool_rejection(trace: RunTrace, iteration: int,
     trace.emit("tool.end", iteration, **end_meta)
 
 
-def _tool_trace_metadata(tool_call: Any) -> dict[str, Any]:
+def tool_trace_metadata(tool_call: Any) -> dict[str, Any]:
     """Return identifiers without copying the model's full tool payload."""
     if not isinstance(tool_call, Mapping):
         return {}
@@ -241,7 +241,7 @@ def _tail_text(text: Any, limit: int = 2000) -> str:
     return "..." + value[-limit:]
 
 
-def _tool_call_payload(tool_call: Any) -> dict[str, Any]:
+def tool_call_payload(tool_call: Any) -> dict[str, Any]:
     """Best-effort user-facing view of an untrusted tool call."""
     if not isinstance(tool_call, Mapping):
         return {"tool": None, "call_id": None, "arguments": str(tool_call)}
@@ -259,7 +259,7 @@ def _tool_call_payload(tool_call: Any) -> dict[str, Any]:
     return {"tool": name, "call_id": tool_call.get("id"), "arguments": arguments}
 
 
-def _tool_result_summary(result: Any) -> dict[str, Any]:
+def tool_result_summary(result: Any) -> dict[str, Any]:
     """Summarize a tool result for user-facing events."""
     if isinstance(result, Mapping) and "exit_code" in result and "stdout" in result:
         summary: dict[str, Any] = {
@@ -277,7 +277,15 @@ def _tool_result_summary(result: Any) -> dict[str, Any]:
 __all__ = [
     "ToolCallOutcome",
     "ValidatedToolCall",
+    "available_tools_hint",
     "canonical_tool_calls",
     "classify_tool_calls",
+    "rejected_observation_content",
+    "rejected_observation_message",
+    "tool_call_payload",
+    "tool_observation_message",
+    "tool_result_summary",
+    "tool_trace_metadata",
+    "trace_tool_rejection",
     "validate_tool_call",
 ]

@@ -10,6 +10,7 @@ whose ``line`` numbers line up with ``read_file``'s ``offset`` paging.
 from __future__ import annotations
 
 import fnmatch
+import logging
 import posixpath
 import re
 from typing import Any
@@ -27,6 +28,9 @@ from agent_runtime.execution.base import (
     matches_path,
 )
 from agent_runtime.execution.local import LocalWorkspace
+
+
+logger = logging.getLogger(__name__)
 
 
 async def walk_files(workspace: Workspace, path: str = ".",
@@ -86,10 +90,11 @@ async def grep_search(pattern: str, path: str = ".",
         except ValueError:
             raise
         except Exception as exc:
-            return {"pattern": pattern, "path": path,
-                    "error": {"type": type(exc).__name__, "message": str(exc)}}
-        if outcome is not None:
-            return outcome
+            logger.warning("grep_search: fast search failed, falling back: %s",
+                           exc)
+        else:
+            if outcome is not None:
+                return outcome
     files = await walk_files(ws, path)
     if isinstance(files, dict):
         return {"pattern": pattern, "path": path, **files}
@@ -159,10 +164,11 @@ async def find_files(pattern: str, path: str = ".",
         except ValueError:
             raise
         except Exception as exc:
-            return {"pattern": pattern, "path": path,
-                    "error": {"type": type(exc).__name__, "message": str(exc)}}
-        if outcome is not None:
-            return outcome
+            logger.warning("find_files: fast search failed, falling back: %s",
+                           exc)
+        else:
+            if outcome is not None:
+                return outcome
     files = await walk_files(ws, path)
     if isinstance(files, dict):
         return {"pattern": pattern, "path": path, **files}

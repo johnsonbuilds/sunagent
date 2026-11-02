@@ -8,7 +8,7 @@ import os
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from typing import Any, Protocol
 
-from agent_runtime.agent.tool_dispatch import _tool_trace_metadata
+from agent_runtime.agent.tool_dispatch import tool_trace_metadata
 from agent_runtime.events import EventEmitter
 from agent_runtime.harness import HarnessSpec
 from agent_runtime.trace import RunTrace
@@ -40,7 +40,7 @@ def _reasoning_budget_chars() -> int | None:
     return budget if budget > 0 else None
 
 
-class _ReasoningBudgetExceeded(RuntimeError):
+class ReasoningBudgetExceeded(RuntimeError):
     """A thinking-only turn blew the reasoning budget; nudge and retry."""
 
     def __init__(self, reasoning_chars: int, budget: int) -> None:
@@ -51,19 +51,19 @@ class _ReasoningBudgetExceeded(RuntimeError):
         self.budget = budget
 
 
-class _StreamIdleTimeout(RuntimeError):
+class StreamIdleTimeout(RuntimeError):
     """No chunk arrived within the idle timeout."""
 
     llm_category = "stream_idle_timeout"
 
 
-class _StreamTruncated(RuntimeError):
+class StreamTruncated(RuntimeError):
     """The server closed the stream without a finish_reason marker."""
 
     llm_category = "stream_truncated"
 
 
-class _StreamEmpty(RuntimeError):
+class StreamEmpty(RuntimeError):
     """A clean stream that carried no content, reasoning, or tool calls."""
 
     llm_category = "stream_empty"
@@ -79,7 +79,7 @@ def _llm_error_category(exc: BaseException) -> str | None:
     category = getattr(exc, "llm_category", None)
     if isinstance(category, str):
         return category
-    if isinstance(exc, _ReasoningBudgetExceeded):
+    if isinstance(exc, ReasoningBudgetExceeded):
         return None
     return "provider_error"
 
@@ -144,7 +144,7 @@ async def _consume_stream(llm: ChatModel, messages: list[dict[str, Any]],
         except TimeoutError as exc:
             logger.error("llm.stream.timeout iteration=%d timeout_seconds=%s",
                          iteration, timeout)
-            raise _StreamIdleTimeout(
+            raise StreamIdleTimeout(
                 f"LLM stream produced no chunk for {timeout:g} seconds"
             ) from exc
         if not isinstance(chunk, Mapping):
@@ -182,7 +182,7 @@ async def _consume_stream(llm: ChatModel, messages: list[dict[str, Any]],
                     trace.emit("llm.reasoning_budget", iteration,
                                budget=reasoning_budget,
                                reasoning_chars=total_reasoning)
-                raise _ReasoningBudgetExceeded(total_reasoning,
+                raise ReasoningBudgetExceeded(total_reasoning,
                                                reasoning_budget)
         if text or reasoning_text:
             if events is not None:
@@ -212,11 +212,11 @@ async def _consume_stream(llm: ChatModel, messages: list[dict[str, Any]],
         # free-tier reasoning models after very long thinking). Treat the
         # truncated stream as a failed turn so it can be retried instead
         # of silently becoming an empty final answer.
-        raise _StreamTruncated(
+        raise StreamTruncated(
             "LLM stream ended without a finish_reason "
             "(stream may have been truncated by the server)")
     if not content and not reasoning and not tool_calls:
-        raise _StreamEmpty(
+        raise StreamEmpty(
             "LLM stream ended without any content, reasoning, or tool calls")
     return response
 
@@ -244,7 +244,7 @@ async def _chat_response(llm: ChatModel, messages: list[dict[str, Any]],
                                          trace=trace, events=events)
     if events is not None:
         events.emit("assistant.completed", iteration,
-                    tool_calls=[_tool_trace_metadata(call).get("tool")
+                    tool_calls=[tool_trace_metadata(call).get("tool")
                                 for call in response.get("tool_calls") or []])
     return response
 
@@ -305,10 +305,10 @@ async def chat_with_recovery(llm: ChatModel, messages: list[dict[str, Any]],
 
 __all__ = [
     "ChatModel",
-    "_ReasoningBudgetExceeded",
-    "_StreamEmpty",
-    "_StreamIdleTimeout",
-    "_StreamTruncated",
+    "ReasoningBudgetExceeded",
+    "StreamEmpty",
+    "StreamIdleTimeout",
+    "StreamTruncated",
     "chat_with_recovery",
     "use_streaming",
 ]

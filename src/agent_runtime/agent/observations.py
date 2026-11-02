@@ -80,7 +80,7 @@ def format_tool_result(result: Any) -> str:
 def _format_shell_result(result: Mapping[str, Any]) -> str:
     """One compact block per shell result; empty fields never render.
 
-    The model-facing counterpart of ``_tool_result_summary`` (which
+    The model-facing counterpart of ``tool_result_summary`` (which
     renders the same shape as structured event fields for the CLI).
     """
     lines: list[str] = []

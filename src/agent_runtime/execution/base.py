@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -26,6 +27,22 @@ def truncate_result(result: dict[str, Any]) -> dict[str, Any]:
     if not (t1 or t2):
         return result
     return {**result, "stdout": stdout, "stderr": stderr, "truncated": True}
+
+
+def error_text(error: Any) -> str:
+    """Render a structured workspace error as one factual line.
+
+    Workspaces report environmental failures as
+    ``{"error": {"type", "message"}}``.  Tool handlers that must raise
+    (because the failure is model-fixable) use this to keep the wording
+    identical across tools.
+    """
+    if isinstance(error, Mapping):
+        message = error.get("message", error)
+        error_type = error.get("type")
+        detail = str(message) if not isinstance(message, str) else message
+        return f"{error_type}: {detail}" if error_type else detail
+    return str(error)
 
 
 # Shared search/index constants: owned here so both the tools layer

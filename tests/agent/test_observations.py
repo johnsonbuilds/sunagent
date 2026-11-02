@@ -79,12 +79,12 @@ class ReadOutputTests(unittest.IsolatedAsyncioTestCase):
                                        "\n".join(f"line{i}" for i in range(1, 101)))
             page = await read_output(".outputs/obs-0001.txt", offset=2, limit=3,
                                      workspace=workspace)
-            rejected = await read_output("secret.txt", workspace=workspace)
-            escape = await read_output(".outputs/../../etc/passwd",
-                                       workspace=workspace)
+            with self.assertRaisesRegex(ValueError, "only reads files under"):
+                await read_output("secret.txt", workspace=workspace)
+            with self.assertRaisesRegex(ValueError, "only reads files under"):
+                await read_output(".outputs/../../etc/passwd",
+                                  workspace=workspace)
         self.assertEqual(page["content"], "line2\nline3\nline4")
-        self.assertIn("error", rejected)
-        self.assertIn("error", escape)
 
 
 class ObservationFormatterTests(unittest.IsolatedAsyncioTestCase):

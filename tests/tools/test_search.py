@@ -108,6 +108,33 @@ class GrepSearchTests(unittest.IsolatedAsyncioTestCase):
                 await registry.execute("grep_search", {"pattern": "[unclosed"})
 
 
+class BrokenFastPathWorkspace(LocalWorkspace):
+    """A workspace whose server-side search fails; tools must fall back."""
+
+    async def search_contents(self, pattern, path=".", include=None,
+                              ignore_case=False, max_results=200):
+        raise RuntimeError("server-side search unavailable")
+
+    async def find_paths(self, pattern, path=".", max_results=100):
+        raise RuntimeError("server-side find unavailable")
+
+
+class FastPathFallbackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_broken_fast_path_falls_back_to_the_walk(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            registry = create_default_registry(
+                workspace=BrokenFastPathWorkspace(directory),
+                enabled=SEARCH_TOOLS)
+            await registry.execute("write_file", {
+                "path": "a.py", "content": "needle\n"})
+
+            grep = await registry.execute("grep_search", {"pattern": "needle"})
+            found = await registry.execute("find_files", {"pattern": "*.py"})
+
+        self.assertEqual(grep["match_count"], 1)
+        self.assertEqual(found["matches"], ["a.py"])
+
+
 class FindFilesTests(unittest.IsolatedAsyncioTestCase):
     async def test_recursive_pattern_matches_nested_and_root(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

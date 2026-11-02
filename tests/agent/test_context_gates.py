@@ -86,25 +86,25 @@ class FakeSummaryLLM:
 class ViewSizeTests(unittest.TestCase):
     def test_chars_unit_counts_characters(self) -> None:
         messages = build_rounds(2, tool_chars=50)
-        from agent_runtime.agent.context import _total_chars
+        from agent_runtime.agent.context import total_chars
         self.assertEqual(_view_size(messages, False, "chars", None),
-                         _total_chars(messages, False))
+                         total_chars(messages, False))
 
     def test_no_anchor_estimates_by_ratio(self) -> None:
         messages = build_rounds(2, tool_chars=50)
-        total_chars = _view_size(messages, False, "chars", None)
+        view_chars = _view_size(messages, False, "chars", None)
         estimated = _view_size(messages, False, "tokens", None)
-        self.assertAlmostEqual(estimated, total_chars / 4, delta=1)
+        self.assertAlmostEqual(estimated, view_chars / 4, delta=1)
 
     def test_anchor_measures_below_and_estimates_above(self) -> None:
         messages = build_rounds(4, tool_chars=1_000)
-        total_chars = _view_size(messages, False, "chars", None)
-        anchor = (5_000, len(messages), total_chars)  # fully measured
+        view_chars = _view_size(messages, False, "chars", None)
+        anchor = (5_000, len(messages), view_chars)  # fully measured
         self.assertEqual(_view_size(messages, False, "tokens", anchor), 5_000)
         # grow the view: only the tail is estimated, at the anchor ratio
         grown = messages + build_rounds(1, tool_chars=400)[2:]
         tail_chars = _view_size(grown[len(messages):], False, "chars", None)
-        expected = 5_000 + int(tail_chars * 5_000 / total_chars)
+        expected = 5_000 + int(tail_chars * 5_000 / view_chars)
         self.assertEqual(_view_size(grown, False, "tokens", anchor), expected)
 
     def test_anchor_ratio_helper(self) -> None:

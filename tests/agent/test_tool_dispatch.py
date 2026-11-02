@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
 
 from agent_runtime.agent.turn_factory import run_turn
 from agent_runtime.agent.tool_dispatch import (
-    _available_tools_hint,
+    available_tools_hint,
     classify_tool_calls,
     validate_tool_call,
 )
@@ -39,13 +39,13 @@ class UnknownToolHintTests(unittest.TestCase):
             self.assertIn(tool, message)
 
     def test_hint_contains_no_guessing(self) -> None:
-        hint = _available_tools_hint(_schemas())
+        hint = available_tools_hint(_schemas())
         self.assertNotIn("did you mean", hint.lower())
-        self.assertNotIn("grep_search", _available_tools_hint([]))
+        self.assertNotIn("grep_search", available_tools_hint([]))
 
     def test_hint_follows_registry_not_hardcoded_list(self) -> None:
         schemas = _schemas()
-        hint = _available_tools_hint(schemas)
+        hint = available_tools_hint(schemas)
         names = [s["function"]["name"] for s in schemas]
         for name in names:
             self.assertIn(name, hint)

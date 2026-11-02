@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
 from agent_runtime.agent.turn_factory import run_turn
 from agent_runtime.agent.turn_history import (
     Conversation,
-    _ensure_system_prompt,
+    ensure_system_prompt,
 )
 from agent_runtime.harness import HarnessError, from_dict, resolve_harness
 from agent_runtime.skills import (
@@ -118,28 +118,28 @@ class SkillLoadingTests(unittest.TestCase):
 class EnsureSystemPromptTests(unittest.TestCase):
     def test_system_and_block_combine(self) -> None:
         conversation = Conversation()
-        inserted = _ensure_system_prompt(conversation, "sys", "skill-text")
+        inserted = ensure_system_prompt(conversation, "sys", "skill-text")
         self.assertTrue(inserted)
         self.assertEqual(conversation.messages,
                           [{"role": "system", "content": "sys\n\nskill-text"}])
 
     def test_skill_only_becomes_system(self) -> None:
         conversation = Conversation()
-        inserted = _ensure_system_prompt(conversation, "", "skill-text")
+        inserted = ensure_system_prompt(conversation, "", "skill-text")
         self.assertTrue(inserted)
         self.assertEqual(conversation.messages,
                           [{"role": "system", "content": "skill-text"}])
 
     def test_empty_stays_empty(self) -> None:
         conversation = Conversation()
-        inserted = _ensure_system_prompt(conversation, "", "")
+        inserted = ensure_system_prompt(conversation, "", "")
         self.assertFalse(inserted)
         self.assertEqual(conversation.messages, [])
 
     def test_existing_system_not_duplicated(self) -> None:
         conversation = Conversation()
         conversation.append({"role": "system", "content": "x"})
-        inserted = _ensure_system_prompt(conversation, "y", "z")
+        inserted = ensure_system_prompt(conversation, "y", "z")
         self.assertFalse(inserted)
         self.assertEqual(conversation.messages,
                          [{"role": "system", "content": "x"}])

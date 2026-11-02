@@ -28,15 +28,15 @@ from __future__ import annotations
 from typing import Any
 
 from agent_runtime.agent.context import (
-    _extract_summary,
-    _reasoning_replayed,
-    _total_chars,
+    extract_summary,
+    reasoning_replayed,
+    total_chars,
     apply_context_strategy,
 )
 from agent_runtime.harness import ContextGenome
 
 
-def _ensure_system_prompt(conversation: Conversation, system: str,
+def ensure_system_prompt(conversation: Conversation, system: str,
                          skills_block: str = "",
                          memory_block: str = "") -> bool:
     """Insert the harness system prompt once, before the first user message.
@@ -110,7 +110,7 @@ class TurnHistory:
         """
         if prompt_tokens > 0:
             self._usage_anchor = (prompt_tokens, len(self.view),
-                                  _total_chars(self.view, _reasoning_replayed()))
+                                  total_chars(self.view, reasoning_replayed()))
 
     @property
     def usage_anchor(self) -> tuple[int, int, int] | None:
@@ -139,9 +139,9 @@ class TurnHistory:
                 # billed response re-anchors (one iteration later) —
                 # a stale ratio drifts worse than no ratio.
                 self._usage_anchor = None
-            old_summary = _extract_summary(self.view)
+            old_summary = extract_summary(self.view)
             self.view = new_view
-            new_summary = _extract_summary(new_view)
+            new_summary = extract_summary(new_view)
             # Advance past the summarized region only when a NEW snapshot
             # was produced. No-op refreshes (view already under budget) and
             # snapshot reuses (nothing novel to summarise) keep the old text:
@@ -152,4 +152,4 @@ class TurnHistory:
                 self._summary_boundary = len(self.messages)
 
 
-__all__ = ["Conversation", "TurnHistory", "_ensure_system_prompt"]
+__all__ = ["Conversation", "TurnHistory", "ensure_system_prompt"]
