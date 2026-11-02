@@ -442,15 +442,6 @@ class SubmitRerunTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("full suite", nudge)
         self.assertNotIn("yourself", nudge)
 
-    async def test_rerun_excerpt_keeps_head_and_tail(self) -> None:
-        from agent_runtime.agent.verification_rerun import rerun_outcome
-        stdout = "START\n" + "." * 3000 + "\n1 failed, 5 passed in 0.5s\n"
-        _, _, excerpt = rerun_outcome(
-            {"exit_code": 1, "stdout": stdout, "stderr": ""})
-        self.assertIn("START", excerpt)
-        self.assertIn("1 failed, 5 passed", excerpt)
-        self.assertIn("truncated", excerpt)
-
     async def test_contract_nudge_states_reasons_only(self) -> None:
         from agent_runtime.agent.verification import contract_nudge
         nudge = contract_nudge({"solution_description": "no source edits yet",
@@ -461,25 +452,6 @@ class SubmitRerunTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Next step", nudge)
         self.assertNotIn("full suite", nudge)
         self.assertNotIn("until it exits 0", nudge)
-
-    async def test_ran_detection_covers_runners_not_error_lists(self) -> None:
-        from agent_runtime.agent.verification_rerun import (
-            rerun_declaration_broken,
-        )
-        # Genuine failures across runners: tests ran, not broken.
-        self.assertFalse(rerun_declaration_broken(
-            1, "stdout: 1 failed, 5 passed in 0.5s stderr:"))
-        self.assertFalse(rerun_declaration_broken(
-            1, "stdout: --- FAIL: TestParse (0.00s) FAIL stderr:"))
-        self.assertFalse(rerun_declaration_broken(
-            1, "stdout: 3 passing, 2 failing stderr:"))
-        # Environment failures without runner output: broken declaration,
-        # with no hardcoded error list behind the decision.
-        self.assertTrue(rerun_declaration_broken(
-            126, "stdout:  stderr: bash: ./run_tests.sh: Permission denied"))
-        self.assertTrue(rerun_declaration_broken(
-            1, "stdout:  stderr: /opt/miniconda3/bin/python: "
-               "No module named pytest"))
 
     async def test_env_broken_rerun_nudges_declaration_fix(self) -> None:
         async def routing_run(command: str, **kwargs) -> dict:

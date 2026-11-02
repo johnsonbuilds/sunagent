@@ -24,6 +24,12 @@ MIN_COMMAND_CHARS = 3
 QUOTE_CHARS = 16
 TOKEN_OVERLAP = 2
 
+# Finish-signal tool honored only while the verification gate is enabled;
+# elsewhere it is inert registry data.  The turn loop and the turn
+# finisher both route on this name, so it lives with the contract it
+# belongs to rather than in either caller.
+SUBMIT_TOOL = "submit_result"
+
 # Canonical submit_result parameters, in contract order. The free-text
 # gate and the submit_result tool share these: a submission is rendered
 # to the three-section answer shape before checking.
@@ -287,6 +293,6 @@ def check_submission(fields: Mapping[str, Any],
 
 
 __all__ = ["MIN_FIELD_CHARS", "MIN_COMMAND_CHARS", "EDIT_TOOLS", "SUBMIT_FIELDS",
-           "executed_commands", "has_source_edit", "observation_texts",
-           "render_submission", "check_submission", "contract_nudge",
-           "submit_nudge"]
+           "SUBMIT_TOOL", "executed_commands", "has_source_edit",
+           "observation_texts", "render_submission", "check_submission",
+           "contract_nudge", "submit_nudge"]

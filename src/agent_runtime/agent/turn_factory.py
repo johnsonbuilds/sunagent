@@ -1,10 +1,11 @@
 """Composition root for one agent turn.
 
 The factory resolves defaults, binds the observation spiller to the same
-workspace as the file tools, and hands the completed
-:class:`~agent_runtime.agent.turn_collaborators.TurnCollaborators` to
-:class:`~agent_runtime.agent.loop.AgentTurn`.  The turn itself therefore
-never has to inspect incidental attributes of the tool layer.
+workspace as the file tools, builds the per-turn finisher, and hands the
+completed :class:`~agent_runtime.agent.turn_collaborators.TurnCollaborators`
+to :class:`~agent_runtime.agent.loop.AgentTurn`.  The turn itself
+therefore never has to inspect incidental attributes of the tool layer
+or construct its own policy helpers.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from agent_runtime.agent.chat import ChatModel
 from agent_runtime.agent.loop import AgentTurn
 from agent_runtime.agent.observations import ObservationFormatter
 from agent_runtime.agent.turn_collaborators import TurnCollaborators
+from agent_runtime.agent.turn_finisher import TurnFinisher
 from agent_runtime.agent.turn_history import Conversation
 from agent_runtime.events import EventEmitter
 from agent_runtime.execution.base import Workspace
@@ -61,6 +63,14 @@ def create_agent_turn(
         max_chars=resolved_harness.control.max_observation_chars,
         spill_preview_chars=resolved_harness.control.spill_preview_chars,
         archive_min_chars=resolved_harness.context.head_chars)
+    # One finisher per turn: its violation counter is turn-local state.
+    finisher = TurnFinisher(
+        verification=resolved_harness.verification,
+        tools=tools,
+        trace=resolved_trace,
+        events=resolved_events,
+        max_iterations=resolved_max_iterations,
+        finish_violation_limit=resolved_harness.control.finish_violation_limit)
 
     return AgentTurn(user_message, TurnCollaborators(
         llm=llm,
@@ -71,6 +81,7 @@ def create_agent_turn(
         trace=resolved_trace,
         events=resolved_events,
         observations=observations,
+        finisher=finisher,
         stream=stream,
         max_iterations=resolved_max_iterations,
         skills_dir=skills_dir,

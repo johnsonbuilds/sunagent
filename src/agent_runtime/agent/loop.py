@@ -36,21 +36,10 @@ from agent_runtime.agent.tool_error_budget import (
     SameToolErrorBudget,
     resolve_max_retries,
 )
-from agent_runtime.agent.verification import (
-    check_submission,
-    contract_nudge,
-    has_source_edit,
-    render_submission,
-    submit_nudge,
-)
-from agent_runtime.agent.verification_rerun import (
-    _RERUN_TIMEOUT,
-    rerun_declaration_broken,
-    rerun_failure_detail,
-    rerun_outcome,
-)
+from agent_runtime.agent.verification import SUBMIT_TOOL, has_source_edit
 from agent_runtime.agent.context import request_view_size
 from agent_runtime.agent.turn_collaborators import TurnCollaborators
+from agent_runtime.agent.turn_failure import TurnFailure
 from agent_runtime.agent.turn_history import (
     Conversation,
     TurnHistory,
@@ -65,14 +54,6 @@ from agent_runtime.skills import (
 from agent_runtime.tools import ToolExecutor
 
 logger = logging.getLogger(__name__)
-
-# Finish-signal tool honored only under a task_result verification
-# harness; elsewhere it is inert registry data.
-SUBMIT_TOOL = "submit_result"
-
-
-class _TurnFailure(Exception):
-    """An expected turn failure that should be returned to the caller."""
 
 
 class AgentTurn:
@@ -96,13 +77,10 @@ class AgentTurn:
         self.trace = collaborators.trace
         self.events = collaborators.events
         self.observations = collaborators.observations
+        self.finisher = collaborators.finisher
         self.stream = collaborators.stream
         self.max_iterations = collaborators.max_iterations
         self.skills_dir = collaborators.skills_dir
-        # Consecutive finish attempts rejected without interleaving work
-        # (plain-text finishes, invalid submissions). At the limit the
-        # turn aborts instead of burning the iteration budget on prose.
-        self._finish_violations = 0
 
     def _context_window_refresh(self, history: TurnHistory,
                                 iteration: int):
@@ -152,7 +130,7 @@ class AgentTurn:
         try:
             with self.trace.span("agent") as agent_meta:
                 return await self._run(agent_meta)
-        except _TurnFailure as exc:
+        except TurnFailure as exc:
             self.events.emit("runtime.error",
                              stage=agent_meta.get("stage", "agent"),
                              error=str(exc))
@@ -246,13 +224,13 @@ class AgentTurn:
                 logger.error("llm.request.error iteration=%d error=%s", iteration, exc)
                 error = f"LLM error: {exc}"
                 agent_meta.update(stage="llm", error=error)
-                raise _TurnFailure(error) from exc
+                raise TurnFailure(error) from exc
 
             outcomes = classify_tool_calls(tool_calls, tools.schemas)
             # A submit_result call is a finish attempt, not work: other
             # calls in the same turn still execute first, then the first
             # submission is validated against the updated history.
-            submit_args = self._take_submit_args(outcomes)
+            submit_args = self.finisher.take_submit_arguments(outcomes)
 
             assistant_message: dict[str, Any] = {
                 "role": "assistant",
@@ -280,8 +258,8 @@ class AgentTurn:
                 history.append(assistant_message)
 
             if not tool_calls:
-                finished = self._answer_without_tools(response, iteration,
-                                                      history)
+                finished = self.finisher.answer_without_tools(response,
+                                                              iteration, history)
                 if finished is not None:
                     return finished
                 continue
@@ -291,56 +269,13 @@ class AgentTurn:
                 return stop
 
             if submit_args is not None:
-                finished = await self._finish_or_nudge(submit_args, iteration,
-                                                       history)
+                finished = await self.finisher.finish_or_nudge(
+                    submit_args, iteration, history)
                 if finished is not None:
                     return finished
                 continue
 
         return await self._summary_turn(history, agent_meta)
-
-    def _answer_without_tools(self, response: dict[str, Any], iteration: int,
-                              history: TurnHistory) -> str | None:
-        """Handle an answer with no tool calls; ``None`` means nudge + continue.
-
-        Under ``verification.mode == "off"`` the plain answer ends the turn;
-        an enabled harness only accepts a typed submit_result call, so a bare
-        message is either the budget-exhausted fallback or a contract miss
-        worth one nudge.
-        """
-        events = self.events
-        answer = response.get("content", "")
-        if self.harness.verification.mode == "off":
-            logger.debug("agent.final iteration=%d answer_chars=%d",
-                         iteration, len(answer))
-            events.emit("agent.completed", iteration, iterations=iteration,
-                        answer=answer)
-            return answer
-        # Labs-OO-Agents BenchAgent pattern: a bare message can
-        # never finish the turn — the model must submit via the
-        # submit_result tool, whose parameters are typed. Legacy
-        # return_contract prompts describe text sections, but the
-        # runtime no longer accepts them either.
-        if iteration >= self.max_iterations:
-            # No budget left for a retry; accept as-is and record
-            # the miss on the summary turn instead of overrunning.
-            self.trace.emit("verification.failed", iteration,
-                            missing=["submit_result"],
-                            reasons={"submit_result":
-                                     "budget exhausted without a valid "
-                                     "submit_result call"})
-            logger.debug("agent.final iteration=%d answer_chars=%d "
-                         "unsubmitted", iteration, len(answer))
-            events.emit("agent.completed", iteration, iterations=iteration,
-                        answer=answer)
-            return answer
-        self._note_finish_violation(iteration)
-        gaps = {"submit_result": "plain-text answer cannot finish "
-                                 "the task — call submit_result"}
-        self.trace.emit("verification.failed", iteration,
-                        missing=sorted(gaps), reasons=gaps)
-        history.append({"role": "user", "content": submit_nudge()})
-        return None
 
     async def _dispatch_tools(self, outcomes: list[ToolCallOutcome],
                               submit_args: dict[str, Any] | None, iteration: int,
@@ -373,7 +308,7 @@ class AgentTurn:
                 history.append(observation)
                 if payload["tool"] == SUBMIT_TOOL:
                     # Malformed finish attempt, not work: no reset.
-                    self._note_finish_violation(iteration)
+                    self.finisher.note_finish_violation(iteration)
                 stop = self._check_error_budget(
                     error_budget, iteration,
                     payload["tool"], outcome.rejection)
@@ -402,7 +337,7 @@ class AgentTurn:
                 observation = harness.tool_error_observation(
                     exc, tool=payload["tool"])
                 history.append(_tool_observation_message(tool_call, observation))
-                self._finish_violations = 0  # executed: new information
+                self.finisher.note_work_executed()  # executed: new information
                 stop = self._check_error_budget(
                     error_budget, iteration, validated.name, exc)
                 if stop is not None:
@@ -414,28 +349,8 @@ class AgentTurn:
             history.append(_tool_observation_message(
                 tool_call, rendered.text, metadata))
             error_budget.note_success()
-            self._finish_violations = 0  # executed work resets the fuse
+            self.finisher.note_work_executed()  # executed work resets the fuse
         return None
-
-    async def _finish_or_nudge(self, submit_args: dict[str, Any], iteration: int,
-                               history: TurnHistory) -> str | None:
-        """Validate the turn's submit_result attempt; ``None`` means nudge.
-
-        The nudge is appended to the history and the loop continues; a
-        rendered submission is the final answer of the turn.
-        """
-        events = self.events
-        nudge = await self._validate_submission(
-            submit_args, iteration, history.messages)
-        if nudge is not None:
-            history.append({"role": "user", "content": nudge})
-            return None
-        answer = render_submission(submit_args)
-        logger.debug("agent.final iteration=%d answer_chars=%d submit=True",
-                     iteration, len(answer))
-        events.emit("agent.completed", iteration, iterations=iteration,
-                    answer=answer)
-        return answer
 
     async def _summary_turn(self, history: TurnHistory,
                             agent_meta: dict[str, Any]) -> str:
@@ -483,9 +398,9 @@ class AgentTurn:
             logger.error("llm.request.error iteration=%d error=%s", iteration, exc)
             error = f"LLM error: {exc}"
             agent_meta.update(stage="llm", error=error)
-            raise _TurnFailure(error) from exc
+            raise TurnFailure(error) from exc
         answer = response.get("content", "")
-        self._emit_contract_outcome(answer, iteration, history.messages)
+        self.finisher.emit_contract_outcome(iteration)
         logger.debug("agent.final iteration=%d answer_chars=%d", iteration, len(answer))
         events.emit("agent.completed", iteration, iterations=iteration, answer=answer)
         return answer
@@ -523,147 +438,6 @@ class AgentTurn:
         })
         self.trace.emit("budget.reminder", iteration,
                         remaining=remaining, edited=edited)
-
-    def _note_finish_violation(self, iteration: int) -> None:
-        """Count a rejected finish attempt; abort at the harness limit.
-
-        Plain-text finishes and invalid submissions burn budget without
-        progress, so consecutive violations (no executed tool call in
-        between) abort the turn instead — the labs-OO-Agents
-        ``max_consecutive_text_only`` pattern. ``0`` disables the fuse.
-        """
-        limit = self.harness.control.finish_violation_limit
-        if limit <= 0:
-            return
-        self._finish_violations += 1
-        if self._finish_violations >= limit:
-            self.trace.emit("verification.aborted", iteration,
-                            consecutive=self._finish_violations)
-            raise _TurnFailure(
-                f"ABORTED_REPEATED_FINISH_VIOLATIONS: {self._finish_violations} "
-                f"consecutive finish attempts rejected without interleaving work "
-                f"(limit {limit}). Finish by calling submit_result with valid "
-                 f"parameters after running the tests.")
-
-    def _take_submit_args(
-            self, outcomes: list[ToolCallOutcome]) -> dict[str, Any] | None:
-        """First validated submit_result arguments, if this harness honors them.
-
-        Any enabled verification mode intercepts the tool; ``off`` lets a
-        call through to the placeholder handler.
-        """
-        if self.harness.verification.mode == "off":
-            return None
-        for outcome in outcomes:
-            if (outcome.validated is not None
-                    and outcome.validated.name == SUBMIT_TOOL):
-                return dict(outcome.validated.arguments)
-        return None
-
-    async def _validate_submission(self, fields: dict[str, Any], iteration: int,
-                                   messages: list[dict[str, Any]] | None = None
-                                   ) -> str | None:
-        """Validate a submit_result finish attempt; ``None`` means accept.
-
-        Checks shape plus grounding on the typed parameters, then always
-        re-executes a declared command once. Non-code harnesses (no
-        ``command_to_verify`` declared) skip the rerun: there is nothing
-        to confirm.
-        """
-        verification = self.harness.verification
-        gaps = check_submission(fields, verification.require, messages)
-        if gaps:
-            self._note_finish_violation(iteration)
-            self.trace.emit("verification.failed", iteration,
-                            missing=sorted(gaps), reasons=gaps)
-            return contract_nudge(gaps)
-        raw = fields.get("command_to_verify", "")
-        command = raw if isinstance(raw, str) else str(raw)
-        if not command.strip():
-            self.trace.emit("verification.passed", iteration,
-                            missing=[])
-            return None
-        return await self._rerun_declared_command(command, iteration)
-
-    async def _rerun_declared_command(self, command: str,
-                                      iteration: int) -> str | None:
-        """Re-execute the declared string verbatim once; accept only on exit 0.
-
-        No history resolution: the declaration is authoritative (the prompt
-        mandates exact-as-run, including any cd prefix), so what runs is
-        exactly what was declared. The cheap was-run pre-filter already
-        passed; this execution is the real confirmation and its exit code
-        decides.
-        """
-        if not command.strip():
-            gaps = {"command_to_verify": "missing or too short"}
-            self.trace.emit("verification.failed", iteration,
-                            missing=sorted(gaps), reasons=gaps)
-            return contract_nudge(gaps)
-        try:
-            result = await self.tools.execute(
-                "run_command", {"command": command,
-                                "timeout": _RERUN_TIMEOUT})
-        except Exception as exc:
-            gaps = {"command_to_verify":
-                    f"rerun failed to execute ({exc}); the declared command "
-                    "could not be executed, so nothing was verified"}
-            self.trace.emit("verification.rerun", iteration, command=command,
-                            success=False, error=str(exc))
-            self.trace.emit("verification.failed", iteration,
-                            missing=sorted(gaps), reasons=gaps)
-            return contract_nudge(gaps)
-        success, exit_code, excerpt = rerun_outcome(result)
-        self.trace.emit("verification.rerun", iteration, command=command,
-                        success=success, exit_code=exit_code, output=excerpt)
-        if success:
-            self.trace.emit("verification.passed", iteration,
-                            missing=[], reran=True)
-            return None
-        if rerun_declaration_broken(exit_code, excerpt):
-            reason = ("declared command never reached the tests "
-                      f"(rerun exited {exit_code}); the failure is in the "
-                      "command itself (environment, interpreter, path or "
-                      "shell syntax), not necessarily in the fix")
-            gaps = {"command_to_verify": reason}
-            self.trace.emit("verification.failed", iteration,
-                            missing=sorted(gaps), reasons=gaps)
-            nudge = (f"Your submission fails the return contract: "
-                     f"command_to_verify ({reason}).")
-            if excerpt:
-                nudge += f" Rerun output of `{command}`: {excerpt}"
-            return nudge
-        detail = rerun_failure_detail(excerpt)
-        # Result + reason + acceptance criterion only: no fix target
-        # (tests vs. source belongs to the task instructions) and no
-        # prescribed action (re-running is wasteful when only the
-        # declaration is wrong) — the model decides the next step.
-        gaps = {"command_to_verify":
-                f"rerun of your declared command exited {exit_code}{detail}; "
-                "a submission is only accepted when that command exits 0"}
-        self.trace.emit("verification.failed", iteration,
-                        missing=sorted(gaps), reasons=gaps)
-        nudge = contract_nudge(gaps)
-        if excerpt:
-            nudge += f" Rerun output of `{command}`: {excerpt}"
-        return nudge
-
-    def _emit_contract_outcome(self, answer: str, iteration: int,
-                               messages: list[dict[str, Any]] | None = None) -> None:
-        """Record the contract outcome on the budget-exhausted summary turn.
-
-        The summary turn carries no tools, so a submission is impossible:
-        the outcome is always a miss. ``messages`` is kept for signature
-        symmetry with the finish path.
-        """
-        if self.harness.verification.mode == "off":
-            return
-        del answer, messages
-        self.trace.emit("verification.failed", iteration,
-                        missing=["submit_result"],
-                        reasons={"submit_result":
-                                 "budget exhausted without a valid "
-                                 "submit_result call"})
 
     def _check_error_budget(self, budget: SameToolErrorBudget,
                               iteration: int, tool: Any,
