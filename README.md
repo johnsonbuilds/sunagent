@@ -45,7 +45,7 @@ It explains the "why" behind the Agent Runtime design, including core concepts, 
 
 Contains the core modular implementation of the Agent Runtime.
 
-Each component is designed as an independent and reusable module: agent loop (`agent/`), tools (`tools/`), harness manifests (`harness.py`), tracing (`trace.py`), user-facing events (`events.py`), channels (`channels/`), executors (`execution/`), LLM providers (`providers/`), skills (`skills.py`), storage layout (`storage.py`), and benchmark integration (`integrations/`, `evaluation.py`).
+Each component is designed as an independent and reusable module: agent loop (`agent/`), tools (`tools/`), harness genome and manifests (`harness/`), tracing (`trace.py`), user-facing events (`events.py`), channels (`channels/`), executors (`execution/`), LLM providers (`providers/`), skills (`skills.py`), storage layout (`storage.py`), and benchmark integration (`integrations/`, `evaluation.py`).
 
 ### webui
 

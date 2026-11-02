@@ -62,7 +62,7 @@ tried and what it scored.
 
 | Artifact | Path | Written by |
 |---|---|---|
-| Harness manifests | `harnesses/<id>.yaml` | `src/agent_runtime/harness.py` (`derive`), `src/agent_runtime/lineage.py` |
+| Harness manifests | `harnesses/<id>.yaml` | `src/agent_runtime/harness/` (`derive`), `src/agent_runtime/lineage.py` |
 | Evaluation records | `evaluation/records/<id>.json` | `src/agent_runtime/evaluation.py` (`write_record`) |
 | Analyses | `evaluation/analysis/*.md` | by hand |
 | SWE-bench selections | `evaluation/swe_bench/{dev-50,smoke-10,eval-100}.json` | `evaluation/swe_bench/select_swe_tasks.py` |

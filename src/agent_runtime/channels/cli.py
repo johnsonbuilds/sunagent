@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import os
 import sys
 import threading
 import time
 from typing import Any, TextIO
 
+from agent_runtime.channels.tool_summary import describe_tool
 from agent_runtime.events import AgentEvent
 
 
@@ -199,38 +199,9 @@ class CLIRenderer:
 
     @staticmethod
     def _format_arguments(event: AgentEvent) -> str:
-        arguments = event.data.get("arguments")
-        tool = event.data.get("tool")
-        if (tool == "run_command" and isinstance(arguments, dict)
-                and isinstance(arguments.get("command"), str)):
-            return f"$ {arguments['command']}"
-        if (tool == "execute_code" and isinstance(arguments, dict)
-                and isinstance(arguments.get("code"), str)):
-            language = arguments.get("language") or "python"
-            first_line = next((line.strip() for line in arguments["code"].splitlines()
-                               if line.strip()), "")
-            preview = first_line if len(first_line) <= 80 else first_line[:79] + "…"
-            return f"$ {language} · {preview}"
-        if (tool == "write_file" and isinstance(arguments, dict)):
-            content = arguments.get("content")
-            size = len(content) if isinstance(content, str) else 0
-            return f"write {arguments.get('path')} ({size} chars)"
-        if (tool == "grep_search" and isinstance(arguments, dict)):
-            pattern = arguments.get("pattern")
-            return f"$ grep {pattern}"
-        if (tool == "find_files" and isinstance(arguments, dict)):
-            return f"$ find {arguments.get('pattern')}"
-        if (tool == "find_symbol" and isinstance(arguments, dict)):
-            return f"$ symbol {arguments.get('name')}"
-        if (tool == "find_references" and isinstance(arguments, dict)):
-            return f"$ refs {arguments.get('name')}"
-        if (tool == "apply_patch" and isinstance(arguments, dict)
-                and isinstance(arguments.get("patch"), str)):
-            blocks = arguments["patch"].count(">>>>>>> REPLACE")
-            return f"patch: {blocks} edit(s)"
-        if arguments is None:
-            return ""
-        return json.dumps(arguments, ensure_ascii=False, sort_keys=True)
+        return describe_tool(event.data.get("tool"),
+                             event.data.get("arguments"),
+                             shell_prefix=True)
 
     @staticmethod
     def _tail_lines(text: Any, limit: int) -> list[str]:

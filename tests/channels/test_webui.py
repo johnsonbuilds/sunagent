@@ -7,7 +7,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
 
 from agent_runtime.channels import WebUIChannel
-from agent_runtime.channels import webui as webui_module
+from agent_runtime.channels.tool_summary import describe_tool
 from agent_runtime.events import AgentEvent
 
 
@@ -226,11 +226,10 @@ class DescribeToolTests(unittest.TestCase):
             ("find_symbol", {"name": "main"}, "symbol main"),
         ]
         for tool, arguments, expected in cases:
-            self.assertEqual(webui_module.describe_tool(tool, arguments),
-                             expected)
+            self.assertEqual(describe_tool(tool, arguments), expected)
 
     def test_unknown_tools_fall_back_to_json(self) -> None:
-        summary = webui_module.describe_tool("mystery", {"a": 1})
+        summary = describe_tool("mystery", {"a": 1})
         self.assertEqual(summary, '{"a": 1}')
 
 

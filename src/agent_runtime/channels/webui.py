@@ -30,6 +30,7 @@ import json
 import os
 from typing import Any, Callable
 
+from agent_runtime.channels.tool_summary import describe_tool
 from agent_runtime.events import AgentEvent
 
 
@@ -235,42 +236,6 @@ def _tool_frame(frame_type: str, segment: dict[str, Any]) -> dict[str, Any]:
     return frame
 
 
-def describe_tool(tool: str, arguments: dict[str, Any]) -> str:
-    """Summarise a tool call in one short human-readable line."""
-    if tool == "run_command":
-        command = arguments.get("command")
-        if isinstance(command, str):
-            return f"$ {command}"
-    if tool == "execute_code":
-        code = arguments.get("code")
-        language = arguments.get("language") or "python"
-        if isinstance(code, str):
-            first = next((line.strip() for line in code.splitlines()
-                          if line.strip()), "")
-            if len(first) > 80:
-                first = first[:79] + "…"
-            return f"$ {language} · {first}"
-    if tool == "write_file":
-        content = arguments.get("content")
-        size = len(content) if isinstance(content, str) else 0
-        return f"write {arguments.get('path')} ({size} chars)"
-    if tool == "grep_search":
-        return f"grep {arguments.get('pattern')}"
-    if tool == "find_files":
-        return f"find {arguments.get('pattern')}"
-    if tool == "find_symbol":
-        return f"symbol {arguments.get('name')}"
-    if tool == "find_references":
-        return f"refs {arguments.get('name')}"
-    if tool == "apply_patch":
-        patch = arguments.get("patch")
-        if isinstance(patch, str):
-            return f"patch: {patch.count('>>>>>>> REPLACE')} edit(s)"
-    if not arguments:
-        return ""
-    return json.dumps(arguments, ensure_ascii=False, sort_keys=True)
-
-
 def _tool_output(data: dict[str, Any]) -> str:
     """Extract the human-visible output of a completed tool call."""
     if "exit_code" in data:
@@ -293,5 +258,4 @@ def _tool_output(data: dict[str, Any]) -> str:
 
 __all__ = ["FRAME_DELTA", "FRAME_RUN_COMPLETED", "FRAME_RUN_ERROR",
            "FRAME_RUN_STARTED", "FRAME_SEGMENT", "FRAME_TOOL_COMPLETED",
-           "FRAME_TOOL_FAILED", "FRAME_TOOL_STARTED", "WebUIChannel",
-           "describe_tool"]
+           "FRAME_TOOL_FAILED", "FRAME_TOOL_STARTED", "WebUIChannel"]
