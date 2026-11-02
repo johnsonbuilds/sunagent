@@ -14,13 +14,21 @@ compacted tool message stays a tool message with the same
 All knobs (budgets, windows, tail sizes) come from the harness's
 ``ContextGenome`` (see ``agent_runtime.harness``), threaded in by the
 caller; this module holds no policy constants of its own.
+
+Strategies are named handlers in :data:`CONTEXT_STRATEGY_DEFINITIONS`.
+Adding one means writing a handler, registering it there, and adding the
+name to the harness genome's strategy list; the shared adapter does not
+need another branch.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any
+
 from agent_runtime.harness import (
     DEFAULT_CONTEXT_BUDGET,
     DEFAULT_HEAD_CHARS,
@@ -380,6 +388,92 @@ def compact_observations(messages: list[dict[str, Any]], *,
     return result
 
 
+@dataclass(frozen=True)
+class ContextStrategyRequest:
+    """Everything a context strategy may need to build the request view."""
+
+    messages: list[dict[str, Any]]
+    working: list[dict[str, Any]]
+    context: ContextGenome
+    budget: int
+    unit: str
+    count_reasoning: bool
+    usage_anchor: tuple[int, int, int] | None
+    boundary: int
+    previous_summary: str | None
+    trace: Any
+    iteration: int | None
+    prompt: str | None
+
+
+ContextStrategyHandler = Callable[
+    [ContextStrategyRequest], Awaitable[list[dict[str, Any]]]]
+
+
+@dataclass(frozen=True)
+class ContextStrategyDefinition:
+    """A named strategy handler and whether the budget gate applies first."""
+
+    handler: ContextStrategyHandler
+    budget_gated: bool = True
+
+
+async def _full_history_strategy(
+        request: ContextStrategyRequest) -> list[dict[str, Any]]:
+    return request.messages
+
+
+async def _compact_observations_strategy(
+        request: ContextStrategyRequest) -> list[dict[str, Any]]:
+    # compact_observations is char-metered by construction; under the
+    # tokens unit the budget is converted with the anchor-calibrated
+    # ratio (a threshold decision, so conversion noise is acceptable).
+    char_budget = request.budget
+    if request.unit == "tokens":
+        char_budget = max(
+            1, int(request.budget
+                   * _anchor_chars_per_token(request.usage_anchor)))
+    return compact_observations(
+        request.messages, budget=char_budget,
+        window_rounds=request.context.window_rounds,
+        keep_recent_rounds=request.context.keep_recent_rounds,
+        head_chars=request.context.head_chars,
+        exempt_tools=request.context.retrieval_exempt_tools)
+
+
+async def _llm_summary_strategy(
+        request: ContextStrategyRequest) -> list[dict[str, Any]]:
+    return await summarize_history(
+        request.messages, budget=request.budget,
+        tail_rounds=request.context.summary_tail_rounds,
+        user_preserve_budget=request.context.user_preserve_budget,
+        summary_max_tokens=request.context.summary_max_tokens,
+        boundary=request.boundary,
+        previous_summary=request.previous_summary,
+        unit=request.unit, usage_anchor=request.usage_anchor,
+        exempt_tools=request.context.retrieval_exempt_tools,
+        prompt=request.prompt, trace=request.trace,
+        iteration=request.iteration)
+
+
+CONTEXT_STRATEGY_DEFINITIONS: dict[str, ContextStrategyDefinition] = {
+    STRATEGY_FULL_HISTORY: ContextStrategyDefinition(
+        _full_history_strategy, budget_gated=False),
+    STRATEGY_COMPACT_OBSERVATIONS: ContextStrategyDefinition(
+        _compact_observations_strategy),
+    STRATEGY_LLM_SUMMARY: ContextStrategyDefinition(
+        _llm_summary_strategy),
+}
+
+
+def register_context_strategy(
+        name: str, handler: ContextStrategyHandler, *,
+        budget_gated: bool = True) -> None:
+    """Register one context strategy under ``name``."""
+    CONTEXT_STRATEGY_DEFINITIONS[name] = ContextStrategyDefinition(
+        handler, budget_gated=budget_gated)
+
+
 async def apply_context_strategy(messages: list[dict[str, Any]], context: ContextGenome, *,
                                 compact_messages: list[dict[str, Any]] | None = None,
                                 trace: Any = None, iteration: int | None = None,
@@ -408,10 +502,11 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
     them on the wire (see :func:`reasoning_replayed`).
     """
     strategy = context.strategy
-    if strategy == STRATEGY_FULL_HISTORY:
-        return messages
-    if strategy not in (STRATEGY_COMPACT_OBSERVATIONS, STRATEGY_LLM_SUMMARY):
-        raise ValueError(f"unknown context strategy: {strategy!r}")
+    definition = CONTEXT_STRATEGY_DEFINITIONS.get(strategy)
+    if definition is None:
+        raise ValueError(
+            f"unknown context strategy: {strategy!r}; "
+            f"known: {sorted(CONTEXT_STRATEGY_DEFINITIONS)}")
 
     count = reasoning_replayed()
     unit = context.budget_unit
@@ -421,34 +516,25 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
     if force_budget is not None:
         budget = min(budget, force_budget)
     working = compact_messages if compact_messages is not None else messages
-    if _view_size(working, count, unit, usage_anchor) <= budget:
+    if (definition.budget_gated
+            and _view_size(working, count, unit, usage_anchor) <= budget):
         return working
 
-    if strategy == STRATEGY_COMPACT_OBSERVATIONS:
-        # compact_observations is char-metered by construction; under the
-        # tokens unit the budget is converted with the anchor-calibrated
-        # ratio (a threshold decision, so conversion noise is acceptable).
-        char_budget = budget
-        if unit == "tokens":
-            char_budget = max(1, int(budget * _anchor_chars_per_token(usage_anchor)))
-        result = compact_observations(messages, budget=char_budget,
-                                      window_rounds=context.window_rounds,
-                                      keep_recent_rounds=context.keep_recent_rounds,
-                                      head_chars=context.head_chars,
-                                      exempt_tools=context.retrieval_exempt_tools)
-    else:  # STRATEGY_LLM_SUMMARY
-        previous_summary = extract_summary(working)
-        result = await summarize_history(
-            messages, budget=budget,
-            tail_rounds=context.summary_tail_rounds,
-            user_preserve_budget=context.user_preserve_budget,
-            summary_max_tokens=context.summary_max_tokens,
-            boundary=boundary,
-            previous_summary=previous_summary,
-            unit=unit, usage_anchor=usage_anchor,
-            exempt_tools=context.retrieval_exempt_tools,
-            prompt=options.get("prompt"), trace=trace,
-            iteration=iteration)
+    request = ContextStrategyRequest(
+        messages=messages,
+        working=working,
+        context=context,
+        budget=budget,
+        unit=unit,
+        count_reasoning=count,
+        usage_anchor=usage_anchor,
+        boundary=boundary,
+        previous_summary=extract_summary(working),
+        trace=trace,
+        iteration=iteration,
+        prompt=options.get("prompt"),
+    )
+    result = await definition.handler(request)
 
     if (force_budget is not None and result is not working
             and result is not messages
@@ -792,8 +878,10 @@ __all__ = [
     "DEFAULT_USER_PRESERVE_BUDGET", "DEFAULT_SUMMARY_MAX_TOKENS",
     "DEFAULT_SUMMARIZER_INPUT_CAP_CHARS",
     "STRATEGY_COMPACT_OBSERVATIONS", "STRATEGY_FULL_HISTORY", "STRATEGY_LLM_SUMMARY",
-    "SUMMARY_PREFIX", "SUMMARIZER_INSTRUCTION", "request_view_size",
-    "apply_context_strategy", "apply_memory_strategy", "compact_observations", "set_summary_llm",
+    "CONTEXT_STRATEGY_DEFINITIONS", "ContextStrategyDefinition",
+    "ContextStrategyRequest", "SUMMARY_PREFIX", "SUMMARIZER_INSTRUCTION",
+    "request_view_size", "apply_context_strategy", "apply_memory_strategy",
+    "compact_observations", "register_context_strategy", "set_summary_llm",
     "summarize_history", "extract_summary", "reasoning_replayed", "total_chars",
 ]
 

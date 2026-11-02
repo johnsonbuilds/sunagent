@@ -10,9 +10,11 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
 
 from agent_runtime.agent.context import (
+    CONTEXT_STRATEGY_DEFINITIONS,
     SUMMARY_PREFIX,
     apply_context_strategy,
     compact_observations,
+    register_context_strategy,
     set_summary_llm,
     summarize_history,
 )
@@ -357,6 +359,22 @@ class ApplyContextStrategyTests(unittest.IsolatedAsyncioTestCase):
     async def test_unknown_strategy_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "unknown context strategy"):
             await apply_context_strategy([], ContextGenome(strategy="summarize"))
+
+    async def test_registered_strategy_is_dispatched(self) -> None:
+        seen: list[int] = []
+
+        async def custom(request):
+            seen.append(request.budget)
+            return [{"role": "user", "content": "custom view"}]
+
+        with patch.dict(CONTEXT_STRATEGY_DEFINITIONS, {}):
+            register_context_strategy("custom", custom, budget_gated=False)
+            result = await apply_context_strategy(
+                [{"role": "user", "content": "x"}],
+                ContextGenome(strategy="custom", context_budget=100))
+
+        self.assertEqual(result, [{"role": "user", "content": "custom view"}])
+        self.assertEqual(seen, [100])
 
 
 class FakeSummaryLLM:
