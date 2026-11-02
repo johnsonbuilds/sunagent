@@ -10,13 +10,17 @@ or construct its own policy helpers.
 
 from __future__ import annotations
 
+import os
+from functools import lru_cache
 from pathlib import Path
 
 from agent_runtime.agent.chat import ChatModel
 from agent_runtime.agent.loop import AgentTurn
 from agent_runtime.agent.observations import ObservationFormatter
+from agent_runtime.agent.tool_runner import ToolRunner
 from agent_runtime.agent.turn_collaborators import TurnCollaborators
 from agent_runtime.agent.turn_finisher import TurnFinisher
+from agent_runtime.agent.turn_guard import TurnGuard
 from agent_runtime.agent.turn_history import Conversation
 from agent_runtime.agent.verification import SubmissionRules
 from agent_runtime.events import EventEmitter
@@ -24,6 +28,20 @@ from agent_runtime.execution.base import Workspace
 from agent_runtime.harness import HarnessSpec, default_harness
 from agent_runtime.tools import ToolExecutor
 from agent_runtime.trace import RunTrace
+
+
+@lru_cache(maxsize=1)
+def _default_summarizer() -> ChatModel:
+    """Build the per-process summarizer provider on first use.
+
+    Lazy on purpose: turns whose context strategy never summarizes must
+    not construct an OpenAI client (or require an API key).  The cache is
+    immutable after construction, unlike the old module-level mutable.
+    """
+    from agent_runtime.providers.llm import OpenAICompatibleLLM
+
+    return OpenAICompatibleLLM(
+        model=os.getenv("AGENT_RUNTIME_SUMMARY_MODEL") or None)
 
 
 def create_agent_turn(
@@ -64,14 +82,30 @@ def create_agent_turn(
         max_chars=resolved_harness.control.max_observation_chars,
         spill_preview_chars=resolved_harness.control.spill_preview_chars,
         archive_min_chars=resolved_harness.context.head_chars)
-    # One finisher per turn: its violation counter is turn-local state.
+    # One finisher and one guard per turn: both carry turn-local state
+    # (finish violations, same-tool error counts).
+    rules = SubmissionRules.from_genome(resolved_harness.verification)
     finisher = TurnFinisher(
-        rules=SubmissionRules.from_genome(resolved_harness.verification),
+        rules=rules,
         tools=tools,
         trace=resolved_trace,
         events=resolved_events,
         max_iterations=resolved_max_iterations,
         finish_violation_limit=resolved_harness.control.finish_violation_limit)
+    guard = TurnGuard(
+        harness=resolved_harness,
+        rules=rules,
+        trace=resolved_trace,
+        events=resolved_events,
+        max_iterations=resolved_max_iterations)
+    tool_runner = ToolRunner(
+        tools=tools,
+        harness=resolved_harness,
+        observations=observations,
+        finisher=finisher,
+        guard=guard,
+        trace=resolved_trace,
+        events=resolved_events)
 
     return AgentTurn(user_message, TurnCollaborators(
         llm=llm,
@@ -83,6 +117,9 @@ def create_agent_turn(
         events=resolved_events,
         observations=observations,
         finisher=finisher,
+        guard=guard,
+        tool_runner=tool_runner,
+        summarizer=_default_summarizer,
         stream=stream,
         max_iterations=resolved_max_iterations,
         skills_dir=skills_dir,

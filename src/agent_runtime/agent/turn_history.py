@@ -29,11 +29,11 @@ from typing import Any
 
 from agent_runtime.agent.context import (
     extract_summary,
-    reasoning_replayed,
     total_chars,
     apply_context_strategy,
 )
 from agent_runtime.harness import ContextGenome
+from agent_runtime.reasoning_echo import reasoning_echo_enabled
 
 
 def ensure_system_prompt(conversation: Conversation, system: str,
@@ -78,9 +78,13 @@ class Conversation:
 class TurnHistory:
     """Full history (source of truth) plus its request-view projection."""
 
-    def __init__(self, messages: list[dict[str, Any]]) -> None:
+    def __init__(self, messages: list[dict[str, Any]], *,
+                 summarizer: Any = None) -> None:
         self.messages = messages
         self.view: list[dict[str, Any]] = list(messages)
+        # Explicit summarizer (provider object or lazy factory); when
+        # omitted, the context layer's context-local default applies.
+        self.summarizer = summarizer
         # messages length at the last summary-producing compaction.
         self._summary_boundary: int = 0
         # (prompt_tokens, view length, view chars) of the last measured
@@ -110,7 +114,7 @@ class TurnHistory:
         """
         if prompt_tokens > 0:
             self._usage_anchor = (prompt_tokens, len(self.view),
-                                  total_chars(self.view, reasoning_replayed()))
+                                  total_chars(self.view, reasoning_echo_enabled()))
 
     @property
     def usage_anchor(self) -> tuple[int, int, int] | None:
@@ -130,7 +134,9 @@ class TurnHistory:
             trace=trace, iteration=iteration,
             boundary=self._summary_boundary,
             usage_anchor=self._usage_anchor,
-            force_budget=force_budget)
+            force_budget=force_budget,
+            summarizer=self.summarizer,
+            count_reasoning=reasoning_echo_enabled())
         if new_view is not self.messages:
             if new_view is not self.view:
                 # The view was rebuilt: the anchor measured the OLD mix

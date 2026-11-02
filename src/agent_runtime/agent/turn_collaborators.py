@@ -15,12 +15,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from agent_runtime.agent.chat import ChatModel
     from agent_runtime.agent.observations import ObservationFormatter
+    from agent_runtime.agent.tool_runner import ToolRunner
     from agent_runtime.agent.turn_finisher import TurnFinisher
+    from agent_runtime.agent.turn_guard import TurnGuard
     from agent_runtime.agent.turn_history import Conversation
     from agent_runtime.events import EventEmitter
     from agent_runtime.execution.base import Workspace
@@ -42,6 +44,9 @@ class TurnCollaborators:
     events: EventEmitter
     observations: ObservationFormatter
     finisher: TurnFinisher
+    guard: TurnGuard
+    tool_runner: ToolRunner
+    summarizer: Any
     stream: bool
     max_iterations: int
     skills_dir: str | Path | None

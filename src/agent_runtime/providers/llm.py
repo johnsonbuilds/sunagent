@@ -7,6 +7,12 @@ import os
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
+from agent_runtime.reasoning_echo import (
+    DEFAULT_MODEL,
+    reasoning_echo_mode,
+    should_echo_reasoning,
+)
+
 
 logger = logging.getLogger(__name__)
 
@@ -19,69 +25,11 @@ def _reasoning_effort() -> str | None:
     return value or None
 
 
-def _reasoning_echo_mode() -> str:
-    """Outbound reasoning-replay policy: ``auto``, ``always``, or ``never``.
-
-    Read per request like :func:`_reasoning_effort`.  Unknown values fall
-    back to ``auto`` so a typo never strands the run on a wrong policy.
-    """
-    value = os.getenv("AGENT_RUNTIME_REASONING_ECHO", "auto").strip().lower()
-    return value if value in ("auto", "always", "never") else "auto"
-
-
-# Substring markers for "echo" families: thinking-mode APIs that expect
-# the assistant `reasoning_content` back on every replay (DeepSeek's
-# contract: "the reasoning_content in the thinking mode must be passed
-# back to the API").  Matched against MODEL_ID and LLM_BASE_URL.  A
-# gateway that proxies one of these under a neutral host is misclassified
-# — pin AGENT_RUNTIME_REASONING_ECHO=always|never for such setups.
-_ECHO_FAMILY_MARKERS: tuple[str, ...] = (
-    "deepseek", "glm", "zhipu", "bigmodel",
-    "kimi", "moonshot", "mimo", "xiaomi", "ling",
-)
-
-# Hosts that proxy other providers.  A gateway drops the assistant
-# turn's reasoning fields before the request reaches the upstream
-# model, so replaying them is a no-op: measured against OpenRouter,
-# 6400 chars of replayed reasoning cost 0 extra prompt tokens and the
-# model never saw the text (the same 6400 chars in ``content`` cost
-# +1202 tokens).  Model-name matching cannot catch this — OpenRouter
-# serves ``deepseek/...`` models, so the family heuristic above would
-# replay reasoning the gateway is about to drop, and the context-budget
-# layer would then charge for tokens that are never sent.
-_GATEWAY_HOST_MARKERS: tuple[str, ...] = ("openrouter.ai",)
-
-
-def _endpoint_replays_reasoning(base_url: str | None) -> bool | None:
-    """Whether the endpoint honours a replayed chain of thought.
-
-    ``True``/``False`` for a host we know the behaviour of, ``None``
-    when the host is unknown (the caller then falls back to the
-    model-family heuristic).
-    """
-    host = (base_url or "").lower()
-    if any(marker in host for marker in _GATEWAY_HOST_MARKERS):
-        return False
-    return None
-
-
-def _should_echo_reasoning(model: str, base_url: str | None,
-                           mode: str | None = None) -> bool:
-    """Whether assistant ``reasoning_content`` is replayed to the provider."""
-    if mode is None:
-        mode = _reasoning_echo_mode()
-    if mode == "always":
-        return True
-    if mode == "never":
-        return False
-    verdict = _endpoint_replays_reasoning(base_url)
-    if verdict is not None:
-        return verdict
-    haystack = f"{model} {base_url or ''}".lower()
-    return any(marker in haystack for marker in _ECHO_FAMILY_MARKERS)
-
-
-_DEFAULT_MODEL = "glm-5.3"
+_DEFAULT_MODEL = DEFAULT_MODEL
+# Historical provider-internal names; the decisions themselves live in
+# :mod:`agent_runtime.reasoning_echo` so the context-budget layer shares one source.
+_reasoning_echo_mode = reasoning_echo_mode
+_should_echo_reasoning = should_echo_reasoning
 
 
 class ContextWindowExceededError(RuntimeError):

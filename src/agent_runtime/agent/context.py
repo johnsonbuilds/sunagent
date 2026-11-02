@@ -24,8 +24,8 @@ need another branch.
 from __future__ import annotations
 
 import logging
-import os
 from collections.abc import Awaitable, Callable
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
@@ -40,6 +40,7 @@ from agent_runtime.harness import (
     DEFAULT_WINDOW_ROUNDS,
     ContextGenome,
 )
+from agent_runtime.reasoning_echo import reasoning_echo_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -123,15 +124,14 @@ def extract_summary(view: list[dict[str, Any]] | None) -> str | None:
     return None
 
 
-def reasoning_replayed() -> bool:
-    """Whether reasoning_content rides the wire for the configured endpoint.
+def _count_reasoning(enabled: bool | None) -> bool:
+    """Explicit policy wins; otherwise read the env-backed wire default.
 
-    Budget accounting must match the wire (providers/llm.py projection):
-    reasoning only counts toward the context budget when the echo policy
-    will actually replay it.  Lazy import matches ``_get_summary_llm_async``.
+    Callers that own a policy object (the turn history) pass the boolean
+    explicitly, so the budget layer never has to guess.  Direct callers
+    (tests, one-off scripts) keep the historical env-backed behavior.
     """
-    from agent_runtime.providers.llm import reasoning_echo_enabled
-    return reasoning_echo_enabled()
+    return reasoning_echo_enabled() if enabled is None else enabled
 
 
 def _message_chars(message: dict[str, Any],
@@ -203,10 +203,11 @@ def _anchor_chars_per_token(anchor: tuple[int, int, int] | None) -> float:
 
 
 def request_view_size(view: list[dict[str, Any]], context: ContextGenome,
-                      usage_anchor: tuple[int, int, int] | None = None) -> int:
+                      usage_anchor: tuple[int, int, int] | None = None, *,
+                      count_reasoning: bool | None = None) -> int:
     """Request-view size in the genome's unit, for gate decisions."""
-    return _view_size(view, reasoning_replayed(), context.budget_unit,
-                      usage_anchor)
+    return _view_size(view, _count_reasoning(count_reasoning),
+                      context.budget_unit, usage_anchor)
 
 
 def _round_starts(messages: list[dict[str, Any]]) -> list[int]:
@@ -288,6 +289,7 @@ def compact_observations(messages: list[dict[str, Any]], *,
                          keep_recent_rounds: int = DEFAULT_KEEP_RECENT_ROUNDS,
                          head_chars: int = DEFAULT_HEAD_CHARS,
                          exempt_tools: tuple[str, ...] = (),
+                         count_reasoning: bool | None = None,
                          ) -> list[dict[str, Any]]:
     """Return a compacted copy of ``messages`` when it exceeds ``budget``.
 
@@ -315,11 +317,11 @@ def compact_observations(messages: list[dict[str, Any]], *,
        from the budget.
 
     Reasoning chars count toward ``budget`` only when the echo policy
-    will actually replay them on the wire (see :func:`reasoning_replayed`
-    — the single source of truth).  Below budget the original list is
+    will actually replay them on the wire (see the shared wire policy).
+    Below budget the original list is
     returned unchanged.
     """
-    count = reasoning_replayed()
+    count = _count_reasoning(count_reasoning)
     if total_chars(messages, count) <= budget:
         return messages
     starts = _round_starts(messages)
@@ -404,6 +406,7 @@ class ContextStrategyRequest:
     trace: Any
     iteration: int | None
     prompt: str | None
+    summarizer: Any = None
 
 
 ContextStrategyHandler = Callable[
@@ -438,7 +441,8 @@ async def _compact_observations_strategy(
         window_rounds=request.context.window_rounds,
         keep_recent_rounds=request.context.keep_recent_rounds,
         head_chars=request.context.head_chars,
-        exempt_tools=request.context.retrieval_exempt_tools)
+        exempt_tools=request.context.retrieval_exempt_tools,
+        count_reasoning=request.count_reasoning)
 
 
 async def _llm_summary_strategy(
@@ -453,7 +457,8 @@ async def _llm_summary_strategy(
         unit=request.unit, usage_anchor=request.usage_anchor,
         exempt_tools=request.context.retrieval_exempt_tools,
         prompt=request.prompt, trace=request.trace,
-        iteration=request.iteration)
+        iteration=request.iteration, llm=request.summarizer,
+        count_reasoning=request.count_reasoning)
 
 
 CONTEXT_STRATEGY_DEFINITIONS: dict[str, ContextStrategyDefinition] = {
@@ -480,6 +485,8 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
                                 boundary: int = 0,
                                 usage_anchor: tuple[int, int, int] | None = None,
                                 force_budget: int | None = None,
+                                summarizer: Any = None,
+                                count_reasoning: bool | None = None,
                                 **options: Any) -> list[dict[str, Any]]:
     """Build the request view of ``messages`` under the memory genome.
 
@@ -499,7 +506,7 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
     strategy logic.
 
     Reasoning chars are budgeted only when the echo policy will replay
-    them on the wire (see :func:`reasoning_replayed`).
+    them on the wire (see the shared wire policy).
     """
     strategy = context.strategy
     definition = CONTEXT_STRATEGY_DEFINITIONS.get(strategy)
@@ -508,7 +515,7 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
             f"unknown context strategy: {strategy!r}; "
             f"known: {sorted(CONTEXT_STRATEGY_DEFINITIONS)}")
 
-    count = reasoning_replayed()
+    count = _count_reasoning(count_reasoning)
     unit = context.budget_unit
     # force_budget (context-window hard gate) must push below the size the
     # provider just rejected, so it wins whenever it is the tighter bound.
@@ -574,13 +581,32 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
     return result
 
 
-_summary_llm: Any = None
+_DEFAULT_SUMMARIZER: ContextVar[Any | None] = ContextVar(
+    "default_summarizer", default=None)
 
 
 def set_summary_llm(llm: Any) -> None:
-    """Override the summarizer LLM (used by tests and custom wiring)."""
-    global _summary_llm
-    _summary_llm = llm
+    """Set the context-local default summarizer (tests / legacy wiring).
+
+    Production injects a summarizer through
+    :class:`~agent_runtime.agent.turn_collaborators.TurnCollaborators`;
+    this hook exists so direct callers and tests can keep a context-local
+    default without reaching into module globals.
+    """
+    _DEFAULT_SUMMARIZER.set(llm)
+
+
+def _resolve_summarizer(llm: Any) -> Any:
+    """Resolve an explicit summarizer object or lazy factory."""
+    if llm is None:
+        llm = _DEFAULT_SUMMARIZER.get()
+    if llm is None:
+        return None
+    # A factory (e.g. the provider builder) is called on first use; a
+    # ready adapter exposes ``chat`` and is used as-is.
+    if callable(llm) and not hasattr(llm, "chat"):
+        return llm()
+    return llm
 
 
 def _strip_leading_system(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -630,24 +656,12 @@ async def _generate_summary(messages: list[dict[str, Any]], *,
         *history,
         {"role": "user", "content": instruction},
     ]
-    model = llm if llm is not None else await _get_summary_llm_async()
+    model = _resolve_summarizer(llm)
+    if model is None:
+        raise RuntimeError("no summarizer LLM is configured")
     response = await model.chat(summarizer_messages, tools=None,
                                 max_tokens=summary_max_tokens)
     return response.get("content") or ""
-
-
-async def _get_summary_llm_async() -> Any:
-    """Lazily build the summarizer LLM (async variant for tests)."""
-    if _summary_llm is None:
-        set_summary_llm(_build_summary_llm())
-    return _summary_llm
-
-
-def _build_summary_llm() -> Any:
-    """Construct the default summarizer provider."""
-    from agent_runtime.providers.llm import OpenAICompatibleLLM
-    return OpenAICompatibleLLM(
-        model=os.getenv("AGENT_RUNTIME_SUMMARY_MODEL") or None)
 
 
 _REQUIRED_SECTIONS = ["## 1. Work State", "## 2. Next Move", "## 3. Working Context & Anchors"]
@@ -690,6 +704,8 @@ async def summarize_history(messages: list[dict[str, Any]], *,
                             prompt: str | None = None,
                             trace: Any = None,
                             iteration: int | None = None,
+                            llm: Any = None,
+                            count_reasoning: bool | None = None,
                             ) -> list[dict[str, Any]]:
     """Return a summarized request view of ``messages`` once over ``budget``.
 
@@ -719,7 +735,7 @@ async def summarize_history(messages: list[dict[str, Any]], *,
     Observability: the summary text is emitted on ``trace`` (per-run)
     rather than written to a shared file.
     """
-    count = reasoning_replayed()
+    count = _count_reasoning(count_reasoning)
     if unit == "tokens":
         chars_per_token = _anchor_chars_per_token(usage_anchor)
         char_budget = int((budget or DEFAULT_CONTEXT_BUDGET) * chars_per_token)
@@ -808,12 +824,12 @@ async def summarize_history(messages: list[dict[str, Any]], *,
             # the likely cause instead of repeating the attempt.
             attempt_input = compact_observations(
                 summarizer_input, budget=DEFAULT_SUMMARIZER_INPUT_CAP_CHARS,
-                exempt_tools=exempt_tools)
+                exempt_tools=exempt_tools, count_reasoning=count)
             used_capped_input = True
         try:
             summary = await _generate_summary(
                 attempt_input, previous_summary=previous_summary,
-                summary_max_tokens=summary_max_tokens, prompt=prompt)
+                summary_max_tokens=summary_max_tokens, prompt=prompt, llm=llm)
         except Exception as exc:
             # The summarizer request itself failed (rate limit, context
             # overflow on a huge segment, transport error): record the cause
@@ -832,7 +848,8 @@ async def summarize_history(messages: list[dict[str, Any]], *,
             logger.warning("context.summary.failed falling back to "
                            "compact_observations: %s", exc)
             return compact_observations(messages, budget=char_budget,
-                                        exempt_tools=exempt_tools)
+                                        exempt_tools=exempt_tools,
+                                        count_reasoning=count)
         try:
             _validate_summary(summary, summary_max_tokens=summary_max_tokens)
             break
@@ -858,7 +875,8 @@ async def summarize_history(messages: list[dict[str, Any]], *,
             if attempt == 2:
                 logger.warning("context.summary.invalid %s falling back to compact_observations", exc)
                 return compact_observations(messages, budget=char_budget,
-                                            exempt_tools=exempt_tools)
+                                            exempt_tools=exempt_tools,
+                                            count_reasoning=count)
             logger.warning("context.summary.invalid %s retrying (%d/2)",
                            exc, attempt + 1)
     summary_msg = {"role": "user", "content": SUMMARY_PREFIX + summary}
@@ -882,7 +900,7 @@ __all__ = [
     "ContextStrategyRequest", "SUMMARY_PREFIX", "SUMMARIZER_INSTRUCTION",
     "request_view_size", "apply_context_strategy", "apply_memory_strategy",
     "compact_observations", "register_context_strategy", "set_summary_llm",
-    "summarize_history", "extract_summary", "reasoning_replayed", "total_chars",
+    "summarize_history", "extract_summary", "total_chars",
 ]
 
 
