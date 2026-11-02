@@ -27,12 +27,11 @@ class RuntimeHomeTests(unittest.TestCase):
             self.assertEqual(storage.sessions_dir(),
                              Path("/tmp/elsewhere/sessions"))
             self.assertEqual(storage.traces_dir(), Path("/tmp/elsewhere/traces"))
-            self.assertEqual(storage.memory_dir(), Path("/tmp/elsewhere/memory"))
 
     def test_every_artifact_lands_under_the_same_home(self) -> None:
         with patch.dict(os.environ, {"AGENT_RUNTIME_HOME": "/tmp/elsewhere"}):
             paths = [storage.sessions_dir(), storage.traces_dir(),
-                     storage.memory_dir(), storage.trace_path("run-1")]
+                     storage.trace_path("run-1")]
 
         for path in paths:
             self.assertTrue(str(path).startswith("/tmp/elsewhere"), path)

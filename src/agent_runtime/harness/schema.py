@@ -227,35 +227,15 @@ DEFAULT_TEST_TARGET_PATTERN = (
 
 @dataclass(frozen=True)
 class VerificationGenome:
-    """Return-contract gate enforced at the turn boundary, not in the loop.
+    """Submission contract checked at the turn boundary.
 
-    Mirrors the labs-OO-Agents BenchAgent pattern (structured TaskResult):
-    the model declares ``solution_description / evidence / command_to_verify``
-    as free text; the harness checks *shape* (field present + minimal
-    content) plus *grounding* (evidence quotes observed output, the declared
-    command was run, at least one source edit exists). The declared command
-    is model-authored per task, so the gate stays generic across
-    SWE-bench / terminal-bench. When ``rerun_declared_command`` is true
-    (code-v12), a passing answer's declared command is re-executed once
-    via ``run_command``: the canonical history command grounding the
-    declaration runs (never the raw declared string, which may carry
-    fences or trailing prose), exit 0 accepts, anything else rejects as
-    a ``command_to_verify`` gap with the rerun output quoted.
-    ``task_result`` mode (code-v13) moves the declaration into the
-    configured submit tool (``submit_result`` by default): finishing
-    requires one call with all three parameters as typed arguments — no
-    answer-string parsing — while the same shape/grounding pipeline
-    validates the submission. Which
-    command counts as the verify command is the model's call per task
-    (prompt contract: whatever runner this repo uses, declared exactly as
-    run). A declared command is always re-executed verbatim via
-    ``run_command`` (600s timeout): exit 0 accepts, anything else rejects
-    as a ``command_to_verify`` gap with the rerun output quoted. The gate
-    verifies authenticity — the command was run, the rerun passes, the
-    evidence quotes it — never the runner's identity.
-    ``return_contract`` stays parseable so the code-v10..v12 lineage
-    loads, but the runtime no longer accepts text finishes under any
-    enabled mode — those harnesses are retired, not runnable.
+    The model finishes by calling ``submit_tool`` with
+    ``solution_description / evidence / command_to_verify``.  The gate
+    checks shape (required fields present and non-trivial) and grounding
+    (evidence quotes observed output, the declared command was actually
+    run, and at least one source edit exists).  The declared command is
+    re-executed verbatim and must exit 0.  ``require`` selects the fields;
+    ``mode="off"`` disables the gate.
     """
 
     enabled: bool = False

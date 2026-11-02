@@ -12,10 +12,8 @@ Everything the runtime writes at run time lives under a single root:
 workspace/                     ← AGENT_RUNTIME_HOME (default: <repo>/workspace)
 ├── sessions/                  one JSON document per browser conversation
 │   └── sess-<hex12>.json
-├── traces/                    one JSONL file per agent turn
-│   └── run-<hex12>.jsonl
-└── memory/                    the latest compaction summary
-    └── session_memory.md
+└── traces/                    one JSONL file per agent turn
+    └── run-<hex12>.jsonl
 ```
 
 The root is resolved in one place — `src/agent_runtime/storage.py` —
@@ -24,16 +22,14 @@ so "where does this write?" always has the same answer.  Set
 
 `workspace/` is git-ignored: it is disposable run state.
 
-> Naming note: on-disk `workspace/memory/` is run-state persistence and is
-> unrelated to the harness `context` gene (formerly called `memory`).
-> The gene shapes the per-request view sent to the LLM; the directory
-> holds the latest compaction summary file.
+> Compaction summaries are trace events (`context.llm_summary.yield`),
+> not files under this runtime root. Persistent cross-session memory is a
+> separate feature under `<agent workspace>/memory/`.
 
 | Artifact | Path | Written by |
 |---|---|---|
 | Browser conversations | `workspace/sessions/sess-*.json` | `webui/sessions.py` (`SessionStore.save`) |
 | Run traces | `workspace/traces/run-*.jsonl` | `src/agent_runtime/trace.py` (`RunTrace._write_events`), via `webui/server.py` and `run_agent.py` |
-| Compaction summary | `workspace/memory/session_memory.md` | `src/agent_runtime/agent/context.py` (compaction summary emission; legacy docs said `agent/memory.py`) |
 
 An empty conversation is never written: the file appears with the
 first message and disappears with the conversation.  A session that
@@ -53,7 +49,7 @@ contract, not a side effect.  The root is `AGENT_RUNTIME_WORKSPACE`
 | Anything the model writes | any workspace-relative path | `src/agent_runtime/tools/files.py`, `tools/patch.py` → `src/agent_runtime/execution/local.py` |
 
 Both directories are git-ignored, and both are skipped by repo-wide
-searches (`SKIP_DIRS` in `src/agent_runtime/tools/search.py`).
+searches (`SKIP_DIRS` in `src/agent_runtime/execution/base.py`).
 
 ## Versioned research artefacts
 

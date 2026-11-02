@@ -1,10 +1,10 @@
 """One place that decides where the runtime keeps what it writes.
 
-The runtime persists three kinds of thing, and they used to live in
-three unrelated directories: browser sessions under ``runs/webui/``, run
-traces under ``runs/webui/traces/`` and the compaction summary under
-``memory/``.  Every writer resolved its own path, so there was no way
-to answer "what does this project write to disk?" by reading one file.
+The runtime persists two kinds of run state, and they used to live in
+unrelated directories: browser sessions under ``runs/webui/`` and run
+traces under ``runs/webui/traces/``.  Every writer resolved its own path,
+so there was no way to answer "what does this project write to disk?" by
+reading one file.
 
 This module is that answer.  Everything the runtime persists lives
 under one root:
@@ -12,17 +12,16 @@ under one root:
     <home>/
       sessions/   one JSON document per browser conversation
       traces/     one JSONL file per agent turn
-      memory/     the latest compaction summary
 
 ``<home>`` is ``AGENT_RUNTIME_HOME`` when set, and ``workspace/`` next
 to the project root otherwise.
 
 What this module does *not* own is the agent's sandbox (``AGENT_RUNTIME_WORKSPACE``
-with its ``.outputs/`` spills and ``.scripts/``) and the versioned
-research artefacts (``harnesses/``, ``evaluation/records/``).  Those are
-deliberately separate: the sandbox is the agent's own working area and
-its paths are part of the model's contract, while the research
-artefacts are meant to be committed and compared across runs.
+with its ``.outputs/`` spills, ``.scripts/`` and persistent-memory tree) and the
+versioned research artefacts (``harnesses/``, ``evaluation/records/``).  Those
+are deliberately separate: the sandbox is the agent's own working area and
+its paths are part of the model's contract, while the research artefacts
+are meant to be committed and compared across runs.
 """
 
 from __future__ import annotations
@@ -62,17 +61,12 @@ def traces_dir() -> Path:
     return runtime_home() / "traces"
 
 
-def memory_dir() -> Path:
-    """Where the compaction summaries are stored."""
-    return runtime_home() / "memory"
-
-
 def trace_path(run_id: str) -> Path:
     """The trace file for one agent turn."""
     return traces_dir() / f"{run_id}.jsonl"
 
 
 __all__ = [
-    "DEFAULT_HOME_DIRNAME", "memory_dir", "runtime_home",
+    "DEFAULT_HOME_DIRNAME", "runtime_home",
     "sessions_dir", "trace_path", "traces_dir",
 ]
