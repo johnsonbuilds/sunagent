@@ -39,6 +39,7 @@ from agent_runtime.harness import (
     DEFAULT_WINDOW_ROUNDS,
     ContextGenome,
 )
+from agent_runtime.agent.tokens import response_usage
 from agent_runtime.reasoning_echo import reasoning_echo_enabled
 
 logger = logging.getLogger(__name__)
@@ -586,24 +587,6 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
     return result
 
 
-def _coerce_usage(response: Any) -> tuple[int, int]:
-    """Prompt/completion ints from a summarizer chat response."""
-    usage = None
-    if isinstance(response, dict):
-        usage = response.get("usage")
-    if not isinstance(usage, dict):
-        return 0, 0
-    try:
-        prompt = int(usage.get("prompt_tokens") or 0)
-    except (TypeError, ValueError):
-        prompt = 0
-    try:
-        completion = int(usage.get("completion_tokens") or 0)
-    except (TypeError, ValueError):
-        completion = 0
-    return max(0, prompt), max(0, completion)
-
-
 def _resolve_summarizer(llm: Any) -> Any:
     """Resolve an injected summarizer object or lazy factory."""
     if llm is None:
@@ -667,7 +650,7 @@ async def _generate_summary(messages: list[dict[str, Any]], *,
         raise RuntimeError("no summarizer LLM is configured")
     response = await model.chat(summarizer_messages, tools=None,
                                 max_tokens=summary_max_tokens)
-    return (response.get("content") or "", _coerce_usage(response))
+    return (response.get("content") or "", response_usage(response))
 
 
 _REQUIRED_SECTIONS = ["## 1. Work State", "## 2. Next Move", "## 3. Working Context & Anchors"]
@@ -754,40 +737,22 @@ async def summarize_history(messages: list[dict[str, Any]], *,
     starts = _round_starts(messages)
     if len(starts) < 2:
         return messages
-    # Below budget: the view is already small enough — identity.
     if _view_size(messages, count, unit, usage_anchor) <= (budget or DEFAULT_CONTEXT_BUDGET):
         return messages
 
-    # Defensive: a snapshot should never enter the source history, but if
-    # one does (imported session, future writer) it lands where this
-    # function itself would put it — right before the first round.  Such
-    # a message is a machine snapshot, not user speech: filtering it from
-    # ``leading`` keeps it from being copied into the new view (where
-    # ``extract_summary`` would then return the stale text first and
-    # freeze the incremental boundary), and filtering it from ``segment``
-    # keeps it out of both the summarizer input and the user-preserve
-    # pool.  ``tail`` needs no filter: the snapshot position is always
-    # before ``starts[-tail_rounds]`` by construction.
+    # A snapshot must never enter the source history; filter it so an
+    # imported one cannot freeze the incremental boundary via stale text.
     leading = [message for message in messages[:starts[0]]
                if not _is_summary_message(message)]
     tail_start = starts[-tail_rounds]
     tail = messages[tail_start:]
 
-    # Mid-segment: the part between the leading task and the verbatim
-    # tail, restricted to what the previous summary has NOT already
-    # absorbed (incremental boundary).
     segment_start = max(starts[0], boundary)
     segment = [message for message in messages[segment_start:tail_start]
                if not _is_summary_message(message)]
 
-    # Preserve user messages verbatim, newest first within the budget
-    # (chars, in either budget unit — see below); overflow users (oldest,
-    # past the budget) join the summarizer input.
-    # NOTE: user_preserve_budget is deliberately metered in chars even
-    # when budget_unit == "tokens". The preserve pool is a coarse guard
-    # ("keep the last few redirects whole"), not a precise budget: routing
-    # it through the anchor-calibrated char/token ratio would inject
-    # conversion noise into a threshold that chars serve fine.
+    # user_preserve_budget stays in chars under either unit: routing it
+    # through the anchor ratio would add conversion noise to a coarse guard.
     preserved: list[dict[str, Any]] = []
     novel: list[dict[str, Any]] = []
     user_chars = 0
@@ -801,16 +766,12 @@ async def summarize_history(messages: list[dict[str, Any]], *,
         novel.append(message)
     novel.reverse()
     preserved.reverse()  # restore chronological order
-    # The summarizer reads the FULL segment — including the verbatim-kept
-    # users — so the snapshot covers them and the incremental boundary may
-    # safely advance past them. Verbatim users ride the view as well; they
-    # cost a little extra summarizer input (short by construction) but are
-    # never silently dropped by the next compaction.
+    # The snapshot must cover the verbatim-kept users so the boundary
+    # can safely advance past them.
 
     summarizer_input = list(segment)
 
     if not novel:
-        # Nothing new to summarise: keep the previous snapshot in place.
         if previous_summary is not None:
             summary_msg = {"role": "user",
                            "content": SUMMARY_PREFIX + previous_summary}
@@ -825,12 +786,8 @@ async def summarize_history(messages: list[dict[str, Any]], *,
     for attempt in (1, 2):
         attempt_input = summarizer_input
         if attempt == 2 and full_input_chars > DEFAULT_SUMMARIZER_INPUT_CAP_CHARS:
-            # Retry on a folded copy, not a re-read of the same wall: the
-            # attempt-1 failure already proved the full segment indigestible
-            # (TB-2.1: failing inputs run 150k-550k chars). Deterministic
-            # folding keeps tool-call pairs and verbatim users intact while
-            # old observations shrink to head excerpts — the retry attacks
-            # the likely cause instead of repeating the attempt.
+            # Retry on a deterministically folded copy: same pairs/users,
+            # old observations shrunk — attacks the likely cause.
             attempt_input = compact_observations(
                 summarizer_input, budget=DEFAULT_SUMMARIZER_INPUT_CAP_CHARS,
                 exempt_tools=exempt_tools, count_reasoning=count)
@@ -850,10 +807,7 @@ async def summarize_history(messages: list[dict[str, Any]], *,
                     logger.debug("context.summary.usage_sink_failed",
                                  exc_info=True)
         except Exception as exc:
-            # The summarizer request itself failed (rate limit, context
-            # overflow on a huge segment, transport error): record the cause
-            # with the input scale so production fallbacks are diagnosable,
-            # then take the deterministic path.
+            # Billed call failed before producing a snapshot; fall back.
             if trace is not None:
                 trace.emit("context.llm_summary.error", iteration,
                            error=str(exc)[:500], error_type=type(exc).__name__,
@@ -873,13 +827,7 @@ async def summarize_history(messages: list[dict[str, Any]], *,
             _validate_summary(summary, summary_max_tokens=summary_max_tokens)
             break
         except ValueError as exc:
-            # The model answered but the snapshot is unusable (missing
-            # sections, empty, or grown toward the history it replaces):
-            # record the output size against the cap so truncation vs
-            # corner-cutting is distinguishable. Non-compliance is usually
-            # flaky (trial-3: 482-char and empty snapshots from the same
-            # model that writes valid 6k ones), so retry once before
-            # falling back.
+            # Unusable snapshot (flaky non-compliance); retry once, then fall back.
             if trace is not None:
                 trace.emit("context.llm_summary.invalid", iteration,
                            reason=str(exc)[:500], attempt=attempt,

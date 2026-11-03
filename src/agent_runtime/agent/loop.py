@@ -30,48 +30,12 @@ from agent_runtime.agent.turn_history import (
     Conversation,
     TurnHistory,
 )
+from agent_runtime.agent.tokens import response_usage
 from agent_runtime.runtime_config import RuntimeConfig, resolve_echo_reasoning
 from agent_runtime.agent.turn_opening import open_turn
 from agent_runtime.tools import ToolExecutor
 
 logger = logging.getLogger(__name__)
-
-
-def _usage_numbers(response: Any) -> tuple[int, int]:
-    """Billed token counts from an LLM response (0 when unreported)."""
-    usage = response.get("usage") if isinstance(response, dict) else None
-    if not isinstance(usage, dict):
-        return 0, 0
-    try:
-        prompt = int(usage.get("prompt_tokens") or 0)
-    except (TypeError, ValueError):
-        prompt = 0
-    try:
-        completion = int(usage.get("completion_tokens") or 0)
-    except (TypeError, ValueError):
-        completion = 0
-    return max(0, prompt), max(0, completion)
-
-
-def _finalize_agent_meta(history: Any, agent_meta: dict[str, Any]) -> None:
-    """Copy the turn token ledger onto the ``agent`` span metadata.
-
-    ``trace.span("agent")`` emits ``agent.end`` from this dict, so the
-    cumulative totals must land here — not on a separate event — for
-    offline ``agent-runtime.jsonl`` accounting to see one row per task.
-    """
-    try:
-        totals = history.token_totals
-    except Exception:
-        return
-    agent_meta.update(
-        prompt_tokens=totals.get("prompt_tokens", 0),
-        completion_tokens=totals.get("completion_tokens", 0),
-        total_tokens=totals.get("total_tokens", 0),
-        summarizer_prompt_tokens=totals.get("summarizer_prompt_tokens", 0),
-        summarizer_completion_tokens=totals.get(
-            "summarizer_completion_tokens", 0),
-    )
 
 
 class AgentTurn:
@@ -183,26 +147,26 @@ class AgentTurn:
                     finished = self.finisher.answer_without_tools(response,
                                                                   iteration, history)
                     if finished is not None:
-                        _finalize_agent_meta(history, agent_meta)
+                        agent_meta.update(history.token_totals)
                         return finished
                     continue
                 stop = await self.tool_runner.dispatch(
                     outcomes, submit_args, iteration, history)
                 if stop is not None:
-                    _finalize_agent_meta(history, agent_meta)
+                    agent_meta.update(history.token_totals)
                     return stop
 
                 if submit_args is not None:
                     finished = await self.finisher.finish_or_nudge(
                         submit_args, iteration, history)
                     if finished is not None:
-                        _finalize_agent_meta(history, agent_meta)
+                        agent_meta.update(history.token_totals)
                         return finished
                     continue
 
             return await self._summary_turn(history, agent_meta)
         finally:
-            _finalize_agent_meta(history, agent_meta)
+            agent_meta.update(history.token_totals)
 
     async def _request(self, history: TurnHistory, iteration: int,
                        schemas: list[dict[str, Any]],
@@ -228,7 +192,7 @@ class AgentTurn:
                     runtime=self.runtime)
                 tool_calls = response.get("tool_calls") or []
                 content = response.get("content") or ""
-                prompt_tokens, completion_tokens = _usage_numbers(response)
+                prompt_tokens, completion_tokens = response_usage(response)
                 history.record_usage(prompt_tokens, completion_tokens)
 
                 span_meta.update(
@@ -268,7 +232,7 @@ class AgentTurn:
             logger.error("llm.request.error iteration=%d error=%s", iteration, exc)
             error = f"LLM error: {exc}"
             agent_meta.update(stage="llm", error=error)
-            _finalize_agent_meta(history, agent_meta)
+            agent_meta.update(history.token_totals)
             raise TurnFailure(error) from exc
 
     async def _summary_turn(self, history: TurnHistory,
@@ -298,7 +262,7 @@ class AgentTurn:
                     refresh=self.guard.context_window_refresh(
                         history, iteration),
                     runtime=self.runtime)
-                prompt_tokens, completion_tokens = _usage_numbers(response)
+                prompt_tokens, completion_tokens = response_usage(response)
                 history.record_usage(prompt_tokens, completion_tokens)
                 span_meta.update(tool_count=0, tools=[], final=True,
                                  prompt_tokens=prompt_tokens,
