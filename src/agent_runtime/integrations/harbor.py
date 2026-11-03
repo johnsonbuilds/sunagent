@@ -12,7 +12,8 @@ from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
-from agent_runtime.agent import run_turn, use_streaming
+from agent_runtime.agent import run_turn
+from agent_runtime.runtime_config import RuntimeConfig
 from agent_runtime.execution.harbor import HarborShellExecutor, HarborWorkspace
 from agent_runtime.harness import HarnessSpec, resolve_harness
 from agent_runtime.memory import ENV_MEMORY
@@ -51,7 +52,8 @@ class HarborAgent(BaseAgent):
         # it back on.
         os.environ[ENV_MEMORY] = "0"
         _enable_runtime_logging()
-        self.llm = llm if llm is not None else OpenAICompatibleLLM(model=self.model_name)
+        self._runtime = RuntimeConfig.from_env()
+        self.llm = llm if llm is not None else OpenAICompatibleLLM(model=self.model_name, config=self._runtime)
 
     @staticmethod
     def name() -> str:
@@ -70,8 +72,8 @@ class HarborAgent(BaseAgent):
         context: AgentContext,
     ) -> None:
         trace_path = self.logs_dir / "agent-runtime.jsonl"
-        use_stream = use_streaming()
         harness: HarnessSpec = resolve_harness(os.getenv("AGENT_RUNTIME_HARNESS"))
+        use_stream = self._runtime.streaming if isinstance(getattr(self, "_runtime", None), RuntimeConfig) else RuntimeConfig.from_env().streaming
         logger.debug("task.start instruction=%r model=%r stream=%s harness=%s",
                      instruction, getattr(self.llm, "model", None),
                      use_stream, harness.id)
@@ -97,7 +99,8 @@ class HarborAgent(BaseAgent):
         try:
             answer = await run_turn(instruction, self.llm, tools,
                                     harness=harness,
-                                    stream=use_stream, trace=trace)
+                                    stream=use_stream, trace=trace,
+                                    runtime=getattr(self, "_runtime", None))
             agent_error = next(
                 (event for event in reversed(trace.events)
                  if event.event_type == "agent.error"),

@@ -30,6 +30,7 @@ from agent_runtime.agent.turn_history import (
     Conversation,
     TurnHistory,
 )
+from agent_runtime.runtime_config import RuntimeConfig, resolve_echo_reasoning
 from agent_runtime.agent.turn_opening import open_turn
 from agent_runtime.tools import ToolExecutor
 
@@ -63,6 +64,7 @@ class AgentTurn:
         self.stream = collaborators.stream
         self.max_iterations = collaborators.max_iterations
         self.skills_dir = collaborators.skills_dir
+        self.runtime: RuntimeConfig | None = collaborators.runtime
 
     async def run(self) -> str:
         """Execute the turn and always flush the trace."""
@@ -93,7 +95,10 @@ class AgentTurn:
                   trace=trace)
         self.conversation.append({"role": "user", "content": self.user_message})
         history = TurnHistory(self.conversation.messages,
-                              summarizer=self.summarizer)
+                              summarizer=self.summarizer,
+                              count_reasoning=resolve_echo_reasoning(
+                                  self.llm, self.runtime),
+                              runtime=self.runtime)
 
         for iteration in range(1, self.max_iterations + 1):
             self.guard.maybe_remind(history, iteration)
@@ -176,7 +181,8 @@ class AgentTurn:
                     self.llm, history.view, schemas, iteration,
                     harness, stream=self.stream, trace=trace, events=events,
                     refresh=self.guard.context_window_refresh(
-                        history, iteration))
+                        history, iteration),
+                    runtime=self.runtime)
                 tool_calls = response.get("tool_calls") or []
                 content = response.get("content") or ""
                 usage = response.get("usage")
@@ -244,7 +250,8 @@ class AgentTurn:
                     self.llm, history.view, None, iteration, harness,
                     stream=self.stream, trace=trace, events=events,
                     refresh=self.guard.context_window_refresh(
-                        history, iteration))
+                        history, iteration),
+                    runtime=self.runtime)
                 span_meta.update(tool_count=0, tools=[], final=True)
                 logger.debug("llm.request.end iteration=%d content_chars=%d tool_calls=[]",
                              iteration, len(response.get("content") or ""))

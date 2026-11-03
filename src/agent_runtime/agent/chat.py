@@ -11,12 +11,16 @@ from typing import Any, Protocol
 from agent_runtime.agent.tool_dispatch import tool_trace_metadata
 from agent_runtime.events import EventEmitter
 from agent_runtime.harness import HarnessSpec
+from agent_runtime.runtime_config import RuntimeConfig
 from agent_runtime.trace import RunTrace
 
 logger = logging.getLogger(__name__)
 
 
-def _stream_idle_timeout() -> float | None:
+def _stream_idle_timeout(runtime: RuntimeConfig | None = None) -> float | None:
+    """Idle timeout, explicit config wins; env is the legacy fallback."""
+    if runtime is not None:
+        return runtime.stream_idle_timeout
     raw = os.getenv("AGENT_RUNTIME_STREAM_IDLE_TIMEOUT", "120")
     try:
         timeout = float(raw)
@@ -25,13 +29,16 @@ def _stream_idle_timeout() -> float | None:
     return timeout if timeout > 0 else None
 
 
-def _reasoning_budget_chars() -> int | None:
+def _reasoning_budget_chars(runtime: RuntimeConfig | None = None) -> int | None:
     """Max accumulated reasoning chars before a thinking-only turn is cut.
 
     Guards against reasoning models that spiral into unbounded chain of
     thought without ever emitting content or tool calls (observed on
     ARS-class tasks). 0 or a negative value disables the guard.
+    Explicit config wins; env is the legacy fallback.
     """
+    if runtime is not None:
+        return runtime.max_reasoning_chars
     raw = os.getenv("AGENT_RUNTIME_MAX_REASONING_CHARS", "50000")
     try:
         budget = int(raw)
@@ -84,13 +91,25 @@ def _llm_error_category(exc: BaseException) -> str | None:
     return "provider_error"
 
 
-def use_streaming() -> bool:
+def use_streaming(runtime: RuntimeConfig | None = None) -> bool:
     """Whether the runtime should consume LLM streaming (AGENT_RUNTIME_STREAM)."""
+    if runtime is not None:
+        return runtime.streaming
     value = os.getenv("AGENT_RUNTIME_STREAM", "1").lower()
     return value not in {"0", "false", "no", "off"}
 
 
 class ChatModel(Protocol):
+    @property
+    def echo_reasoning(self) -> bool:
+        """Whether this endpoint replays ``reasoning_content`` on the wire.
+
+        Optional for Duck-typed fakes: callers must use
+        ``runtime_config.resolve_echo_reasoning`` with a runtime fallback
+        instead of accessing it directly.
+        """
+        ...
+
     async def chat(self, messages: list[dict[str, Any]],
                     tools: list[dict[str, Any]] | None = None) -> dict[str, Any]: ...
 
@@ -121,19 +140,20 @@ async def _consume_stream(llm: ChatModel, messages: list[dict[str, Any]],
                           tools: list[dict[str, Any]] | None,
                           iteration: int, *,
                           trace: RunTrace | None = None,
-                          events: EventEmitter | None = None) -> dict[str, Any]:
+                          events: EventEmitter | None = None,
+                          runtime: RuntimeConfig | None = None) -> dict[str, Any]:
     """Assemble one response from provider streaming chunks."""
     content: list[str] = []
     reasoning: list[str] = []
     tool_calls: list[dict[str, Any]] = []
     finish_reason: str | None = None
     usage: dict[str, Any] | None = None
-    reasoning_budget = _reasoning_budget_chars()
+    reasoning_budget = _reasoning_budget_chars(runtime)
     logger.debug("llm.stream.start iteration=%d", iteration)
     stream_iterator = llm.stream(messages, tools).__aiter__()
     while True:
         try:
-            timeout = _stream_idle_timeout()
+            timeout = _stream_idle_timeout(runtime)
             if timeout is None:
                 chunk = await anext(stream_iterator)
             else:
@@ -226,7 +246,8 @@ async def _chat_response(llm: ChatModel, messages: list[dict[str, Any]],
                          iteration: int, *,
                          stream: bool = False,
                          trace: RunTrace | None = None,
-                         events: EventEmitter | None = None) -> dict[str, Any]:
+                         events: EventEmitter | None = None,
+                         runtime: RuntimeConfig | None = None) -> dict[str, Any]:
     """Consume either runtime streaming or a single runtime response."""
     if events is not None:
         events.emit("assistant.started", iteration)
@@ -241,7 +262,8 @@ async def _chat_response(llm: ChatModel, messages: list[dict[str, Any]],
                             content=content, reasoning=reasoning)
     else:
         response = await _consume_stream(llm, messages, tools, iteration,
-                                         trace=trace, events=events)
+                                         trace=trace, events=events,
+                                         runtime=runtime)
     if events is not None:
         events.emit("assistant.completed", iteration,
                     tool_calls=[tool_trace_metadata(call).get("tool")
@@ -257,6 +279,7 @@ async def chat_with_recovery(llm: ChatModel, messages: list[dict[str, Any]],
                              trace: RunTrace | None = None,
                              events: EventEmitter | None = None,
                              refresh: Callable[[], Awaitable[bool]] | None = None,
+                             runtime: RuntimeConfig | None = None,
                              ) -> dict[str, Any]:
     """One chat request, retried per the ``recovery.llm_errors`` gene.
 
@@ -276,7 +299,8 @@ async def chat_with_recovery(llm: ChatModel, messages: list[dict[str, Any]],
     while True:
         try:
             return await _chat_response(llm, messages, tools, iteration,
-                                        stream=stream, trace=trace, events=events)
+                                        stream=stream, trace=trace, events=events,
+                                        runtime=runtime)
         except Exception as exc:
             category = _llm_error_category(exc)
             if category is None:

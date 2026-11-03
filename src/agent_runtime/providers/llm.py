@@ -11,6 +11,7 @@ from agent_runtime.reasoning_echo import (
     DEFAULT_MODEL,
     should_echo_reasoning,
 )
+from agent_runtime.runtime_config import RuntimeConfig
 
 
 logger = logging.getLogger(__name__)
@@ -216,26 +217,55 @@ def _project_messages_for_wire(messages: Sequence[dict[str, Any]],
 
 class OpenAICompatibleLLM:
     def __init__(self, api_key: str | None = None, base_url: str | None = None,
-                  model: str | None = None, **client_kwargs: Any) -> None:
+                  model: str | None = None, config: RuntimeConfig | None = None,
+                  temperature: float | None = None, **client_kwargs: Any) -> None:
         try:
             from openai import AsyncOpenAI
         except ImportError as exc:
             raise RuntimeError("Install the openai package to use this provider") from exc
-        self.model = model or os.getenv("MODEL_ID", DEFAULT_MODEL)
-        self.base_url = base_url or os.getenv("LLM_BASE_URL")
-        self.temperature = float(os.getenv("LLM_TEMPERATURE", 0.0))
-        self.client = AsyncOpenAI(api_key=api_key or os.getenv("LLM_API_KEY"),
-                                  base_url=self.base_url,
-                                  **client_kwargs)
+        if config is not None:
+            from dataclasses import replace as _replace
+            fields: dict[str, Any] = {}
+            if model is not None:
+                fields["model"] = model
+            if base_url is not None:
+                fields["base_url"] = base_url
+            if api_key is not None:
+                fields["api_key"] = api_key
+            if temperature is not None:
+                fields["temperature"] = float(temperature)
+            self._config = _replace(config, **fields) if fields else config
+        else:
+            self._config = RuntimeConfig.from_env(model=model, base_url=base_url, api_key=api_key, temperature=temperature)
+        self.model = self._config.model
+        self.base_url = self._config.base_url
+        self.temperature = self._config.temperature
+        self.client = AsyncOpenAI(api_key=self._config.api_key, base_url=self.base_url, **client_kwargs)
+
+    @property
+    def runtime_config(self) -> RuntimeConfig:
+        return self._config
+
+    @property
+    def echo_reasoning(self) -> bool:
+        # Instance endpoint (fixes the split-brain) + live echo mode.
+        # Mode stays a global knob so `AGENT_RUNTIME_REASONING_ECHO`
+        # patching in tests/scripts keeps working; an explicitly pinned
+        # config mode wins when the env is at its default.
+        from agent_runtime.reasoning_echo import reasoning_echo_mode, should_echo_reasoning
+        import os as _os
+        if _os.getenv("AGENT_RUNTIME_REASONING_ECHO") is None:
+            return should_echo_reasoning(self.model, self.base_url, self._config.reasoning_echo_mode)
+        return should_echo_reasoning(self.model, self.base_url, reasoning_echo_mode())
 
     async def chat(self, messages: Sequence[dict[str, Any]],
                    tools: list[dict[str, Any]] | None = None,
                    **request_kwargs: Any) -> dict[str, Any]:
-        echo = should_echo_reasoning(self.model, self.base_url)
+        echo = self.echo_reasoning
         kwargs = {"model": self.model,
                   "messages": _project_messages_for_wire(messages, echo),
                   "temperature": self.temperature, **request_kwargs}
-        effort = _reasoning_effort()
+        effort = self._config.reasoning_effort
         if effort is not None:
             kwargs.setdefault("reasoning_effort", effort)
         if tools is not None:
@@ -267,17 +297,17 @@ class OpenAICompatibleLLM:
         terminated normally.  If the server cuts the stream without a
         finish marker, no such signal is emitted.
         """
-        echo = should_echo_reasoning(self.model, self.base_url)
+        echo = self.echo_reasoning
         kwargs = {"model": self.model,
                   "messages": _project_messages_for_wire(messages, echo),
                   "stream": True, "temperature": self.temperature,
                   **request_kwargs}
-        effort = _reasoning_effort()
+        effort = self._config.reasoning_effort
         if effort is not None:
             kwargs.setdefault("reasoning_effort", effort)
         if tools is not None:
             kwargs["tools"] = tools
-        if _stream_usage_enabled():
+        if self._config.stream_usage:
             kwargs.setdefault("stream_options", {"include_usage": True})
         try:
             response = await self.client.chat.completions.create(**kwargs)

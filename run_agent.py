@@ -15,7 +15,8 @@ sys.path.insert(0, str(SOURCE_DIR))
 from dotenv import load_dotenv
 
 from agent_runtime import storage
-from agent_runtime.agent import Conversation, RunTrace, run_turn, use_streaming
+from agent_runtime.agent import Conversation, RunTrace, run_turn
+from agent_runtime.runtime_config import RuntimeConfig
 from agent_runtime.channels import CLIRenderer
 from agent_runtime.events import EventEmitter
 from agent_runtime.harness import resolve_harness
@@ -42,7 +43,8 @@ async def _run() -> None:
     args = parser.parse_args()
 
     harness = resolve_harness(args.harness)
-    llm = OpenAICompatibleLLM()
+    runtime = RuntimeConfig.from_env()
+    llm = OpenAICompatibleLLM(config=runtime)
     tools = create_default_registry(enabled=list(harness.tools.enabled))
     conversation = Conversation()
     # Traces are runtime state, so they land in the one place the
@@ -53,7 +55,7 @@ async def _run() -> None:
     events = EventEmitter(run_id=trace.run_id)
     renderer = CLIRenderer()
     events.subscribe(renderer)
-    use_stream = use_streaming()
+    use_stream = runtime.streaming
     prompt = " ".join(args.prompt).strip()
 
     try:
@@ -69,7 +71,7 @@ async def _run() -> None:
             if prompt:
                 await run_turn(prompt, llm, tools, conversation=conversation,
                                harness=harness, stream=use_stream,
-                               trace=trace, events=events)
+                               trace=trace, events=events, runtime=runtime)
             prompt = ""
     finally:
         renderer.close()

@@ -47,7 +47,8 @@ from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
 from agent_runtime import storage
-from agent_runtime.agent import RunTrace, run_turn, use_streaming
+from agent_runtime.agent import RunTrace, run_turn
+from agent_runtime.runtime_config import RuntimeConfig
 from agent_runtime.channels.webui import WebUIChannel
 from agent_runtime.events import EventEmitter
 from agent_runtime.harness import HarnessError, resolve_harness
@@ -128,10 +129,11 @@ class AgentRunner:
     report a helpful error) when no API key is configured.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, runtime: RuntimeConfig | None = None) -> None:
+        self.runtime = runtime if runtime is not None else RuntimeConfig.from_env()
         self.harness = self._resolve_harness()
         self.tools = create_default_registry(enabled=list(self.harness.tools.enabled))
-        self.stream = use_streaming()
+        self.stream = self.runtime.streaming
         self._llm: OpenAICompatibleLLM | None = None
         self._llm_error: str | None = None
 
@@ -147,7 +149,7 @@ class AgentRunner:
     def llm(self) -> OpenAICompatibleLLM:
         if self._llm is None:
             try:
-                self._llm = OpenAICompatibleLLM()
+                self._llm = OpenAICompatibleLLM(config=self.runtime)
                 self._llm_error = None
             except Exception as exc:
                 self._llm_error = str(exc)
@@ -356,7 +358,7 @@ async def _execute(session: Session, message: str, runner: AgentRunner,
         await run_turn(message, runner.llm, runner.tools,
                        conversation=session.conversation,
                        harness=runner.harness, stream=runner.stream,
-                       trace=trace, events=events)
+                       trace=trace, events=events, runtime=runner.runtime)
     except asyncio.CancelledError:
         session.bus.publish({"type": "run.error", "stage": "cancelled",
                              "error": "run cancelled"})

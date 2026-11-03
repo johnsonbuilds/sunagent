@@ -10,7 +10,6 @@ or construct its own policy helpers.
 
 from __future__ import annotations
 
-import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -26,22 +25,30 @@ from agent_runtime.agent.verification import SubmissionRules
 from agent_runtime.events import EventEmitter
 from agent_runtime.execution.base import Workspace
 from agent_runtime.harness import HarnessSpec, default_harness
+from agent_runtime.runtime_config import RuntimeConfig
 from agent_runtime.tools import ToolExecutor
 from agent_runtime.trace import RunTrace
 
 
-@lru_cache(maxsize=1)
-def _default_summarizer() -> ChatModel:
+@lru_cache(maxsize=32)
+def _cached_summarizer(summary_model: str | None) -> ChatModel:
+    """Per-model cached summarizer provider."""
+    from agent_runtime.providers.llm import OpenAICompatibleLLM
+
+    return OpenAICompatibleLLM(model=summary_model)
+
+
+def _default_summarizer(runtime: RuntimeConfig | None = None) -> ChatModel:
     """Build the per-process summarizer provider on first use.
 
     Lazy on purpose: turns whose context strategy never summarizes must
-    not construct an OpenAI client (or require an API key).  The cache is
-    immutable after construction, unlike the old module-level mutable.
+    not construct an OpenAI client (or require an API key).
+    Resolved from the unified runtime config so an explicit
+    ``summary_model`` never falls back to a stale env read.
     """
-    from agent_runtime.providers.llm import OpenAICompatibleLLM
-
-    return OpenAICompatibleLLM(
-        model=os.getenv("AGENT_RUNTIME_SUMMARY_MODEL") or None)
+    model = (runtime.summary_model if runtime is not None
+             else RuntimeConfig.from_env().summary_model)
+    return _cached_summarizer(model)
 
 
 def create_agent_turn(
@@ -57,6 +64,7 @@ def create_agent_turn(
     events: EventEmitter | None = None,
     skills_dir: str | Path | None = None,
     workspace: Workspace | None = None,
+    runtime: RuntimeConfig | None = None,
 ) -> AgentTurn:
     """Assemble one :class:`AgentTurn`; the caller decides when to run it.
 
@@ -65,6 +73,7 @@ def create_agent_turn(
     own workspace is used; every ``ToolExecutor`` guarantees one, so the
     formatter always has a real archive target.
     """
+    resolved_runtime = runtime if runtime is not None else RuntimeConfig.from_env()
     resolved_harness = harness if harness is not None else default_harness()
     resolved_trace = (trace if trace is not None
                       else RunTrace(harness=resolved_harness))
@@ -119,10 +128,11 @@ def create_agent_turn(
         finisher=finisher,
         guard=guard,
         tool_runner=tool_runner,
-        summarizer=_default_summarizer,
+        summarizer=lambda: _default_summarizer(resolved_runtime),
         stream=stream,
         max_iterations=resolved_max_iterations,
         skills_dir=skills_dir,
+        runtime=resolved_runtime,
     ))
 
 
@@ -139,6 +149,7 @@ async def run_turn(
     events: EventEmitter | None = None,
     skills_dir: str | Path | None = None,
     workspace: Workspace | None = None,
+    runtime: RuntimeConfig | None = None,
 ) -> str:
     """Create and run one agent turn under the given harness.
 
@@ -157,6 +168,7 @@ async def run_turn(
         events=events,
         skills_dir=skills_dir,
         workspace=workspace,
+        runtime=runtime,
     )
     return await turn.run()
 

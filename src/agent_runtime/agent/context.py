@@ -126,9 +126,10 @@ def extract_summary(view: list[dict[str, Any]] | None) -> str | None:
 def _count_reasoning(enabled: bool | None) -> bool:
     """Explicit policy wins; otherwise read the env-backed wire default.
 
-    Callers that own a policy object (the turn history) pass the boolean
-    explicitly, so the budget layer never has to guess.  Direct callers
-    (tests, one-off scripts) keep the historical env-backed behavior.
+    Production callers (``TurnHistory``) always pass the boolean resolved
+    from ``RuntimeConfig``/``llm.echo_reasoning`` so budget accounting
+    matches the wire projection.  Direct callers (tests, one-off scripts)
+    keep the historical env-backed behavior.
     """
     return reasoning_echo_enabled() if enabled is None else enabled
 

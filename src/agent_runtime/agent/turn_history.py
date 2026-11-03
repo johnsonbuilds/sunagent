@@ -33,7 +33,7 @@ from agent_runtime.agent.context import (
     apply_context_strategy,
 )
 from agent_runtime.harness import ContextGenome
-from agent_runtime.reasoning_echo import reasoning_echo_enabled
+from agent_runtime.runtime_config import RuntimeConfig, resolve_echo_reasoning
 
 
 def ensure_system_prompt(conversation: Conversation, system: str,
@@ -79,12 +79,16 @@ class TurnHistory:
     """Full history (source of truth) plus its request-view projection."""
 
     def __init__(self, messages: list[dict[str, Any]], *,
-                 summarizer: Any = None) -> None:
+                 summarizer: Any = None,
+                 count_reasoning: bool | None = None,
+                 runtime: RuntimeConfig | None = None) -> None:
         self.messages = messages
         self.view: list[dict[str, Any]] = list(messages)
         # Explicit summarizer (provider object or lazy factory); when
         # omitted, the context layer's context-local default applies.
         self.summarizer = summarizer
+        self._count_reasoning = count_reasoning
+        self._runtime = runtime
         # messages length at the last summary-producing compaction.
         self._summary_boundary: int = 0
         # (prompt_tokens, view length, view chars) of the last measured
@@ -101,6 +105,13 @@ class TurnHistory:
         """``messages`` index one past the last summarized message."""
         return self._summary_boundary
 
+    def _resolve_count_reasoning(self) -> bool:
+        if self._count_reasoning is not None:
+            return self._count_reasoning
+        if self._runtime is not None:
+            return self._runtime.echo_reasoning
+        return resolve_echo_reasoning(None)
+
     def record_usage(self, prompt_tokens: int) -> None:
         """Anchor the token estimate at the provider's billed usage.
 
@@ -114,7 +125,7 @@ class TurnHistory:
         """
         if prompt_tokens > 0:
             self._usage_anchor = (prompt_tokens, len(self.view),
-                                  total_chars(self.view, reasoning_echo_enabled()))
+                                  total_chars(self.view, self._resolve_count_reasoning()))
 
     @property
     def usage_anchor(self) -> tuple[int, int, int] | None:
@@ -136,7 +147,7 @@ class TurnHistory:
             usage_anchor=self._usage_anchor,
             force_budget=force_budget,
             summarizer=self.summarizer,
-            count_reasoning=reasoning_echo_enabled())
+            count_reasoning=self._resolve_count_reasoning())
         if new_view is not self.messages:
             if new_view is not self.view:
                 # The view was rebuilt: the anchor measured the OLD mix

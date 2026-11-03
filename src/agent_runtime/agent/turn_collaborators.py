@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from agent_runtime.agent.chat import ChatModel
+    from agent_runtime.runtime_config import RuntimeConfig
     from agent_runtime.agent.observations import ObservationFormatter
     from agent_runtime.agent.tool_runner import ToolRunner
     from agent_runtime.agent.turn_finisher import TurnFinisher
@@ -50,6 +51,7 @@ class TurnCollaborators:
     stream: bool
     max_iterations: int
     skills_dir: str | Path | None
+    runtime: RuntimeConfig | None = None
 
 
 __all__ = ["TurnCollaborators"]
