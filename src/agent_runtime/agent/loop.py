@@ -37,6 +37,43 @@ from agent_runtime.tools import ToolExecutor
 logger = logging.getLogger(__name__)
 
 
+def _usage_numbers(response: Any) -> tuple[int, int]:
+    """Billed token counts from an LLM response (0 when unreported)."""
+    usage = response.get("usage") if isinstance(response, dict) else None
+    if not isinstance(usage, dict):
+        return 0, 0
+    try:
+        prompt = int(usage.get("prompt_tokens") or 0)
+    except (TypeError, ValueError):
+        prompt = 0
+    try:
+        completion = int(usage.get("completion_tokens") or 0)
+    except (TypeError, ValueError):
+        completion = 0
+    return max(0, prompt), max(0, completion)
+
+
+def _finalize_agent_meta(history: Any, agent_meta: dict[str, Any]) -> None:
+    """Copy the turn token ledger onto the ``agent`` span metadata.
+
+    ``trace.span("agent")`` emits ``agent.end`` from this dict, so the
+    cumulative totals must land here — not on a separate event — for
+    offline ``agent-runtime.jsonl`` accounting to see one row per task.
+    """
+    try:
+        totals = history.token_totals
+    except Exception:
+        return
+    agent_meta.update(
+        prompt_tokens=totals.get("prompt_tokens", 0),
+        completion_tokens=totals.get("completion_tokens", 0),
+        total_tokens=totals.get("total_tokens", 0),
+        summarizer_prompt_tokens=totals.get("summarizer_prompt_tokens", 0),
+        summarizer_completion_tokens=totals.get(
+            "summarizer_completion_tokens", 0),
+    )
+
+
 class AgentTurn:
     """One agent turn: collaborators and policy bound as attributes.
 
@@ -100,66 +137,72 @@ class AgentTurn:
                                   self.llm, self.runtime),
                               runtime=self.runtime)
 
-        for iteration in range(1, self.max_iterations + 1):
-            self.guard.maybe_remind(history, iteration)
-            response = await self._request(history, iteration, tools.schemas,
-                                           agent_meta)
-            if response is None:
-                continue  # reasoning-budget nudge appended; retry next turn
-            tool_calls = response.get("tool_calls") or []
-            content = response.get("content") or ""
+        try:
+            for iteration in range(1, self.max_iterations + 1):
+                self.guard.maybe_remind(history, iteration)
+                response = await self._request(history, iteration, tools.schemas,
+                                               agent_meta)
+                if response is None:
+                    continue  # reasoning-budget nudge appended; retry next turn
+                tool_calls = response.get("tool_calls") or []
+                content = response.get("content") or ""
 
-            outcomes = classify_tool_calls(tool_calls, tools.schemas)
-            # A submit call is a finish attempt, not work: other
-            # calls in the same turn still execute first, then the first
-            # submission is validated against the updated history.
-            submit_args = self.finisher.take_submit_arguments(outcomes)
+                outcomes = classify_tool_calls(tool_calls, tools.schemas)
+                # A submit call is a finish attempt, not work: other
+                # calls in the same turn still execute first, then the first
+                # submission is validated against the updated history.
+                submit_args = self.finisher.take_submit_arguments(outcomes)
 
-            assistant_message: dict[str, Any] = {
-                "role": "assistant",
-                "content": content,
-            }
-            reasoning_content = response.get("reasoning_content")
-            if reasoning_content:
-                assistant_message["reasoning_content"] = reasoning_content
-            # A submit call is a finish request, not work: it is
-            # never executed (see ToolRunner), so it must not enter
-            # the history as a tool call — otherwise the next request
-            # carries an assistant tool_calls entry with no following
-            # tool message and the provider rejects it with 400
-            # ("must be followed by tool messages").
-            canonical_calls = canonical_tool_calls(outcomes)
-            if submit_args is not None:
-                submit_tool = self.finisher.rules.submit_tool
-                submit_ids = {outcome.validated.id for outcome in outcomes
-                              if outcome.validated is not None
-                              and outcome.validated.name == submit_tool}
-                canonical_calls = [call for call in canonical_calls
-                                   if call["id"] not in submit_ids]
-            if canonical_calls:
-                assistant_message["tool_calls"] = canonical_calls
-            if tool_calls or content or reasoning_content:
-                history.append(assistant_message)
+                assistant_message: dict[str, Any] = {
+                    "role": "assistant",
+                    "content": content,
+                }
+                reasoning_content = response.get("reasoning_content")
+                if reasoning_content:
+                    assistant_message["reasoning_content"] = reasoning_content
+                # A submit call is a finish request, not work: it is
+                # never executed (see ToolRunner), so it must not enter
+                # the history as a tool call — otherwise the next request
+                # carries an assistant tool_calls entry with no following
+                # tool message and the provider rejects it with 400
+                # ("must be followed by tool messages").
+                canonical_calls = canonical_tool_calls(outcomes)
+                if submit_args is not None:
+                    submit_tool = self.finisher.rules.submit_tool
+                    submit_ids = {outcome.validated.id for outcome in outcomes
+                                  if outcome.validated is not None
+                                  and outcome.validated.name == submit_tool}
+                    canonical_calls = [call for call in canonical_calls
+                                       if call["id"] not in submit_ids]
+                if canonical_calls:
+                    assistant_message["tool_calls"] = canonical_calls
+                if tool_calls or content or reasoning_content:
+                    history.append(assistant_message)
 
-            if not tool_calls:
-                finished = self.finisher.answer_without_tools(response,
-                                                              iteration, history)
-                if finished is not None:
-                    return finished
-                continue
-            stop = await self.tool_runner.dispatch(
-                outcomes, submit_args, iteration, history)
-            if stop is not None:
-                return stop
+                if not tool_calls:
+                    finished = self.finisher.answer_without_tools(response,
+                                                                  iteration, history)
+                    if finished is not None:
+                        _finalize_agent_meta(history, agent_meta)
+                        return finished
+                    continue
+                stop = await self.tool_runner.dispatch(
+                    outcomes, submit_args, iteration, history)
+                if stop is not None:
+                    _finalize_agent_meta(history, agent_meta)
+                    return stop
 
-            if submit_args is not None:
-                finished = await self.finisher.finish_or_nudge(
-                    submit_args, iteration, history)
-                if finished is not None:
-                    return finished
-                continue
+                if submit_args is not None:
+                    finished = await self.finisher.finish_or_nudge(
+                        submit_args, iteration, history)
+                    if finished is not None:
+                        _finalize_agent_meta(history, agent_meta)
+                        return finished
+                    continue
 
-        return await self._summary_turn(history, agent_meta)
+            return await self._summary_turn(history, agent_meta)
+        finally:
+            _finalize_agent_meta(history, agent_meta)
 
     async def _request(self, history: TurnHistory, iteration: int,
                        schemas: list[dict[str, Any]],
@@ -185,15 +228,17 @@ class AgentTurn:
                     runtime=self.runtime)
                 tool_calls = response.get("tool_calls") or []
                 content = response.get("content") or ""
-                usage = response.get("usage")
-                if usage and int(usage.get("prompt_tokens") or 0) > 0:
-                    history.record_usage(int(usage["prompt_tokens"]))
+                prompt_tokens, completion_tokens = _usage_numbers(response)
+                history.record_usage(prompt_tokens, completion_tokens)
 
                 span_meta.update(
                     tool_count=len(tool_calls),
                     tools=[tool_trace_metadata(call).get("tool")
                            for call in tool_calls],
                     final=not tool_calls,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=prompt_tokens + completion_tokens,
                 )
                 logger.debug(
                     "llm.request.end iteration=%d content_chars=%d tool_calls=%s",
@@ -223,6 +268,7 @@ class AgentTurn:
             logger.error("llm.request.error iteration=%d error=%s", iteration, exc)
             error = f"LLM error: {exc}"
             agent_meta.update(stage="llm", error=error)
+            _finalize_agent_meta(history, agent_meta)
             raise TurnFailure(error) from exc
 
     async def _summary_turn(self, history: TurnHistory,
@@ -252,7 +298,12 @@ class AgentTurn:
                     refresh=self.guard.context_window_refresh(
                         history, iteration),
                     runtime=self.runtime)
-                span_meta.update(tool_count=0, tools=[], final=True)
+                prompt_tokens, completion_tokens = _usage_numbers(response)
+                history.record_usage(prompt_tokens, completion_tokens)
+                span_meta.update(tool_count=0, tools=[], final=True,
+                                 prompt_tokens=prompt_tokens,
+                                 completion_tokens=completion_tokens,
+                                 total_tokens=prompt_tokens + completion_tokens)
                 logger.debug("llm.request.end iteration=%d content_chars=%d tool_calls=[]",
                              iteration, len(response.get("content") or ""))
         except ReasoningBudgetExceeded as exc:

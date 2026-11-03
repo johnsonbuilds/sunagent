@@ -94,6 +94,15 @@ class TurnHistory:
         # (prompt_tokens, view length, view chars) of the last measured
         # response: the token estimator's calibration anchor.
         self._usage_anchor: tuple[int, int, int] | None = None
+        # Turn-level billed-token ledger (main LLM + summarizer sub-calls).
+        # ``record_usage`` feeds the anchor AND the main counters;
+        # ``record_summarizer_usage`` feeds only the summarizer counters
+        # (its request never travels on ``view`` so it must not move the
+        # anchor). ``token_totals`` is what ``agent.end`` reports.
+        self._main_prompt_tokens: int = 0
+        self._main_completion_tokens: int = 0
+        self._summarizer_prompt_tokens: int = 0
+        self._summarizer_completion_tokens: int = 0
 
     def append(self, message: dict[str, Any]) -> None:
         """Append one message to the history and the request view."""
@@ -112,7 +121,8 @@ class TurnHistory:
             return self._runtime.echo_reasoning
         return resolve_echo_reasoning(None)
 
-    def record_usage(self, prompt_tokens: int) -> None:
+    def record_usage(self, prompt_tokens: int,
+                     completion_tokens: int = 0) -> None:
         """Anchor the token estimate at the provider's billed usage.
 
         ``prompt_tokens`` is the measured size of the request the
@@ -122,10 +132,42 @@ class TurnHistory:
         Reasoning chars are counted exactly as the budget layer counts
         them (echo policy); otherwise the anchor ratio would skew the
         moment the endpoint stops replaying reasoning.
+
+        Both counters also feed the turn-level token ledger so
+        ``agent.end`` can report the true billed cost offline.
         """
+        prompt_tokens = int(prompt_tokens or 0)
+        completion_tokens = int(completion_tokens or 0)
+        self._main_prompt_tokens += prompt_tokens
+        self._main_completion_tokens += completion_tokens
         if prompt_tokens > 0:
             self._usage_anchor = (prompt_tokens, len(self.view),
                                   total_chars(self.view, self._resolve_count_reasoning()))
+
+    def record_summarizer_usage(self, prompt_tokens: int,
+                                completion_tokens: int = 0) -> None:
+        """Accumulate one summarizer sub-call into the turn ledger.
+
+        The summarizer request never travels on ``view`` so it must not
+        move ``_usage_anchor``; it still burns billed tokens and belongs
+        in the ``agent.end`` totals.
+        """
+        self._summarizer_prompt_tokens += int(prompt_tokens or 0)
+        self._summarizer_completion_tokens += int(completion_tokens or 0)
+
+    @property
+    def token_totals(self) -> dict[str, int]:
+        """Cumulative billed tokens for the turn (main + summarizer)."""
+        prompt = self._main_prompt_tokens + self._summarizer_prompt_tokens
+        completion = (self._main_completion_tokens
+                      + self._summarizer_completion_tokens)
+        return {
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "total_tokens": prompt + completion,
+            "summarizer_prompt_tokens": self._summarizer_prompt_tokens,
+            "summarizer_completion_tokens": self._summarizer_completion_tokens,
+        }
 
     @property
     def usage_anchor(self) -> tuple[int, int, int] | None:
@@ -147,7 +189,8 @@ class TurnHistory:
             usage_anchor=self._usage_anchor,
             force_budget=force_budget,
             summarizer=self.summarizer,
-            count_reasoning=self._resolve_count_reasoning())
+            count_reasoning=self._resolve_count_reasoning(),
+            usage_sink=self.record_summarizer_usage)
         if new_view is not self.messages:
             if new_view is not self.view:
                 # The view was rebuilt: the anchor measured the OLD mix

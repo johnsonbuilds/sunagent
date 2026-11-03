@@ -407,6 +407,7 @@ class ContextStrategyRequest:
     iteration: int | None
     prompt: str | None
     summarizer: Any = None
+    usage_sink: Any = None
 
 
 ContextStrategyHandler = Callable[
@@ -458,7 +459,8 @@ async def _llm_summary_strategy(
         exempt_tools=request.context.retrieval_exempt_tools,
         prompt=request.prompt, trace=request.trace,
         iteration=request.iteration, llm=request.summarizer,
-        count_reasoning=request.count_reasoning)
+        count_reasoning=request.count_reasoning,
+        usage_sink=request.usage_sink)
 
 
 CONTEXT_STRATEGY_DEFINITIONS: dict[str, ContextStrategyDefinition] = {
@@ -487,6 +489,7 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
                                 force_budget: int | None = None,
                                 summarizer: Any = None,
                                 count_reasoning: bool | None = None,
+                                usage_sink: Any = None,
                                 **options: Any) -> list[dict[str, Any]]:
     """Build the request view of ``messages`` under the memory genome.
 
@@ -541,6 +544,7 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
         iteration=iteration,
         prompt=options.get("prompt"),
         summarizer=summarizer,
+        usage_sink=usage_sink if usage_sink is not None else options.get("usage_sink"),
     )
     result = await definition.handler(request)
 
@@ -582,6 +586,24 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
     return result
 
 
+def _coerce_usage(response: Any) -> tuple[int, int]:
+    """Prompt/completion ints from a summarizer chat response."""
+    usage = None
+    if isinstance(response, dict):
+        usage = response.get("usage")
+    if not isinstance(usage, dict):
+        return 0, 0
+    try:
+        prompt = int(usage.get("prompt_tokens") or 0)
+    except (TypeError, ValueError):
+        prompt = 0
+    try:
+        completion = int(usage.get("completion_tokens") or 0)
+    except (TypeError, ValueError):
+        completion = 0
+    return max(0, prompt), max(0, completion)
+
+
 def _resolve_summarizer(llm: Any) -> Any:
     """Resolve an injected summarizer object or lazy factory."""
     if llm is None:
@@ -610,7 +632,7 @@ async def _generate_summary(messages: list[dict[str, Any]], *,
                             previous_summary: str | None,
                             summary_max_tokens: int,
                             llm: Any = None,
-                            prompt: str | None = None) -> str | None:
+                            prompt: str | None = None) -> tuple[str | None, tuple[int, int]]:
     """Ask the LLM for a structured summary of the compaction segment.
 
     The payload is assembled as: a fixed summarizer-identity system message, the
@@ -645,7 +667,7 @@ async def _generate_summary(messages: list[dict[str, Any]], *,
         raise RuntimeError("no summarizer LLM is configured")
     response = await model.chat(summarizer_messages, tools=None,
                                 max_tokens=summary_max_tokens)
-    return response.get("content") or ""
+    return (response.get("content") or "", _coerce_usage(response))
 
 
 _REQUIRED_SECTIONS = ["## 1. Work State", "## 2. Next Move", "## 3. Working Context & Anchors"]
@@ -690,6 +712,7 @@ async def summarize_history(messages: list[dict[str, Any]], *,
                             iteration: int | None = None,
                             llm: Any = None,
                             count_reasoning: bool | None = None,
+                            usage_sink: Any = None,
                             ) -> list[dict[str, Any]]:
     """Return a summarized request view of ``messages`` once over ``budget``.
 
@@ -795,6 +818,8 @@ async def summarize_history(messages: list[dict[str, Any]], *,
         return messages
 
     summary: str | None = None
+    summarizer_prompt_tokens = 0
+    summarizer_completion_tokens = 0
     used_capped_input = False
     full_input_chars = total_chars(summarizer_input, count)
     for attempt in (1, 2):
@@ -811,9 +836,19 @@ async def summarize_history(messages: list[dict[str, Any]], *,
                 exempt_tools=exempt_tools, count_reasoning=count)
             used_capped_input = True
         try:
-            summary = await _generate_summary(
+            summary, (attempt_prompt, attempt_completion) = await _generate_summary(
                 attempt_input, previous_summary=previous_summary,
                 summary_max_tokens=summary_max_tokens, prompt=prompt, llm=llm)
+            summarizer_prompt_tokens += attempt_prompt
+            summarizer_completion_tokens += attempt_completion
+            if usage_sink is not None:
+                try:
+                    result_sink = usage_sink(attempt_prompt, attempt_completion)
+                    if hasattr(result_sink, "__await__"):
+                        await result_sink
+                except Exception:
+                    logger.debug("context.summary.usage_sink_failed",
+                                 exc_info=True)
         except Exception as exc:
             # The summarizer request itself failed (rate limit, context
             # overflow on a huge segment, transport error): record the cause
@@ -849,6 +884,10 @@ async def summarize_history(messages: list[dict[str, Any]], *,
                 trace.emit("context.llm_summary.invalid", iteration,
                            reason=str(exc)[:500], attempt=attempt,
                            summary_chars=len(summary or ""),
+                           prompt_tokens=summarizer_prompt_tokens,
+                           completion_tokens=summarizer_completion_tokens,
+                           total_tokens=(summarizer_prompt_tokens
+                                         + summarizer_completion_tokens),
                            summarizer_input_chars=full_input_chars,
                            summarizer_input_chars_capped=total_chars(
                                attempt_input, count),
@@ -870,7 +909,11 @@ async def summarize_history(messages: list[dict[str, Any]], *,
                    summary=summary, preserved_users=len(preserved),
                    summarizer_input_count=len(summarizer_input),
                    input_capped=used_capped_input,
-                   boundary=boundary, char_budget=char_budget)
+                   boundary=boundary, char_budget=char_budget,
+                   prompt_tokens=summarizer_prompt_tokens,
+                   completion_tokens=summarizer_completion_tokens,
+                   total_tokens=(summarizer_prompt_tokens
+                                 + summarizer_completion_tokens))
     return view
 
 
