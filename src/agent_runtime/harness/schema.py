@@ -113,7 +113,7 @@ def _default_llm_errors() -> dict[str, LLMRetryPolicy]:
     return {category: LLMRetryPolicy() for category in LLM_RETRY_CATEGORIES}
 
 MEMORY_STRATEGIES: tuple[str, ...] = (
-    "full_history", "compact_observations", "llm_summary")
+    "full_history", "compact_observations", "llm_summary", "turn_fold")
 
 # Backwards-compatibility alias: the gene is now called ``context``.
 # ``memory`` is reserved for future long-term / cross-session recall

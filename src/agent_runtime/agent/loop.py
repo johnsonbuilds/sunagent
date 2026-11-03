@@ -278,6 +278,7 @@ class AgentTurn:
                            iteration, exc)
             answer = ("(reasoning budget exceeded while summarising; "
                       "the work above stands as delivered)")
+            history.append({"role": "assistant", "content": answer})
             logger.debug("agent.final iteration=%d answer_chars=%d", iteration,
                          len(answer))
             events.emit("agent.completed", iteration, iterations=iteration,
@@ -289,6 +290,7 @@ class AgentTurn:
             agent_meta.update(stage="llm", error=error)
             raise TurnFailure(error) from exc
         answer = response.get("content", "")
+        history.append({"role": "assistant", "content": answer})
         self.finisher.emit_contract_outcome(iteration)
         logger.debug("agent.final iteration=%d answer_chars=%d", iteration, len(answer))
         events.emit("agent.completed", iteration, iterations=iteration, answer=answer)

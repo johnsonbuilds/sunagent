@@ -19,10 +19,12 @@ from agent_runtime.agent.context.metrics import (
     _count_reasoning,
 )
 from agent_runtime.agent.context.summary import extract_summary, summarize_history
+from agent_runtime.agent.context.turn_fold import turn_fold_messages
 
 STRATEGY_FULL_HISTORY = "full_history"
 STRATEGY_COMPACT_OBSERVATIONS = "compact_observations"
 STRATEGY_LLM_SUMMARY = "llm_summary"
+STRATEGY_TURN_FOLD = "turn_fold"
 
 
 @dataclass(frozen=True)
@@ -98,6 +100,11 @@ async def _llm_summary_strategy(
         usage_sink=request.usage_sink)
 
 
+async def _turn_fold_strategy(
+        request: ContextStrategyRequest) -> list[dict[str, Any]]:
+    return turn_fold_messages(request.messages)
+
+
 CONTEXT_STRATEGY_DEFINITIONS: dict[str, ContextStrategyDefinition] = {
     STRATEGY_FULL_HISTORY: ContextStrategyDefinition(
         _full_history_strategy, budget_gated=False),
@@ -105,6 +112,8 @@ CONTEXT_STRATEGY_DEFINITIONS: dict[str, ContextStrategyDefinition] = {
         _compact_observations_strategy),
     STRATEGY_LLM_SUMMARY: ContextStrategyDefinition(
         _llm_summary_strategy),
+    STRATEGY_TURN_FOLD: ContextStrategyDefinition(
+        _turn_fold_strategy, budget_gated=False),
 }
 
 
@@ -118,7 +127,7 @@ def register_context_strategy(
 
 __all__ = [
     "STRATEGY_FULL_HISTORY", "STRATEGY_COMPACT_OBSERVATIONS",
-    "STRATEGY_LLM_SUMMARY",
+    "STRATEGY_LLM_SUMMARY", "STRATEGY_TURN_FOLD",
     "CONTEXT_STRATEGY_DEFINITIONS", "ContextStrategyDefinition",
     "ContextStrategyRequest", "register_context_strategy",
 ]
