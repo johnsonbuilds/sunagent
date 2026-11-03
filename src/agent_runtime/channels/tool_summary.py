@@ -45,9 +45,11 @@ def describe_tool(tool: str | None, arguments: Any, *,
     if tool == "find_references":
         return f"{prefix}refs {arguments.get('name')}"
     if tool == "apply_patch":
-        patch = arguments.get("patch")
-        if isinstance(patch, str):
-            return f"patch: {patch.count('>>>>>>> REPLACE')} edit(s)"
+        edits = arguments.get("edits")
+        if isinstance(edits, list):
+            count = len(edits)
+            return (f"patch {arguments.get('path')} "
+                    f"({count} edit{'s' if count != 1 else ''})")
     if not arguments:
         return ""
     return json.dumps(dict(arguments), ensure_ascii=False, sort_keys=True)

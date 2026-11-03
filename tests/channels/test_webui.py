@@ -224,6 +224,11 @@ class DescribeToolTests(unittest.TestCase):
             ("write_file", {"path": "a.py", "content": "x"}, "write a.py (1 chars)"),
             ("grep_search", {"pattern": "todo"}, "grep todo"),
             ("find_symbol", {"name": "main"}, "symbol main"),
+            ("apply_patch", {"path": "a.py", "edits": [
+                {"old_text": "x", "new_text": "y"}]}, "patch a.py (1 edit)"),
+            ("apply_patch", {"path": "a.py", "edits": [
+                {"old_text": "x", "new_text": "y"},
+                {"old_text": "z", "new_text": "w"}]}, "patch a.py (2 edits)"),
         ]
         for tool, arguments, expected in cases:
             self.assertEqual(describe_tool(tool, arguments), expected)
