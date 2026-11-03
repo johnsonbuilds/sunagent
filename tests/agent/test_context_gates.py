@@ -14,8 +14,10 @@ from agent_runtime.agent.context import (
     _anchor_chars_per_token,
     _view_size,
     apply_context_strategy,
+    extract_summary,
     summarize_history,
 )
+from agent_runtime.agent.runtime_message import runtime_user_message
 from agent_runtime.agent.turn_history import Conversation, TurnHistory
 from agent_runtime.harness import HarnessSpec, ContextGenome, from_dict
 from agent_runtime.providers.llm import ContextWindowExceededError
@@ -156,6 +158,26 @@ class UserPreservationTests(unittest.IsolatedAsyncioTestCase):
         view_contents = [str(m.get("content", "")) for m in result]
         self.assertIn("recent redirect", view_contents)
         self.assertNotIn("old redirect", view_contents)
+
+    async def test_runtime_nudges_are_not_preserved_as_user_messages(
+            self) -> None:
+        messages = build_rounds(6, tool_chars=1_000)
+        nudge = runtime_user_message(
+            "Budget 2/10 (8 left). Source edit so far: False.",
+            kind="budget_reminder",
+        )
+        messages.insert(4, nudge)
+        llm = FakeSummaryLLM()
+
+        view = await summarize_history(messages, budget=1, tail_rounds=2,
+                                       llm=llm)
+
+        view_contents = [str(m.get("content", "")) for m in view]
+        self.assertNotIn(nudge["content"], view_contents)
+        # It stays in the summarizer input as context, but never occupies
+        # the verbatim user-preserve budget.
+        self.assertIn(nudge["content"],
+                      [str(m.get("content", "")) for m in llm.last_messages])
 
 
 class IncrementalSummaryTests(unittest.IsolatedAsyncioTestCase):
@@ -339,6 +361,13 @@ class PromptForwardingTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SummaryCoverageTests(unittest.IsolatedAsyncioTestCase):
+    def test_summary_requires_runtime_provenance(self) -> None:
+        summary = runtime_user_message(SUMMARY_PREFIX + "SNAP",
+                                       kind="summary")
+        unmarked = {"role": "user", "content": SUMMARY_PREFIX + "OLD"}
+
+        self.assertEqual(extract_summary([unmarked, summary]), "SNAP")
+
     async def test_preserved_users_fed_to_summarizer(self) -> None:
         # The snapshot must cover the verbatim-kept users: the incremental
         # boundary advances past the whole segment, so anything the

@@ -23,7 +23,10 @@ from agent_runtime.agent.context.metrics import (
     _view_size,
     total_chars,
 )
-from agent_runtime.agent.runtime_message import runtime_user_message
+from agent_runtime.agent.runtime_message import (
+    is_runtime_user_message,
+    runtime_user_message,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -84,13 +87,17 @@ def _is_summary_message(message: dict[str, Any]) -> bool:
     """Whether ``message`` is a machine-generated compaction summary.
 
     Summaries ride the request view as ``user`` messages so every provider
-    accepts them, which makes them indistinguishable from real user turns
-    by role alone.  The marker prefix is the only reliable discriminator;
-    keep that test in one place so no caller mistakes a snapshot for user
-    speech or preserves it as an authoritative user message.
+    accepts them.  Provenance metadata identifies the runtime-authored
+    snapshot; the content prefix remains its payload marker and the text
+    sliced off by :func:`extract_summary`.
     """
-    return (message.get("role") == "user"
-            and str(message.get("content", "")).startswith(SUMMARY_PREFIX))
+    metadata = message.get("metadata")
+    return (
+        is_runtime_user_message(message)
+        and isinstance(metadata, dict)
+        and metadata.get("kind") == "summary"
+        and str(message.get("content", "")).startswith(SUMMARY_PREFIX)
+    )
 
 
 def extract_summary(view: list[dict[str, Any]] | None) -> str | None:
@@ -276,7 +283,8 @@ async def summarize_history(messages: list[dict[str, Any]], *,
     novel: list[dict[str, Any]] = []
     user_chars = 0
     for message in reversed(segment):
-        if message.get("role") == "user":
+        if (message.get("role") == "user"
+                and not is_runtime_user_message(message)):
             content = str(message.get("content", ""))
             if user_chars + len(content) <= user_preserve_budget:
                 preserved.append(message)
