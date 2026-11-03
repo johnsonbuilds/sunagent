@@ -13,41 +13,24 @@ sees:
 
 A "task user" is a real user turn boundary. Loop-internal ``user``-role
 nudges (iteration-limit notice, submit/contract nudges, reasoning-budget
-and budget-reminder nudges, compaction snapshots) never open a turn.
+and budget-reminder nudges, compaction snapshots) carry a runtime
+provenance marker and never open a turn.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from agent_runtime.agent.context.summary import SUMMARY_PREFIX
-from agent_runtime.harness import ITERATION_LIMIT_NOTICE
-
-# Loop-internal user-role messages that must not open a new turn.
-# Matched by prefix on the stripped content so harness-text tweaks that
-# keep the lead-in stay classified.
-_NUDGE_PREFIXES: tuple[str, ...] = (
-    SUMMARY_PREFIX.strip(),
-    ITERATION_LIMIT_NOTICE.strip()[:24],
-    "Your submission fails the return contract",
-    "To finish, call the",
-    "Your last turn produced",
-    "Budget ",
-)
+from agent_runtime.agent.runtime_message import is_runtime_user_message
 
 
 def _is_task_user(message: dict[str, Any]) -> bool:
     """Whether ``message`` opens a new run turn."""
     if message.get("role") != "user":
         return False
-    content = str(message.get("content") or "")
-    stripped = content.strip()
-    if not stripped:
+    if is_runtime_user_message(message):
         return False
-    for prefix in _NUDGE_PREFIXES:
-        if prefix and stripped.startswith(prefix):
-            return False
-    return True
+    return bool(str(message.get("content") or "").strip())
 
 
 def _last_final_content(segment: list[dict[str, Any]]) -> str | None:

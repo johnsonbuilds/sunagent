@@ -23,6 +23,7 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
+from agent_runtime.agent.runtime_message import runtime_user_message
 from agent_runtime.agent.tool_dispatch import ToolCallOutcome
 from agent_runtime.agent.turn_failure import TurnFailure
 from agent_runtime.agent.turn_history import TurnHistory
@@ -195,8 +196,8 @@ class TurnFinisher:
                                        f"the task — call {self.rules.submit_tool}"}
         self.trace.emit("verification.failed", iteration,
                         missing=sorted(gaps), reasons=gaps)
-        history.append({"role": "user", "content": submit_nudge(
-            self.rules.submit_tool)})
+        history.append(runtime_user_message(
+            submit_nudge(self.rules.submit_tool), kind="submit_nudge"))
         return None
 
     async def finish_or_nudge(self, submit_arguments: dict[str, Any],
@@ -210,7 +211,7 @@ class TurnFinisher:
         nudge = await self.validate_submission(
             submit_arguments, iteration, history.messages)
         if nudge is not None:
-            history.append({"role": "user", "content": nudge})
+            history.append(runtime_user_message(nudge, kind="contract_nudge"))
             return None
         answer = render_submission(submit_arguments)
         logger.debug("agent.final iteration=%d answer_chars=%d submit=True",

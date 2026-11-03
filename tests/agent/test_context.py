@@ -17,6 +17,7 @@ from agent_runtime.agent.context import (
     register_context_strategy,
     summarize_history,
 )
+from agent_runtime.agent.runtime_message import is_runtime_user_message
 from agent_runtime.harness import DEFAULT_CONTEXT_BUDGET, ContextGenome
 
 
@@ -436,6 +437,8 @@ class SummarizeHistoryTests(unittest.IsolatedAsyncioTestCase):
         summary = result[2]
         self.assertEqual(summary["role"], "user")
         self.assertTrue(summary["content"].startswith(SUMMARY_PREFIX))
+        self.assertTrue(is_runtime_user_message(summary))
+        self.assertEqual(summary["metadata"]["kind"], "summary")
         self.assertIn("WORK STATE: mid-flight", summary["content"])
         # only the last two rounds survive as tool messages
         self.assertEqual(sum(1 for m in result if m["role"] == "tool"), 2)

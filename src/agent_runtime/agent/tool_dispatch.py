@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from agent_runtime.agent.runtime_message import runtime_user_message
 from agent_runtime.trace import RunTrace
 
 
@@ -183,10 +184,10 @@ def tool_observation_message(tool_call: Any, content: str,
             message["metadata"] = metadata
         return message
     # The model must retry because a tool message cannot be correlated without an ID.
-    return {
-        "role": "user",
-        "content": f"{content} Please retry this tool call with a valid tool_call_id.",
-    }
+    return runtime_user_message(
+        f"{content} Please retry this tool call with a valid tool_call_id.",
+        kind="tool_observation",
+    )
 
 
 def rejected_observation_content(tool_call: Any, observation: str) -> str:
@@ -208,7 +209,7 @@ def rejected_observation_message(tool_call: Any, content: str) -> dict[str, Any]
         retry = "Please retry this tool call with valid JSON arguments."
     else:
         retry = "Please retry this tool call with a valid tool_call_id."
-    return {"role": "user", "content": f"{content} {retry}"}
+    return runtime_user_message(f"{content} {retry}", kind="tool_rejection")
 
 
 def trace_tool_rejection(trace: RunTrace, iteration: int,

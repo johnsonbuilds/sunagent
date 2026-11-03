@@ -13,8 +13,10 @@ sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
 
 import agent_runtime.agent.chat as chat_module
 from agent_runtime.agent.loop import Conversation, use_streaming
+from agent_runtime.agent.runtime_message import is_runtime_user_message
 from agent_runtime.agent.turn_factory import create_agent_turn, run_turn
 from agent_runtime.harness import (
+    BudgetReminder,
     ControlGenome,
     HarnessSpec,
     LLM_RETRY_CATEGORIES,
@@ -204,6 +206,9 @@ class AgentLoopErrorHandlingTests(unittest.IsolatedAsyncioTestCase):
             nudges = [m for m in llm.messages[1]
                       if m["role"] == "user" and "Stop reasoning and act" in m["content"]]
             self.assertEqual(len(nudges), 1)
+            self.assertTrue(is_runtime_user_message(nudges[0]))
+            self.assertEqual(nudges[0]["metadata"]["kind"],
+                             "reasoning_budget")
             budget_events = [e for e in trace.events
                              if e.event_type == "llm.reasoning_budget"]
             self.assertEqual(len(budget_events), 1)
@@ -575,8 +580,35 @@ class HarnessIntegrationTests(unittest.IsolatedAsyncioTestCase):
                                 max_iterations=2)
 
         self.assertEqual(answer, "summarized")
-        self.assertEqual(llm.messages[2][-1],
-                         {"role": "user", "content": notice})
+        self.assertEqual(llm.messages[2][-1]["role"], "user")
+        self.assertEqual(llm.messages[2][-1]["content"], notice)
+        self.assertEqual(llm.messages[2][-1]["metadata"]["origin"], "runtime")
+        self.assertEqual(llm.messages[2][-1]["metadata"]["kind"],
+                         "iteration_limit")
+
+    async def test_budget_reminder_is_marked_runtime(self) -> None:
+        harness = HarnessSpec(control=ControlGenome(
+            max_iterations=5,
+            budget_reminder=BudgetReminder(enabled=True,
+                                           at_fractions=(0.4,)),
+        ))
+        llm = FakeLLM([
+            {"content": "", "tool_calls": [{"id": "1", "function": {
+                "name": "weather", "arguments": '{"location":"Oslo"}'}}]},
+            {"content": "done", "tool_calls": []},
+        ])
+        conversation = Conversation()
+
+        answer = await run_turn("weather", llm, make_registry(),
+                                harness=harness, conversation=conversation)
+
+        self.assertEqual(answer, "done")
+        reminder = next(
+            message for message in conversation.messages
+            if message.get("metadata", {}).get("kind") == "budget_reminder"
+        )
+        self.assertTrue(is_runtime_user_message(reminder))
+        self.assertIn("Budget 2/5", reminder["content"])
 
     async def test_max_iterations_defaults_to_harness_control_gene(self) -> None:
         harness = HarnessSpec(control=ControlGenome(max_iterations=1))

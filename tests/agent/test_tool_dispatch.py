@@ -6,10 +6,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
 
+from agent_runtime.agent.runtime_message import is_runtime_user_message
 from agent_runtime.agent.turn_factory import run_turn
 from agent_runtime.agent.tool_dispatch import (
     available_tools_hint,
     classify_tool_calls,
+    rejected_observation_message,
+    tool_observation_message,
     validate_tool_call,
 )
 from agent_runtime.harness import from_dict
@@ -60,6 +63,27 @@ class UnknownToolHintTests(unittest.TestCase):
         self.assertIsNone(outcome.validated)
         self.assertIsNotNone(outcome.rejection)
         self.assertIn("Available tools", str(outcome.rejection))
+
+
+class ObservationProvenanceTests(unittest.TestCase):
+    def test_missing_id_observation_is_marked_runtime(self) -> None:
+        message = tool_observation_message(
+            {"type": "function",
+             "function": {"name": "weather", "arguments": "{}"}},
+            "tool_call_id is required",
+        )
+
+        self.assertEqual(message["role"], "user")
+        self.assertTrue(is_runtime_user_message(message))
+        self.assertEqual(message["metadata"]["kind"], "tool_observation")
+
+    def test_rejected_observation_is_marked_runtime(self) -> None:
+        message = rejected_observation_message(
+            _call("weather"), "Tool call to weather was rejected.")
+
+        self.assertEqual(message["role"], "user")
+        self.assertTrue(is_runtime_user_message(message))
+        self.assertEqual(message["metadata"]["kind"], "tool_rejection")
 
 
 class FakeLLM:

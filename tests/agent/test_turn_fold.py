@@ -6,6 +6,19 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
 
 from agent_runtime.agent.context.turn_fold import turn_fold_messages
+from agent_runtime.agent.runtime_message import runtime_user_message
+from agent_runtime.agent.tool_dispatch import (
+    rejected_observation_message,
+    tool_observation_message,
+)
+
+
+def _tool_call(name: str = "weather", call_id: str | None = "1") -> dict:
+    call = {"type": "function",
+            "function": {"name": name, "arguments": "{}"}}
+    if call_id is not None:
+        call["id"] = call_id
+    return call
 
 
 class TurnFoldTests(unittest.TestCase):
@@ -52,8 +65,10 @@ class TurnFoldTests(unittest.TestCase):
         messages = [
             {"role": "user", "content": "task1"},
             {"role": "assistant", "content": "work"},
-            {"role": "user", "content": (
-                "To finish, call the submit_result tool (and only that tool)")},
+            runtime_user_message(
+                "To finish, call the submit_result tool (and only that tool)",
+                kind="submit_nudge",
+            ),
             {"role": "assistant", "content": "final1"},
             {"role": "user", "content": "task2"},
         ]
@@ -64,6 +79,89 @@ class TurnFoldTests(unittest.TestCase):
         self.assertEqual(view[0]["content"], "task1")
         self.assertEqual(view[1]["content"], "final1")
         self.assertEqual(view[2]["content"], "task2")
+
+    def test_rejected_tool_observation_does_not_open_a_turn(self) -> None:
+        rejection = rejected_observation_message(
+            _tool_call(),
+            "Tool call to weather was rejected and not executed. "
+            "missing required argument: location",
+        )
+        messages = [
+            {"role": "user", "content": "task1"},
+            {"role": "assistant", "content": "", "tool_calls": [_tool_call()]},
+            rejection,
+            {"role": "assistant", "content": "final1"},
+            {"role": "user", "content": "task2"},
+            {"role": "assistant", "content": "final2"},
+        ]
+
+        view = turn_fold_messages(messages)
+
+        self.assertEqual(
+            [(m["role"], m.get("content")) for m in view],
+            [("user", "task1"), ("assistant", "final1"),
+             ("user", "task2"), ("assistant", "final2")],
+        )
+
+    def test_tool_observation_without_call_id_does_not_open_a_turn(self) -> None:
+        observation = tool_observation_message(
+            _tool_call(call_id=None), "tool_call_id is required")
+        messages = [
+            {"role": "user", "content": "task1"},
+            {"role": "assistant", "content": "", "tool_calls": [_tool_call()]},
+            observation,
+            {"role": "assistant", "content": "final1"},
+            {"role": "user", "content": "task2"},
+            {"role": "assistant", "content": "final2"},
+        ]
+
+        view = turn_fold_messages(messages)
+
+        self.assertEqual(
+            [(m["role"], m.get("content")) for m in view],
+            [("user", "task1"), ("assistant", "final1"),
+             ("user", "task2"), ("assistant", "final2")],
+        )
+
+    def test_runtime_marker_controls_turn_boundaries(self) -> None:
+        messages = [
+            {"role": "user", "content": "task1"},
+            {"role": "assistant", "content": "work"},
+            runtime_user_message(
+                "Budget planning for Q4 starts tomorrow.",
+                kind="budget_reminder",
+            ),
+            {"role": "assistant", "content": "final1"},
+            {"role": "user", "content": "task2"},
+            {"role": "assistant", "content": "final2"},
+        ]
+
+        view = turn_fold_messages(messages)
+
+        self.assertEqual(
+            [(m["role"], m.get("content")) for m in view],
+            [("user", "task1"), ("assistant", "final1"),
+             ("user", "task2"), ("assistant", "final2")],
+        )
+
+    def test_real_user_budget_message_is_a_turn_boundary(self) -> None:
+        messages = [
+            {"role": "user", "content": "task0"},
+            {"role": "assistant", "content": "final0"},
+            {"role": "user", "content": "Budget planning for Q4"},
+            {"role": "assistant", "content": "final1"},
+            {"role": "user", "content": "task2"},
+            {"role": "assistant", "content": "final2"},
+        ]
+
+        view = turn_fold_messages(messages)
+
+        self.assertEqual(
+            [(m["role"], m.get("content")) for m in view],
+            [("user", "task0"), ("assistant", "final0"),
+             ("user", "Budget planning for Q4"), ("assistant", "final1"),
+             ("user", "task2"), ("assistant", "final2")],
+        )
 
 
 if __name__ == "__main__":

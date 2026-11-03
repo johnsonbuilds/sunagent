@@ -16,6 +16,7 @@ from agent_runtime.agent.chat import (
     chat_with_recovery,
     use_streaming,
 )
+from agent_runtime.agent.runtime_message import runtime_user_message
 from agent_runtime.agent.tool_dispatch import (
     ToolCallOutcome,
     ValidatedToolCall,
@@ -218,14 +219,13 @@ class AgentTurn:
                 "llm.reasoning_budget_exceeded iteration=%d %s", iteration, exc)
             history.append({"role": "assistant",
                             "content": "(extended reasoning omitted)"})
-            nudge = {
-                "role": "user",
-                "content": (
-                    f"Your last turn produced {exc.reasoning_chars} characters "
-                    f"of reasoning without any content or tool calls. Stop "
-                    f"reasoning and act now: call a tool, or give your "
-                    f"final answer."),
-            }
+            nudge = runtime_user_message(
+                f"Your last turn produced {exc.reasoning_chars} characters "
+                f"of reasoning without any content or tool calls. Stop "
+                f"reasoning and act now: call a tool, or give your "
+                f"final answer.",
+                kind="reasoning_budget",
+            )
             history.append(nudge)
             return None
         except Exception as exc:
@@ -245,8 +245,8 @@ class AgentTurn:
         """
         events, trace = self.events, self.trace
         harness = self.harness
-        history.append({"role": "user", "content":
-                        harness.prompt.iteration_limit_notice})
+        history.append(runtime_user_message(
+            harness.prompt.iteration_limit_notice, kind="iteration_limit"))
         iteration = self.max_iterations + 1
         try:
             await history.refresh_view(harness.context,

@@ -21,6 +21,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from agent_runtime.agent.context import request_view_size
+from agent_runtime.agent.runtime_message import runtime_user_message
 from agent_runtime.agent.tool_dispatch import (
     ToolCallOutcome,
     rejected_observation_content,
@@ -123,15 +124,13 @@ class TurnGuard:
             return
         edited = has_source_edit(history.messages, self.rules)
         remaining = self.max_iterations - iteration
-        history.append({
-            "role": "user",
-            "content": (
-                f"Budget {iteration}/{self.max_iterations} "
-                f"({remaining} left). Source edit so far: {edited}. "
-                "This counts iterations, not tokens: roughly "
-                f"{remaining} more tool calls remain."
-            ),
-        })
+        history.append(runtime_user_message(
+            f"Budget {iteration}/{self.max_iterations} "
+            f"({remaining} left). Source edit so far: {edited}. "
+            "This counts iterations, not tokens: roughly "
+            f"{remaining} more tool calls remain.",
+            kind="budget_reminder",
+        ))
         self.trace.emit("budget.reminder", iteration,
                         remaining=remaining, edited=edited)
 

@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
 
+from agent_runtime.agent.runtime_message import runtime_user_message
 from agent_runtime.providers.llm import (
     OpenAICompatibleLLM,
     _project_messages_for_wire,
@@ -140,6 +141,16 @@ class ProjectMessagesForWireTests(unittest.TestCase):
         self.assertEqual(projected[2]["reasoning_content"], "thinking only")
         self.assertNotIn("metadata", projected[3])
         self.assertEqual(projected[3]["content"], "out")
+
+    def test_runtime_origin_metadata_never_reaches_the_wire(self) -> None:
+        message = runtime_user_message("retry the tool call",
+                                       kind="tool_rejection")
+
+        projected = _project_messages_for_wire([message], echo=False)
+
+        self.assertEqual(projected[0]["role"], "user")
+        self.assertEqual(projected[0]["content"], "retry the tool call")
+        self.assertNotIn("metadata", projected[0])
 
     def test_no_echo_strips_reasoning(self) -> None:
         projected = _project_messages_for_wire(self._history(), echo=False)

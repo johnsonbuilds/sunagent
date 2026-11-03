@@ -5,6 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
 
+from agent_runtime.agent.runtime_message import is_runtime_user_message
 from agent_runtime.agent.tool_dispatch import (
     ToolCallOutcome,
     ValidatedToolCall,
@@ -148,6 +149,9 @@ class TurnFinisherTests(unittest.IsolatedAsyncioTestCase):
         answer = finisher.answer_without_tools({"content": "done"}, 1, history)
         self.assertIsNone(answer)
         self.assertIn("To finish", history.messages[-1]["content"])
+        self.assertTrue(is_runtime_user_message(history.messages[-1]))
+        self.assertEqual(history.messages[-1]["metadata"]["kind"],
+                         "submit_nudge")
         self.assertEqual(finisher._finish_violations, 1)
         self.assertTrue(any(event.event_type == "verification.failed"
                             for event in trace.events))
@@ -199,6 +203,9 @@ class TurnFinisherTests(unittest.IsolatedAsyncioTestCase):
              "command_to_verify": ""}, 1, history)
         self.assertIsNone(answer)
         self.assertIn("return contract", history.messages[-1]["content"])
+        self.assertTrue(is_runtime_user_message(history.messages[-1]))
+        self.assertEqual(history.messages[-1]["metadata"]["kind"],
+                         "contract_nudge")
 
     # -- rerun -------------------------------------------------------------
 

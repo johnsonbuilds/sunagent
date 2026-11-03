@@ -23,6 +23,7 @@ from agent_runtime.agent.context.metrics import (
     _view_size,
     total_chars,
 )
+from agent_runtime.agent.runtime_message import runtime_user_message
 
 logger = logging.getLogger(__name__)
 
@@ -291,8 +292,8 @@ async def summarize_history(messages: list[dict[str, Any]], *,
 
     if not novel:
         if previous_summary is not None:
-            summary_msg = {"role": "user",
-                           "content": SUMMARY_PREFIX + previous_summary}
+            summary_msg = runtime_user_message(
+                SUMMARY_PREFIX + previous_summary, kind="summary")
             return leading + [summary_msg] + preserved + tail
         return messages
 
@@ -368,7 +369,7 @@ async def summarize_history(messages: list[dict[str, Any]], *,
                                             count_reasoning=count)
             logger.warning("context.summary.invalid %s retrying (%d/2)",
                            exc, attempt + 1)
-    summary_msg = {"role": "user", "content": SUMMARY_PREFIX + summary}
+    summary_msg = runtime_user_message(SUMMARY_PREFIX + summary, kind="summary")
     view = leading + [summary_msg] + preserved + tail
     if trace is not None:
         trace.emit("context.llm_summary.yield", iteration,
