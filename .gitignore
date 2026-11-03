@@ -19,3 +19,4 @@ jobs/
 # WebUI runtime artifacts (run.sh start/stop)
 .webui.pid
 webui.log
+.webui.harness

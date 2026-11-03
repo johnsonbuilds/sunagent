@@ -270,13 +270,12 @@ All coding agents Should follow below rules and principles.
 must comply with:
 
 - do not modify exist harnesses yaml, always derive new version if need.
+- Prefer self-documenting code. Write comments only when the “why” cannot be clearly expressed by the code itself. Keep them short and accurate.
 
-### 2. Engineering Principles
+### 2. Coding Principles
 
-- Simplicity: prefer the simplest and safe solution that meets the requirements.
-- Consistency: follow existing project patterns and conventions.
-- Maintainability: make code easy to understand and extend.
-- Reliability: handle expected failures and edge cases explicitly.
+- Prioritize modular design with high cohesion and low coupling, ensure scalability and extensibility for future growth, and maintain high maintainability with strong observability
+- Avoid over-engineering. Choose the simplest design that works, and only introduce abstraction when there is a clear, recurring need.
 
 ### 3. Tool Feedback Principle
 
