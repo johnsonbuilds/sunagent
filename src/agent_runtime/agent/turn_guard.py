@@ -103,10 +103,11 @@ class TurnGuard:
         return _refresh
 
     def maybe_remind(self, history: TurnHistory, iteration: int) -> None:
-        """Close-loop nudge at configured budget fractions (control gene).
+        """Nudge at configured budget fractions (control gene).
 
-        Fires once per threshold: reports remaining budget + whether a
-        source edit exists, and forces the file-level test + submit path.
+        Fires once per threshold: reports the remaining iteration budget
+        and whether a source edit exists. Iterations are often mistaken
+        for tokens, so the message names the unit explicitly.
         Detection reuses verification helpers — no new state tracked.
         """
         reminder = self.harness.control.budget_reminder
@@ -122,16 +123,13 @@ class TurnGuard:
             return
         edited = has_source_edit(history.messages, self.rules)
         remaining = self.max_iterations - iteration
-        edit_tools = ", ".join(sorted(self.rules.edit_tools)) or "the edit tools"
         history.append({
             "role": "user",
             "content": (
                 f"Budget {iteration}/{self.max_iterations} "
                 f"({remaining} left). Source edit so far: {edited}. "
-                "Close the loop: 1) make >=1 source edit with the right tool "
-                f"({edit_tools}), "
-                "2) run a FILE-LEVEL test command naming test files, "
-                f"3) call {self.rules.submit_tool} with that exact command."
+                "This counts iterations, not tokens: roughly "
+                f"{remaining} more tool calls remain."
             ),
         })
         self.trace.emit("budget.reminder", iteration,
