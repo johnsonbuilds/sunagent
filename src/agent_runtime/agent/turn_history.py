@@ -192,12 +192,14 @@ class TurnHistory:
             count_reasoning=self._resolve_count_reasoning(),
             usage_sink=self.record_summarizer_usage)
         if new_view is not self.messages:
-            if new_view is not self.view:
-                # The view was rebuilt: the anchor measured the OLD mix
-                # (tool-heavy), not the new summary-heavy mix. Drop it so
-                # the next estimate uses the default ratio until the next
-                # billed response re-anchors (one iteration later) —
-                # a stale ratio drifts worse than no ratio.
+            if new_view != self.view:
+                # The view content changed: the anchor measured the OLD
+                # mix (tool-heavy), not the new summary-heavy mix. Drop it
+                # so the next estimate uses the default ratio until the
+                # next billed response re-anchors (one iteration later) —
+                # a stale ratio drifts worse than no ratio. A strategy
+                # that rebuilds an identical view (turn_fold) keeps the
+                # anchor: the measured mix has not changed.
                 self._usage_anchor = None
             old_summary = extract_summary(self.view)
             self.view = new_view

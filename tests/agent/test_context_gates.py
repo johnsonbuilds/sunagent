@@ -442,13 +442,14 @@ class AnchorLifecycleTests(unittest.IsolatedAsyncioTestCase):
         # summary-heavy view would drift worse than the default ratio, so
         # refresh drops it until the next billed response re-anchors.
         conversation = Conversation()
-        conversation.messages.extend(build_rounds(3, tool_chars=50))
+        conversation.messages.extend(build_rounds(3, tool_chars=5_000))
         history = TurnHistory(conversation.messages)
         history.record_usage(5_000)
         self.assertIsNotNone(history.usage_anchor)
         genome = ContextGenome(strategy="compact_observations",
                               context_budget=1)
         await history.refresh_view(genome)
+        self.assertNotEqual(history.view, conversation.messages)
         self.assertIsNone(history.usage_anchor)
 
     async def test_anchor_kept_without_compaction(self) -> None:
@@ -460,6 +461,27 @@ class AnchorLifecycleTests(unittest.IsolatedAsyncioTestCase):
                               context_budget=10 ** 9)
         await history.refresh_view(genome)
         self.assertIsNotNone(history.usage_anchor)
+
+    async def test_anchor_survives_identical_turn_fold_rebuild(self) -> None:
+        # turn_fold returns a fresh list on every refresh. If its content is
+        # unchanged, the measured request mix is unchanged too, so the
+        # anchor must survive instead of being dropped by identity.
+        messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "task1"},
+            {"role": "assistant", "content": "final1"},
+            {"role": "user", "content": "task2"},
+        ]
+        history = TurnHistory(messages)
+        genome = ContextGenome(strategy="turn_fold")
+        await history.refresh_view(genome)
+        history.record_usage(100)
+        anchor = history.usage_anchor
+        self.assertIsNotNone(anchor)
+
+        await history.refresh_view(genome)
+
+        self.assertEqual(history.usage_anchor, anchor)
 
 
 class ForceBudgetTests(unittest.IsolatedAsyncioTestCase):
