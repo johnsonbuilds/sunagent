@@ -94,8 +94,14 @@ class RunTrace:
         started = time.monotonic()
         self.emit(f"{name}.start", event_iteration, **span_meta)
         failed = False
+        cancelled = False
         try:
             yield span_meta
+        except asyncio.CancelledError:
+            # CancelledError is a BaseException, not an Exception;
+            # without this branch the span would report success.
+            cancelled = True
+            raise
         except Exception as exc:
             failed = True
             span_meta["duration_ms"] = round((time.monotonic() - started) * 1000, 3)
@@ -105,7 +111,10 @@ class RunTrace:
             raise
         finally:
             span_meta["duration_ms"] = round((time.monotonic() - started) * 1000, 3)
-            span_meta["status"] = "error" if failed else "success"
+            if cancelled:
+                span_meta["status"] = "cancelled"
+            else:
+                span_meta["status"] = "error" if failed else "success"
             self.emit(f"{name}.end", event_iteration, **span_meta)
 
 

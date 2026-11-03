@@ -1,3 +1,4 @@
+import asyncio
 import sys
 import json
 import tempfile
@@ -52,6 +53,23 @@ class FakeLLM:
         if self.error:
             raise self.error
         return self.responses.pop(0)
+
+
+class BlockingLLM:
+    """Chat model that parks inside the request until the task is cancelled."""
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+
+    async def chat(self, messages: list[dict[str, Any]],
+                   tools: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        self.started.set()
+        await asyncio.sleep(60)
+        raise AssertionError("the request should have been cancelled")
+
+    async def stream(self, messages: list[dict[str, Any]],
+                     tools: list[dict[str, Any]] | None = None):
+        raise AssertionError("the runtime should use chat()")
 
 
 class StreamingLLM:
@@ -253,6 +271,52 @@ class AgentLoopErrorHandlingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(trace.events[1].data["result_count"], 3)
         self.assertIn("duration_ms", trace.events[1].data)
         self.assertEqual(trace.events[3].data["error"], "failed")
+
+    async def test_trace_span_marks_cancelled_when_task_is_cancelled(self) -> None:
+        trace = RunTrace(run_id="cancelled-span")
+        started = asyncio.Event()
+
+        async def work() -> None:
+            with trace.span("operation"):
+                started.set()
+                await asyncio.sleep(60)
+
+        task = asyncio.create_task(work())
+        await asyncio.wait_for(started.wait(), timeout=1)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+
+        self.assertEqual(
+            [event.event_type for event in trace.events],
+            ["operation.start", "operation.end"],
+        )
+        self.assertEqual(trace.events[1].data["status"], "cancelled")
+        self.assertNotIn("error", trace.events[1].data)
+
+    async def test_cancelled_turn_marks_agent_and_llm_end_cancelled(self) -> None:
+        llm = BlockingLLM()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cancelled.jsonl"
+            trace = RunTrace(run_id="cancelled-turn", output_path=path)
+            task = asyncio.create_task(run_turn(
+                "weather", llm, make_registry(), trace=trace,
+                harness=NEUTRAL_HARNESS))
+            await asyncio.wait_for(llm.started.wait(), timeout=1)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+
+            records = [json.loads(line)
+                       for line in path.read_text().splitlines()]
+
+        ends = {record["event_type"]: record for record in records
+                if record["event_type"].endswith(".end")}
+        self.assertEqual(ends["llm.end"]["data"]["status"], "cancelled")
+        self.assertEqual(ends["agent.end"]["data"]["status"], "cancelled")
+        event_types = [record["event_type"] for record in records]
+        self.assertNotIn("agent.error", event_types)
+        self.assertNotIn("agent.completed", event_types)
 
     async def test_run_trace_writes_jsonl(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
