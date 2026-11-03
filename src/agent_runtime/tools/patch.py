@@ -20,6 +20,8 @@ from agent_runtime.execution.base import Workspace, error_text
 from agent_runtime.execution.local import LocalWorkspace
 from agent_runtime.tools.edit_match import MatchError, apply_edit
 from agent_runtime.tools.syntax_gate import syntax_error
+from agent_runtime.tools.spec import ToolSpec
+from functools import partial
 
 
 def _validate_edits(edits: Any) -> list[dict[str, str]]:
@@ -94,4 +96,41 @@ async def apply_patch(path: str, edits: list[dict[str, str]], *,
     }
 
 
-__all__ = ["apply_patch"]
+def apply_patch_spec(workspace: Workspace) -> ToolSpec:
+    return ToolSpec("apply_patch",
+                    "Make batched text replacements to a single existing file "
+                    "as one atomic unit with all-or-nothing validation.\n"
+                    "\n"
+                    "Takes a file path plus an ordered edits array of "
+                    "{old_text, new_text} objects; edits apply in order, so "
+                    "a later edit may depend on an earlier one. "
+                    "Every old_text must match exactly once; "
+                    "zero or ambiguous matches fail the whole call and "
+                    "nothing is written. Edited content that no longer parses "
+                    "(Python, JSON, YAML, shell) is rejected the same way. "
+                    "Existing files only (old_text must be non-empty); "
+                    "empty new_text deletes the match.\n"
+                    "\n"
+                    "Best suited for multi-point edits to one file that must "
+                    "land together.",
+                    {"type": "object", "properties": {
+                        "path": {"type": "string",
+                                 "description": "File path inside the workspace"},
+                        "edits": {"type": "array",
+                                  "description": "Ordered edits to apply",
+                                  "minItems": 1,
+                                  "items": {"type": "object", "properties": {
+                                      "old_text": {
+                                          "type": "string",
+                                          "description": "Text to replace, must match uniquely"},
+                                      "new_text": {
+                                          "type": "string",
+                                          "description": "Replacement text (empty to delete)"}},
+                                      "required": ["old_text", "new_text"],
+                                      "additionalProperties": False}}},
+                     "required": ["path", "edits"],
+                     "additionalProperties": False},
+                    partial(apply_patch, workspace=workspace))
+
+
+__all__ = ["apply_patch", "apply_patch_spec"]

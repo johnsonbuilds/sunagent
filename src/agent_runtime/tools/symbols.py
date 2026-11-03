@@ -23,6 +23,8 @@ import tree_sitter_python
 
 from agent_runtime.execution.base import Workspace
 from agent_runtime.execution.local import LocalWorkspace
+from agent_runtime.tools.spec import ToolSpec
+from functools import partial
 
 from .search import MAX_FILE_BYTES, walk_files
 
@@ -188,7 +190,44 @@ async def find_references(name: str, *,
                   ).find_references(name)
 
 
+def find_symbol_spec(index: TreeSitterIndex) -> ToolSpec:
+    return ToolSpec("find_symbol",
+                    "Find where a Python class or function is defined "
+                    "(.py files only), using "
+                    "fault-tolerant tree-sitter parsing (works even in "
+                    "files with syntax errors). Matches an exact short or "
+                    "qualified "
+                    "name like 'ClassName.method' and returns "
+                    "(path, name, kind, line, end_line) for read_file.",
+                    {"type": "object", "properties": {
+                        "name": {"type": "string",
+                                 "description": "Symbol name (short or "
+                                                "qualified)"},
+                        "kind": {"type": "string", "enum": ["class", "function",
+                                                            "method"],
+                                 "description": "Filter by symbol kind"}},
+                     "required": ["name"]},
+                    partial(find_symbol, index=index))
+
+
+def find_references_spec(index: TreeSitterIndex) -> ToolSpec:
+    return ToolSpec("find_references",
+                    "Find identifier usages of a simple Python name across "
+                    ".py files (tree-sitter based textual match, up to 200 "
+                    "results with a truncated flag), excluding its "
+                    "definition sites. Dotted or qualified names are not "
+                    "resolved. Returns (path, line, preview) per "
+                    "reference.",
+                    {"type": "object", "properties": {
+                        "name": {"type": "string",
+                                 "description": "Simple identifier to look for "
+                                                "(Python only; dotted names "
+                                                "are not resolved)"}},
+                     "required": ["name"]},
+                    partial(find_references, index=index))
+
+
 __all__ = [
     "GRAMMARS", "MAX_RESULTS", "Symbol", "TreeSitterIndex", "find_references",
-    "find_symbol",
+    "find_symbol", "find_symbol_spec", "find_references_spec",
 ]

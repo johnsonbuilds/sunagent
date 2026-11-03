@@ -28,6 +28,8 @@ from agent_runtime.execution.base import (
     matches_path,
 )
 from agent_runtime.execution.local import LocalWorkspace
+from agent_runtime.tools.spec import ToolSpec
+from functools import partial
 
 
 logger = logging.getLogger(__name__)
@@ -188,8 +190,66 @@ async def find_files(pattern: str, path: str = ".",
     return result
 
 
+def grep_search_spec(workspace: Workspace) -> ToolSpec:
+    return ToolSpec("grep_search",
+                    "Search file contents line by line with a regular "
+                    "expression and return structured matches "
+                    "(path, line, preview) whose line numbers feed "
+                    "read_file(offset=...). Junk directories (.git, "
+                    "node_modules, ...) are skipped automatically; output "
+                    "is capped with a truncated flag.",
+                    {"type": "object", "properties": {
+                        "pattern": {"type": "string",
+                                    "description": "Regular expression "
+                                                   "(Python re syntax)"},
+                        "path": {"type": "string",
+                                 "description": "Directory inside the workspace "
+                                                "to search",
+                                 "default": "."},
+                        "include": {"type": "string",
+                                    "description": "Basename wildcard filter, "
+                                                   "e.g. '*.py' (matched against "
+                                                   "file names only)"},
+                        "ignore_case": {"type": "boolean",
+                                        "description": "Case-insensitive matching "
+                                                       "when true",
+                                        "default": False},
+                        "max_results": {"type": "integer",
+                                        "description": "Maximum matches to return "
+                                                       "(capped server-side)",
+                                        "default": DEFAULT_GREP_RESULTS}},
+                     "required": ["pattern"]},
+                    partial(grep_search, workspace=workspace))
+
+
+def find_files_spec(workspace: Workspace) -> ToolSpec:
+    return ToolSpec("find_files",
+                    "Recursively find files whose workspace-relative paths "
+                    "match a wildcard pattern (e.g. '**/*.py' or "
+                    "'userService*'); '*' may match across directory "
+                    "separators and patterns without '/' also match "
+                    "basenames anywhere under the search directory. "
+                    "Skips common generated and dependency directories. "
+                    "Output is capped with a truncated flag. "
+                    "One call replaces many list_dir round trips.",
+                    {"type": "object", "properties": {
+                        "pattern": {"type": "string",
+                                    "description": "Wildcard pattern matched "
+                                                   "against workspace-relative "
+                                                   "file paths"},
+                        "path": {"type": "string",
+                                 "description": "Directory to search",
+                                 "default": "."},
+                        "max_results": {"type": "integer",
+                                        "description": "Maximum paths",
+                                        "default": DEFAULT_FIND_RESULTS}},
+                     "required": ["pattern"]},
+                    partial(find_files, workspace=workspace))
+
+
 __all__ = [
     "DEFAULT_GREP_RESULTS", "DEFAULT_FIND_RESULTS", "MATCHES_PER_FILE",
     "MAX_FILE_BYTES", "MAX_GREP_RESULTS", "MAX_FIND_RESULTS", "PREVIEW_CHARS",
     "SKIP_DIRS", "find_files", "grep_search", "walk_files",
+    "grep_search_spec", "find_files_spec",
 ]

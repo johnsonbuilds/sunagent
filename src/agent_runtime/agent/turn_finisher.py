@@ -26,6 +26,7 @@ from typing import Any
 from agent_runtime.agent.tool_dispatch import ToolCallOutcome
 from agent_runtime.agent.turn_failure import TurnFailure
 from agent_runtime.agent.turn_history import TurnHistory
+from agent_runtime.agent.verification_modes import get_finish_mode
 from agent_runtime.agent.verification import (
     SubmissionRules,
     check_submission,
@@ -147,7 +148,7 @@ class TurnFinisher:
         Any enabled verification mode intercepts the tool; ``off`` lets a
         call through to the placeholder handler.
         """
-        if self.rules.mode == "off":
+        if not get_finish_mode(self.rules.mode).intercepts_submit:
             return None
         for outcome in outcomes:
             if (outcome.validated is not None
@@ -165,7 +166,7 @@ class TurnFinisher:
         worth one nudge.
         """
         answer = response.get("content", "")
-        if self.rules.mode == "off":
+        if get_finish_mode(self.rules.mode).plain_answer_finishes:
             logger.debug("agent.final iteration=%d answer_chars=%d",
                          iteration, len(answer))
             self.events.emit("agent.completed", iteration, iterations=iteration,
@@ -336,7 +337,7 @@ class TurnFinisher:
         The summary turn carries no tools, so a submission is impossible:
         the outcome is always a miss.
         """
-        if self.rules.mode == "off":
+        if not get_finish_mode(self.rules.mode).report_contract_miss:
             return
         self.trace.emit("verification.failed", iteration,
                         missing=[self.rules.submit_tool],

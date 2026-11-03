@@ -10,8 +10,9 @@ or construct its own policy helpers.
 
 from __future__ import annotations
 
-from functools import lru_cache
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from agent_runtime.agent.chat import ChatModel
 from agent_runtime.agent.loop import AgentTurn
@@ -29,26 +30,19 @@ from agent_runtime.runtime_config import RuntimeConfig
 from agent_runtime.tools import ToolExecutor
 from agent_runtime.trace import RunTrace
 
-
-@lru_cache(maxsize=32)
-def _cached_summarizer(summary_model: str | None) -> ChatModel:
-    """Per-model cached summarizer provider."""
-    from agent_runtime.providers.llm import OpenAICompatibleLLM
-
-    return OpenAICompatibleLLM(model=summary_model)
+# Summarizer provider factory type: zero-arg callable returning a ChatModel.
+# The default comes from ``agent_runtime.providers.factory`` (lazy import
+# so ``agent`` never names a concrete provider class at module scope).
+SummarizerFactory = Callable[[], ChatModel]
 
 
-def _default_summarizer(runtime: RuntimeConfig | None = None) -> ChatModel:
-    """Build the per-process summarizer provider on first use.
+def _default_summarizer_factory(runtime: RuntimeConfig) -> SummarizerFactory:
+    """Default lazy summarizer factory bound to ``runtime``."""
+    def _build() -> ChatModel:
+        from agent_runtime.providers.factory import default_summarizer
 
-    Lazy on purpose: turns whose context strategy never summarizes must
-    not construct an OpenAI client (or require an API key).
-    Resolved from the unified runtime config so an explicit
-    ``summary_model`` never falls back to a stale env read.
-    """
-    model = (runtime.summary_model if runtime is not None
-             else RuntimeConfig.from_env().summary_model)
-    return _cached_summarizer(model)
+        return default_summarizer(runtime)
+    return _build
 
 
 def create_agent_turn(
@@ -65,6 +59,7 @@ def create_agent_turn(
     skills_dir: str | Path | None = None,
     workspace: Workspace | None = None,
     runtime: RuntimeConfig | None = None,
+    summarizer_factory: SummarizerFactory | None = None,
 ) -> AgentTurn:
     """Assemble one :class:`AgentTurn`; the caller decides when to run it.
 
@@ -72,6 +67,11 @@ def create_agent_turn(
     tool layer and observation spilling.  When omitted, the executor's
     own workspace is used; every ``ToolExecutor`` guarantees one, so the
     formatter always has a real archive target.
+
+    ``summarizer_factory`` builds the context-compaction summarizer LLM
+    on first use.  When omitted, the providers-layer default (resolved
+    from ``runtime.summary_model``) applies — still lazy, so turns whose
+    strategy never summarizes never construct a provider client.
     """
     resolved_runtime = runtime if runtime is not None else RuntimeConfig.from_env()
     resolved_harness = harness if harness is not None else default_harness()
@@ -115,6 +115,8 @@ def create_agent_turn(
         guard=guard,
         trace=resolved_trace,
         events=resolved_events)
+    resolved_factory = (summarizer_factory if summarizer_factory is not None
+                        else _default_summarizer_factory(resolved_runtime))
 
     return AgentTurn(user_message, TurnCollaborators(
         llm=llm,
@@ -128,7 +130,7 @@ def create_agent_turn(
         finisher=finisher,
         guard=guard,
         tool_runner=tool_runner,
-        summarizer=lambda: _default_summarizer(resolved_runtime),
+        summarizer=resolved_factory,
         stream=stream,
         max_iterations=resolved_max_iterations,
         skills_dir=skills_dir,
@@ -150,6 +152,7 @@ async def run_turn(
     skills_dir: str | Path | None = None,
     workspace: Workspace | None = None,
     runtime: RuntimeConfig | None = None,
+    summarizer_factory: SummarizerFactory | None = None,
 ) -> str:
     """Create and run one agent turn under the given harness.
 
@@ -169,8 +172,9 @@ async def run_turn(
         skills_dir=skills_dir,
         workspace=workspace,
         runtime=runtime,
+        summarizer_factory=summarizer_factory,
     )
     return await turn.run()
 
 
-__all__ = ["create_agent_turn", "run_turn"]
+__all__ = ["create_agent_turn", "run_turn", "SummarizerFactory"]

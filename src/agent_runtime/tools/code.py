@@ -23,6 +23,7 @@ import re
 import shlex
 from typing import Any
 from agent_runtime.execution.base import ShellExecutor, Workspace
+from agent_runtime.execution.base import OUTPUTS_DIR, SCRIPTS_DIR
 from agent_runtime.execution.local import LocalShellExecutor, LocalWorkspace
 from agent_runtime.execution.guard import GuardDecision
 
@@ -46,8 +47,8 @@ LANGUAGE_SPECS: dict[str, dict[str, str]] = {
              "install_hint": "install Node.js (e.g. apt-get install -y nodejs)"},
 }
 LANGUAGES = {name: spec["extension"] for name, spec in LANGUAGE_SPECS.items()}
-SCRIPTS_DIR = ".scripts"
-OUTPUTS_DIR = ".outputs"
+# Canonical definitions live in execution.base; re-exported here for
+# backwards compatibility (older imports used ``tools.code.OUTPUTS_DIR``).
 DEFAULT_TIMEOUT = 120.0
 
 _SEQUENCE = re.compile(r"^(\d{4})\.")
@@ -271,7 +272,55 @@ async def execute_code(code: str, language: str = "python",
     return {**result, "script_path": script, "language": language}
 
 
+def execute_code_spec(executor: ShellExecutor, workspace: Workspace) -> ToolSpec:
+    """ToolSpec for ``execute_code``; schema lives with the implementation."""
+    from functools import partial
+
+    from agent_runtime.tools.spec import ToolSpec
+
+    return ToolSpec("execute_code",
+                    "Write a complete script to the workspace and execute it "
+                    "in one step, returning exit code, stdout, and stderr. "
+                    "Supports python (runs via python3 by default, "
+                    "AGENT_RUNTIME_PYTHON override), bash (runs via bash), "
+                    "r (runs via Rscript), and node (runs via node). "
+                    "Missing interpreters are reported with an install hint; "
+                    "install the runtime via run_command and retry. "
+                    "Local execution has no sandbox (the command guard only "
+                    "catches mistakes, it is not a security boundary); "
+                    "untrusted code needs an externally hardened container. "
+                    "Prefer this over run_command whenever the "
+                    "step needs loops, branches, multi-step data processing, "
+                    "or error handling: keep intermediate data in files or "
+                    "variables and print only the final result. Each script "
+                    "is saved under .scripts/ and can be re-run with "
+                    "run_command after fixing the environment.",
+                    {"type": "object", "properties": {
+                        "code": {"type": "string",
+                                 "description": "Complete script content"},
+                        "language": {"type": "string", "enum": ["python", "bash", "r", "node"],
+                                     "description": "Script language: python "
+                                                    "(python3 by default, "
+                                                    "AGENT_RUNTIME_PYTHON override), "
+                                                    "bash, r (Rscript), "
+                                                    "or node (node). Defaults to "
+                                                    "python — pass language "
+                                                    "explicitly for anything else",
+                                     "default": "python"},
+                        "path": {"type": "string",
+                                 "description": "Relative script path under "
+                                                ".scripts/ (in-root absolute "
+                                                "paths are relativized); "
+                                                "defaults to .scripts/NNNN.ext"},
+                        "timeout": {"type": "number",
+                                    "description": "Timeout in seconds",
+                                    "default": 120}},
+                     "required": ["code"]},
+                    partial(execute_code, workspace=workspace, executor=executor))
+
+
 __all__ = [
     "DEFAULT_TIMEOUT", "LANGUAGES", "LANGUAGE_SPECS",
     "OUTPUTS_DIR", "SCRIPTS_DIR", "execute_code", "validate_script_path",
+    "execute_code_spec",
 ]

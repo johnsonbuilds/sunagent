@@ -13,9 +13,11 @@ from typing import Any
 
 from agent_runtime.execution.base import Workspace, error_text
 from agent_runtime.execution.local import LocalWorkspace
-from agent_runtime.tools.code import OUTPUTS_DIR
+from agent_runtime.execution.base import OUTPUTS_DIR
 from agent_runtime.tools.edit_match import MatchError, apply_edit
 from agent_runtime.tools.syntax_gate import syntax_error
+from agent_runtime.tools.spec import ToolSpec
+from functools import partial
 
 
 DEFAULT_READ_LIMIT = 2000
@@ -101,7 +103,104 @@ async def edit_file(path: str, old_str: str, new_str: str, *,
             "bytes_written": written["bytes_written"]}
 
 
+def write_file_spec(workspace: Workspace) -> ToolSpec:
+    return ToolSpec("write_file",
+                    "Create a new file or replace the entire content of an "
+                    "existing file. Provide the complete intended file content "
+                    "in one call. Parent directories are created automatically; "
+                    "this tool is for scenarios where the whole file content "
+                    "is being defined at once: new-file creation and full-file "
+                    "rewrites.",
+                    {"type": "object", "properties": {
+                        "path": {"type": "string",
+                                 "description": "File path inside the workspace"},
+                        "content": {"type": "string",
+                                    "description": "Complete file content"}},
+                     "required": ["path", "content"]},
+                    partial(write_file, workspace=workspace))
+
+
+def read_file_spec(workspace: Workspace) -> ToolSpec:
+    return ToolSpec("read_file",
+                    "Read a file as text. Long files are returned one page of "
+                    "lines at a time; continue with a larger offset when the "
+                    "result reports truncated: true.",
+                    {"type": "object", "properties": {
+                        "path": {"type": "string",
+                                 "description": "File path inside the workspace"},
+                        "offset": {"type": "integer",
+                                   "description": "First line to return (1-based)",
+                                   "default": 1},
+                        "limit": {"type": "integer",
+                                  "description": "Maximum number of lines to return",
+                                  "default": DEFAULT_READ_LIMIT}},
+                     "required": ["path"]},
+                    partial(read_file, workspace=workspace))
+
+
+def read_output_spec(workspace: Workspace) -> ToolSpec:
+    return ToolSpec("read_output",
+                    "Page through a tool output that was saved under .outputs/ "
+                    "when it exceeded the transcript budget (the observation "
+                    "names the file). Returns one page of lines at a time; "
+                    "continue with a larger offset when the result reports "
+                    "truncated: true. Never re-run a tool just to see its "
+                    "output again — page the saved file instead.",
+                    {"type": "object", "properties": {
+                        "path": {"type": "string",
+                                 "description": "Path under .outputs/, e.g. "
+                                                "'.outputs/<name>.txt' as named "
+                                                "by the observation"},
+                        "offset": {"type": "integer",
+                                   "description": "First line to return (1-based)",
+                                   "default": 1},
+                        "limit": {"type": "integer",
+                                  "description": "Maximum number of lines to return",
+                                  "default": DEFAULT_READ_LIMIT}},
+                     "required": ["path"]},
+                    partial(read_output, workspace=workspace))
+
+
+def list_dir_spec(workspace: Workspace) -> ToolSpec:
+    return ToolSpec("list_dir",
+                    "List the entries of a directory (directories first, "
+                    "then files).",
+                    {"type": "object", "properties": {
+                        "path": {"type": "string",
+                                 "description": "Directory path inside the workspace",
+                                 "default": "."}},
+                     "required": []},
+                    partial(list_dir, workspace=workspace))
+
+
+def edit_file_spec(workspace: Workspace) -> ToolSpec:
+    return ToolSpec("edit_file",
+                    "Replace exactly one occurrence of old_str with new_str in a file."
+                    "old_str must match uniquely (exact first, tolerant fallbacks "
+                    "for line-number prefixes and indentation; "
+                    "the applied mode is reported back as match_mode). "
+                    "Zero or ambiguous matches raise with a rendered diagnosis. "
+                    "Edited content that no longer parses (Python, JSON, YAML, "
+                    "shell) is rejected and nothing is written. "
+                    "Best suited for single-point edits and iterative small "
+                    "changes, including text containing conflict markers.",
+                    {"type": "object", "properties": {
+                        "path": {"type": "string",
+                                 "description": "File path inside the workspace"},
+                        "old_str": {"type": "string",
+                                    "description": "Text to replace, must match "
+                                                   "uniquely (exact preferred; "
+                                                   "line-number-prefix-stripped "
+                                                   "and indent-insensitive "
+                                                   "fallbacks allowed)"},
+                        "new_str": {"type": "string",
+                                    "description": "Replacement text (empty to delete)"}},
+                     "required": ["path", "old_str", "new_str"]},
+                    partial(edit_file, workspace=workspace))
+
+
 __all__ = [
     "DEFAULT_READ_LIMIT", "edit_file", "list_dir", "read_file", "read_output",
-    "write_file",
+    "write_file", "write_file_spec", "read_file_spec", "read_output_spec",
+    "list_dir_spec", "edit_file_spec",
 ]

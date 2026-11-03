@@ -26,13 +26,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from agent_runtime.execution.base import Workspace
+from agent_runtime.execution.base import OUTPUTS_DIR, Workspace
 from agent_runtime.harness import (
     DEFAULT_HEAD_CHARS,
     DEFAULT_MAX_OBSERVATION_CHARS,
     DEFAULT_SPILL_PREVIEW_CHARS,
 )
-from agent_runtime.tools.code import OUTPUTS_DIR
 
 _UNSAFE_CHARS = re.compile(r"[^\w.-]")
 

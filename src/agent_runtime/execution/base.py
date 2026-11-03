@@ -49,6 +49,8 @@ def error_text(error: Any) -> str:
 # (tools/search.py) and the execution layer (execution/harbor.py) import
 # from one place. Previously harbor.py imported SKIP_DIRS/match helpers
 # from tools.search (execution -> tools倒依赖); now both import from base.
+OUTPUTS_DIR = ".outputs"
+SCRIPTS_DIR = ".scripts"
 SKIP_DIRS = frozenset({
     ".git", "node_modules", "__pycache__", ".venv", "venv", ".tox",
     ".mypy_cache", ".pytest_cache", ".ruff_cache", "dist", "build",
@@ -58,7 +60,7 @@ SKIP_DIRS = frozenset({
     # a repo-wide search. Skipping them here (and in the Harbor rg/grep
     # prune lists, which share this set) keeps results noise-free;
     # an explicit path=".scripts" / path=".outputs" search still works.
-    ".scripts", ".outputs",
+    SCRIPTS_DIR, OUTPUTS_DIR,
     # The runtime's own state (sessions, traces, summaries) is written by
     # the runtime, not by the model, and is noise in a repo-wide search.
     "workspace",
