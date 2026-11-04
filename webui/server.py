@@ -19,6 +19,7 @@ Endpoints:
     POST   /api/sessions/{id}/messages  send a message, start a turn
     POST   /api/sessions/{id}/cancel    stop the running turn
     GET    /api/sessions/{id}/events    SSE stream of frames
+    POST   /api/system/restart          restart the server via ./run.sh restart
 
 Every route sits behind HTTP basic authentication when a user name and
 a password are configured (see :mod:`webui.auth`).
@@ -64,6 +65,10 @@ logger = logging.getLogger(__name__)
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
 
 _KEEPALIVE_SECONDS = 15.0
+
+# Delay before the detached restart command runs, giving the HTTP
+# response time to reach the browser.
+_RESTART_DELAY_SECONDS = 0.5
 
 # Every application built in this process, so the shutdown path can
 # reach the session store no matter how the app was started.
@@ -245,6 +250,37 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
     @app.get("/api/config")
     async def config() -> dict[str, Any]:
         return runner.status()
+
+    @app.post("/api/system/restart")
+    async def restart_system() -> dict[str, Any]:
+        """Run ``./run.sh restart`` in the current directory.
+
+        The task is detached from the server's process group and starts
+        after a short delay, so this response reaches the browser before
+        ``run.sh`` stops the server it is talking to.
+        """
+        script = Path.cwd() / "run.sh"
+        if not script.is_file():
+            raise HTTPException(status_code=500,
+                                detail="run.sh not found in the current directory")
+
+        try:
+            # The detached shell outlives the server and waits briefly
+            # so this response is flushed before run.sh stops it.
+            await asyncio.create_subprocess_exec(
+                "bash", "-c",
+                f"sleep {_RESTART_DELAY_SECONDS}; exec ./run.sh restart",
+                cwd=str(Path.cwd()),
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except Exception as exc:
+            logger.exception("webui.restart.failed")
+            raise HTTPException(status_code=500,
+                                detail=f"could not run ./run.sh restart: {exc}")
+        return {"ok": True, "command": "./run.sh restart"}
 
     @app.get("/api/sessions")
     async def list_sessions() -> list[dict[str, Any]]:

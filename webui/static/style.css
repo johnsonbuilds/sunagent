@@ -417,12 +417,17 @@ button {
 .session-item .session-delete:hover { color: var(--error); }
 
 .sidebar-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
   border-top: 1px solid var(--border);
   font-size: var(--meta-size);
   color: var(--muted);
-  opacity: 0.7;
 }
+
+.sidebar-foot #sessionCount { opacity: 0.7; }
 
 /* ----------------------------------------------------------------- main */
 
@@ -945,6 +950,102 @@ button {
 }
 
 .send-btn.stop svg { width: 13px; height: 13px; }
+
+/* -------------------------------------------------------------- settings */
+
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 12vh var(--space-4) var(--space-4);
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(2px);
+}
+
+.settings-panel {
+  width: min(460px, 100%);
+  max-height: 72vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--sidebar);
+  box-shadow: 0 24px 64px var(--shadow);
+}
+
+.settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-title {
+  margin: 0;
+  font-size: var(--body-size);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.settings-body {
+  padding: var(--space-2);
+  overflow-y: auto;
+}
+
+.settings-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.settings-item:hover {
+  background: var(--surface-subtle);
+  border-color: var(--border);
+}
+
+.settings-item:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.settings-item-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.settings-item-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-item-title {
+  font-size: var(--ui-size);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.settings-item-desc {
+  font-size: var(--meta-size);
+  color: var(--muted);
+}
 
 /* ----------------------------------------------------------------- toast */
 

@@ -52,7 +52,11 @@
     themeBtn: document.getElementById("btnTheme"),
     sidebarBtn: document.getElementById("btnSidebar"),
     newChatBtn: document.getElementById("btnNewChat"),
-    newChatSideBtn: document.getElementById("btnNewChatSide")
+    newChatSideBtn: document.getElementById("btnNewChatSide"),
+    settingsBtn: document.getElementById("btnSettings"),
+    settingsOverlay: document.getElementById("settingsOverlay"),
+    settingsCloseBtn: document.getElementById("btnSettingsClose"),
+    restartBtn: document.getElementById("btnRestart")
   };
 
   /* ------------------------------------------------------------- helpers */
@@ -549,6 +553,56 @@
     applyTheme(current === "dark" ? "light" : "dark");
   }
 
+  /* ------------------------------------------------------------- settings */
+
+  var restartTimer = null;
+
+  function openSettings() {
+    el.settingsOverlay.hidden = false;
+    el.settingsCloseBtn.focus();
+  }
+
+  function closeSettings() {
+    el.settingsOverlay.hidden = true;
+  }
+
+  function pollForRestart(deadline) {
+    if (Date.now() > deadline) {
+      el.restartBtn.disabled = false;
+      showToast("服务重启超时，请手动刷新页面");
+      return;
+    }
+    fetch("/api/health", { cache: "no-store" })
+      .then(function (response) {
+        if (!response.ok) throw new Error("not ready");
+        window.location.reload();
+      })
+      .catch(function () {
+        restartTimer = setTimeout(function () {
+          pollForRestart(deadline);
+        }, 1000);
+      });
+  }
+
+  async function restartServer() {
+    if (el.restartBtn.disabled) return;
+    if (!window.confirm("确定要重启 SunAgent 服务吗？当前页面会短暂断开连接。")) return;
+    el.restartBtn.disabled = true;
+    showToast("正在重启服务，请稍候…");
+    try {
+      await api("/api/system/restart", { method: "POST", body: "{}" });
+    } catch (err) {
+      el.restartBtn.disabled = false;
+      showToast(err.message);
+      return;
+    }
+    // Hand off to run.sh, then poll until the replacement server is
+    // healthy and reload the page against it.
+    restartTimer = setTimeout(function () {
+      pollForRestart(Date.now() + 60000);
+    }, 2000);
+  }
+
   /* ----------------------------------------------------------------- boot */
 
   function renderSuggestions() {
@@ -589,6 +643,13 @@
       el.sidebar.classList.toggle("collapsed");
     });
 
+    el.settingsBtn.addEventListener("click", openSettings);
+    el.settingsCloseBtn.addEventListener("click", closeSettings);
+    el.restartBtn.addEventListener("click", restartServer);
+    el.settingsOverlay.addEventListener("click", function (event) {
+      if (event.target === el.settingsOverlay) closeSettings();
+    });
+
     el.messages.addEventListener("scroll", function () {
       var distance = el.messages.scrollHeight - el.messages.scrollTop - el.messages.clientHeight;
       state.pinned = distance < 120;
@@ -598,6 +659,9 @@
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         newSession();
+      }
+      if (event.key === "Escape" && !el.settingsOverlay.hidden) {
+        closeSettings();
       }
     });
   }
