@@ -38,7 +38,6 @@
     sidebar: document.getElementById("sidebar"),
     sessionList: document.getElementById("sessionList"),
     sessionSearch: document.getElementById("sessionSearch"),
-    sessionCount: document.getElementById("sessionCount"),
     sessionTitle: document.getElementById("sessionTitle"),
     statusBadge: document.getElementById("statusBadge"),
     modelChip: document.getElementById("modelChip"),
@@ -417,9 +416,6 @@
       });
       el.sessionList.appendChild(item);
     });
-
-    var count = state.sessions.length;
-    el.sessionCount.textContent = count + (count === 1 ? " conversation" : " conversations");
   }
 
   async function refreshSessions() {

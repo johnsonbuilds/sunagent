@@ -417,17 +417,38 @@ button {
 .session-item .session-delete:hover { color: var(--error); }
 
 .sidebar-foot {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-3) var(--space-3);
   border-top: 1px solid var(--border);
-  font-size: var(--meta-size);
-  color: var(--muted);
 }
 
-.sidebar-foot #sessionCount { opacity: 0.7; }
+.settings-trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--accent-bg);
+  color: var(--accent-strong);
+  font-size: var(--ui-size);
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.settings-trigger svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.settings-trigger:hover {
+  background: var(--accent-bg-strong);
+  border-color: var(--accent);
+  color: var(--text);
+}
 
 /* ----------------------------------------------------------------- main */
 
