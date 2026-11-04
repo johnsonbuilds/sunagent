@@ -50,6 +50,7 @@
     toast: document.getElementById("toast"),
     themeBtn: document.getElementById("btnTheme"),
     sidebarBtn: document.getElementById("btnSidebar"),
+    sidebarBackdrop: document.getElementById("sidebarBackdrop"),
     newChatBtn: document.getElementById("btnNewChat"),
     newChatSideBtn: document.getElementById("btnNewChatSide"),
     settingsBtn: document.getElementById("btnSettings"),
@@ -444,6 +445,7 @@
     // On narrow screens the sidebar floats over the transcript, so it
     // gets out of the way once a conversation is picked.
     if (isNarrow()) el.sidebar.classList.add("collapsed");
+    syncSidebarBackdrop();
   }
 
   async function newSession() {
@@ -531,6 +533,16 @@
 
   function isNarrow() {
     return window.innerWidth < 860;
+  }
+
+  function syncSidebarBackdrop() {
+    el.sidebarBackdrop.hidden =
+      !isNarrow() || el.sidebar.classList.contains("collapsed");
+  }
+
+  function toggleSidebar() {
+    el.sidebar.classList.toggle("collapsed");
+    syncSidebarBackdrop();
   }
 
   /* ---------------------------------------------------------------- theme */
@@ -635,9 +647,12 @@
     el.themeBtn.addEventListener("click", toggleTheme);
     el.newChatBtn.addEventListener("click", newSession);
     el.newChatSideBtn.addEventListener("click", newSession);
-    el.sidebarBtn.addEventListener("click", function () {
-      el.sidebar.classList.toggle("collapsed");
+    el.sidebarBtn.addEventListener("click", toggleSidebar);
+    el.sidebarBackdrop.addEventListener("click", function () {
+      el.sidebar.classList.add("collapsed");
+      syncSidebarBackdrop();
     });
+    window.addEventListener("resize", syncSidebarBackdrop);
 
     el.settingsBtn.addEventListener("click", openSettings);
     el.settingsCloseBtn.addEventListener("click", closeSettings);
@@ -673,6 +688,7 @@
     bind();
     renderSuggestions();
     if (isNarrow()) el.sidebar.classList.add("collapsed");
+    syncSidebarBackdrop();
 
     try {
       state.config = await api("/api/config");

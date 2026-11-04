@@ -266,6 +266,7 @@ button {
 /* --------------------------------------------------------------- layout */
 
 .layout {
+  position: relative;
   flex: 1;
   display: flex;
   min-height: 0;
@@ -1086,7 +1087,17 @@ button {
 
 /* ------------------------------------------------------------ responsive */
 
+.sidebar-backdrop { display: none; }
+
 @media (max-width: 860px) {
+  .sidebar-backdrop {
+    position: absolute;
+    inset: 0;
+    z-index: 29;
+    display: block;
+    background: rgba(0, 0, 0, 0.35);
+  }
+
   .sidebar {
     position: absolute;
     top: var(--titlebar-h);
