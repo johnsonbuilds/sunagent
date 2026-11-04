@@ -50,7 +50,7 @@ Run one prompt, or omit it for interactive mode:
 
 ```bash
 uv run python run_agent.py "List the files in the current directory"
-uv run python run_agent.py --harness tb-v4 "Fix the failing test"
+uv run python run_agent.py --harness tb-v8 "Fix the failing test"
 uv run python run_agent.py --trace workspace/traces/demo.jsonl "Inspect the repo"
 ```
 
@@ -163,7 +163,7 @@ For longer runs, use the image-GC wrapper:
 ```bash
 uv run python scripts/run_with_image_gc.py \
   --dataset terminal-bench/terminal-bench-2-1 \
-  --harness tb-v4 --job-name tb2-1-tb-v4 -n 4 --timeout-multiplier 3
+  --harness tb-v8 --job-name tb2-1-tb-v8 -n 4 --timeout-multiplier 3
 ```
 
 Then archive and compare:
