@@ -18,7 +18,7 @@
 
 其中真正“差一点”的只有 `sam-cell-seg`（0.468 vs 0.5）和 `make-mips-interpreter`（0.806 vs 0.95）；其余要么超时，要么关键产物根本没生成。
 
-### Token 消耗
+**Token 消耗**
 
 - 总计 **126,697,665 tokens**（prompt 122,231,629 + completion 4,466,036）。其中主 LLM 119,026,488（prompt 115,018,824 / completion 4,007,664），summarizer 子调用 7,671,177（prompt 7,212,805 / completion 458,372）。
 - 89 个 trial 平均 1,423,569、中位 980,095；3,973 次主调用平均每次 prompt 28,950 / completion 1,009。
