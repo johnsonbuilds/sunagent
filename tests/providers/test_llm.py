@@ -241,6 +241,108 @@ class ProjectMessagesForWireTests(unittest.TestCase):
             [call["id"] for call in projected[2]["tool_calls"]], ["c1"])
         self.assertEqual(projected[3]["tool_call_id"], "c1")
 
+    def test_adjacent_out_of_order_replies_stay_paired(self) -> None:
+        # A valid block may list its tool replies in any order directly
+        # after the assistant.  Repair must keep every reply and keep the
+        # block contiguous, without inventing a pairing violation.
+        history: list[dict[str, Any]] = [
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "a", "type": "function",
+                 "function": {"name": "run_command", "arguments": "{}"}},
+                {"id": "b", "type": "function",
+                 "function": {"name": "run_command", "arguments": "{}"}},
+            ]},
+            {"role": "tool", "tool_call_id": "b", "content": "B"},
+            {"role": "tool", "tool_call_id": "a", "content": "A"},
+        ]
+
+        projected = _project_messages_for_wire(history, echo=True)
+
+        self.assertEqual(
+            [message["role"] for message in projected],
+            ["assistant", "tool", "tool"],
+        )
+        self.assertEqual(
+            {message["tool_call_id"] for message in projected[1:]},
+            {"a", "b"},
+        )
+        self.assertEqual(
+            [call["id"] for call in projected[0]["tool_calls"]], ["a", "b"])
+        self.assertEqual(history[1]["tool_call_id"], "b")
+
+    def test_split_tool_pair_is_moved_after_assistant(self) -> None:
+        # tb-v9 regression: the response exists, but a runtime user message
+        # separates it from the assistant call.  The wire copy must put the
+        # tool reply first and keep the stored history untouched.
+        history: list[dict[str, Any]] = [
+            {"role": "user", "content": "task"},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "c1", "type": "function",
+                 "function": {"name": "run_command", "arguments": "{}"}}]},
+            runtime_user_message(
+                "Tool call to bash was rejected and not executed. "
+                "Please retry.",
+                kind="tool_rejection",
+            ),
+            {"role": "tool", "tool_call_id": "c1", "content": "out"},
+        ]
+
+        projected = _project_messages_for_wire(history, echo=True)
+
+        self.assertEqual(
+            [message["role"] for message in projected],
+            ["user", "assistant", "tool", "user"],
+        )
+        self.assertEqual(projected[2]["tool_call_id"], "c1")
+        self.assertEqual(projected[3]["content"],
+                         "Tool call to bash was rejected and not executed. "
+                         "Please retry.")
+        self.assertNotIn("metadata", projected[3])
+        # Stored history keeps its original order.
+        self.assertEqual(history[2]["role"], "user")
+
+    def test_orphan_tool_reply_is_dropped(self) -> None:
+        history: list[dict[str, Any]] = [
+            {"role": "user", "content": "task"},
+            {"role": "assistant", "content": "done"},
+            {"role": "tool", "tool_call_id": "ghost", "content": "out"},
+        ]
+
+        projected = _project_messages_for_wire(history, echo=True)
+
+        self.assertEqual([message["role"] for message in projected],
+                         ["user", "assistant"])
+        self.assertEqual(len(history), 3)
+
+    def test_batch_reorders_replies_and_drops_unanswered_calls(self) -> None:
+        history: list[dict[str, Any]] = [
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "a", "type": "function",
+                 "function": {"name": "run_command", "arguments": "{}"}},
+                {"id": "stray", "type": "function",
+                 "function": {"name": "submit_result", "arguments": "{}"}},
+                {"id": "b", "type": "function",
+                 "function": {"name": "run_command", "arguments": "{}"}},
+            ]},
+            runtime_user_message("rejected", kind="tool_rejection"),
+            {"role": "tool", "tool_call_id": "b", "content": "B"},
+            {"role": "tool", "tool_call_id": "a", "content": "A"},
+        ]
+
+        projected = _project_messages_for_wire(history, echo=True)
+
+        self.assertEqual(
+            [message["role"] for message in projected],
+            ["assistant", "tool", "tool", "user"],
+        )
+        self.assertEqual(
+            [call["id"] for call in projected[0]["tool_calls"]], ["a", "b"])
+        self.assertEqual(
+            [message["tool_call_id"] for message in projected[1:3]],
+            ["a", "b"],
+        )
+        self.assertEqual(len(history[0]["tool_calls"]), 3)
+
 
 class _FakeMessage:
     def __init__(self, reasoning: str = "") -> None:

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from agent_runtime.reasoning_echo import (
@@ -146,41 +147,121 @@ def _reasoning_text(message: Any) -> str:
     return ""
 
 
-def _drop_dangling_tool_calls(
-        messages: Sequence[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
-    """Drop assistant tool calls that receive no tool response.
+@dataclass(frozen=True)
+class WireRepair:
+    """Counts for one wire-copy repair pass (observability only)."""
 
-    Pure repair for the provider pairing contract (every assistant
-    ``tool_calls`` entry must be followed by a ``role: tool`` message
-    with the same ``tool_call_id``).  Dangling entries arise from
-    history paths that record an assistant call without executing it
-    (e.g. an intercepted finish request) or from context compaction
-    slicing a pair apart.  Only the wire copy is repaired; the stored
-    history is untouched.  Returns the repaired list and the number of
-    dropped calls.
+    moved: int = 0
+    dropped_calls: int = 0
+    dropped_orphan_tools: int = 0
+
+    @property
+    def changed(self) -> bool:
+        return bool(self.moved or self.dropped_calls
+                    or self.dropped_orphan_tools)
+
+
+def _repair_tool_call_pairing(
+        messages: Sequence[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], WireRepair]:
+    """Enforce the provider pairing contract on the wire copy.
+
+    The contract is stronger than "every call id has a response somewhere":
+    each assistant ``tool_calls`` block must be followed *immediately* by
+    the matching ``role: tool`` messages, with no user/assistant/system
+    message in between.
+
+    Repairs, in order of importance:
+
+    * a response that exists but is separated from its assistant call by a
+      non-tool message (the tb-v9 ``assistant → user → tool`` 400) is moved
+      directly after the assistant;
+    * a call with no response at all is dropped;
+    * an orphan tool response that no assistant references is dropped.
+
+    Only the wire copy is repaired; the stored history is untouched.
     """
-    answered: set[str] = set()
+    positions = {id(message): index for index, message in enumerate(messages)}
+
+    responses: dict[str, dict[str, Any]] = {}
+    for message in messages:
+        if message.get("role") != "tool":
+            continue
+        call_id = message.get("tool_call_id")
+        if isinstance(call_id, str) and call_id and call_id not in responses:
+            responses[call_id] = message
+
+    referenced: set[str] = set()
+    for message in messages:
+        if message.get("role") != "assistant":
+            continue
+        for call in message.get("tool_calls") or []:
+            if not isinstance(call, Mapping):
+                continue
+            call_id = call.get("id")
+            if isinstance(call_id, str) and call_id:
+                referenced.add(call_id)
+
+    # Prefix count of non-tool messages lets the "was this response
+    # separated from its assistant?" check run in O(1) per call instead
+    # of slicing/scanning the gap, which would be O(n^2) for a large
+    # single batch.
+    nontool_prefix = [0] * (len(messages) + 1)
+    for index, message in enumerate(messages):
+        nontool_prefix[index + 1] = (
+            nontool_prefix[index]
+            + (0 if message.get("role") == "tool" else 1))
+
+    repaired: list[dict[str, Any]] = []
+    emitted: set[str] = set()
+    moved = dropped_calls = dropped_orphan_tools = 0
+
     for message in messages:
         if message.get("role") == "tool":
             call_id = message.get("tool_call_id")
-            if isinstance(call_id, str) and call_id:
-                answered.add(call_id)
-    repaired: list[dict[str, Any]] = []
-    dropped = 0
-    for message in messages:
+            if not isinstance(call_id, str) or call_id not in referenced:
+                dropped_orphan_tools += 1
+            # Referenced responses are emitted right after their assistant.
+            continue
+
         calls = message.get("tool_calls")
-        if message.get("role") == "assistant" and calls:
-            kept = [call for call in calls
-                    if isinstance(call, dict) and call.get("id") in answered]
-            if len(kept) != len(calls):
-                dropped += len(calls) - len(kept)
-                message = dict(message)
-                if kept:
-                    message["tool_calls"] = kept
-                else:
-                    message.pop("tool_calls", None)
-        repaired.append(message)
-    return repaired, dropped
+        if message.get("role") != "assistant" or not calls:
+            repaired.append(message)
+            continue
+
+        kept: list[Any] = []
+        for call in calls:
+            call_id = call.get("id") if isinstance(call, Mapping) else None
+            if (not isinstance(call_id, str)
+                    or call_id not in responses
+                    or call_id in emitted):
+                dropped_calls += 1
+                continue
+            kept.append(call)
+
+        out = message
+        if len(kept) != len(calls):
+            out = dict(message)
+            if kept:
+                out["tool_calls"] = kept
+            else:
+                out.pop("tool_calls", None)
+        repaired.append(out)
+
+        for call in kept:
+            call_id = call["id"]
+            response = responses[call_id]
+            emitted.add(call_id)
+            repaired.append(response)
+            start = positions[id(message)]
+            end = positions[id(response)]
+            if (end <= start
+                    or nontool_prefix[end] - nontool_prefix[start + 1]):
+                moved += 1
+
+    return repaired, WireRepair(moved=moved,
+                                dropped_calls=dropped_calls,
+                                dropped_orphan_tools=dropped_orphan_tools)
 
 
 def _project_messages_for_wire(messages: Sequence[dict[str, Any]],
@@ -190,9 +271,11 @@ def _project_messages_for_wire(messages: Sequence[dict[str, Any]],
     Pure and non-mutating: conversation history and traces keep the full
     turn (including chain-of-thought), only the wire copy is shaped.
 
-    - Dangling assistant tool calls (no later ``role: tool`` message
-      with the same id) are dropped so the provider never 400s on the
-      pairing contract.
+    - Assistant ``tool_calls`` blocks are repaired to the provider's
+      adjacency contract: matching ``role: tool`` responses are moved
+      directly after the assistant, completely unanswered calls are
+      dropped, and orphan tool messages are dropped.  Only the wire copy
+      changes; stored history keeps the original order.
     - ``metadata`` (observation spill paths and other runtime side-channel
       data) is stripped unconditionally — no provider understands it.
     - ``reasoning_content`` is kept only when ``echo`` is true.  Where it
@@ -200,9 +283,16 @@ def _project_messages_for_wire(messages: Sequence[dict[str, Any]],
       empty message, so it gets a placeholder instead (the protocol
       requires assistant messages to carry something).
     """
-    paired, dropped = _drop_dangling_tool_calls(messages)
-    if dropped:
-        logger.warning("llm.wire.dangling_tool_calls_dropped count=%d", dropped)
+    paired, repair = _repair_tool_call_pairing(messages)
+    if repair.dropped_calls:
+        # Keep the old metric name for existing dashboards.
+        logger.warning("llm.wire.dangling_tool_calls_dropped count=%d",
+                       repair.dropped_calls)
+    if repair.changed:
+        logger.warning(
+            "llm.wire.contract_repaired moved=%d dropped_calls=%d "
+            "dropped_orphan_tools=%d",
+            repair.moved, repair.dropped_calls, repair.dropped_orphan_tools)
     projected: list[dict[str, Any]] = []
     for message in paired:
         out = dict(message)

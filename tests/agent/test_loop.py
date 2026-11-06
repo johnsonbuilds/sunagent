@@ -411,6 +411,54 @@ class AgentLoopErrorHandlingTests(unittest.IsolatedAsyncioTestCase):
                     if message["role"] == "user" and "malformed JSON" in message["content"]]
         self.assertEqual(len(rejected), 1)
 
+    async def test_rejection_first_batch_keeps_tool_reply_adjacent(self) -> None:
+        # tb-v9 regression: an invalid call followed by a valid one used to
+        # interleave the rejection notice between the assistant tool_calls
+        # and the valid call's tool reply, which providers reject with 400.
+        llm = FakeLLM([
+            {"content": "", "tool_calls": [
+                {"id": "bad", "function": {
+                    "name": "missing", "arguments": "{}"}},
+                {"id": "good", "function": {
+                    "name": "weather", "arguments": '{"location":"Singapore"}'}},
+            ]},
+            {"content": "done", "tool_calls": []},
+        ])
+        conversation = Conversation()
+
+        self.assertEqual(
+            await run_turn("weather", llm, make_registry(),
+                           conversation=conversation,
+                           harness=NEUTRAL_HARNESS),
+            "done",
+        )
+
+        second_request = llm.messages[1]
+        assistant_index = next(
+            index for index, message in enumerate(second_request)
+            if message.get("tool_calls"))
+        self.assertEqual(
+            [message["role"]
+             for message in second_request[assistant_index:assistant_index + 3]],
+            ["assistant", "tool", "user"],
+        )
+        self.assertEqual(
+            second_request[assistant_index + 1]["tool_call_id"], "good")
+        self.assertEqual(
+            second_request[assistant_index + 2]["metadata"]["kind"],
+            "tool_rejection",
+        )
+        # The persisted conversation has the same legal order, so an old
+        # session written by this runtime stays sendable.
+        stored_index = next(
+            index for index, message in enumerate(conversation.messages)
+            if message.get("tool_calls"))
+        self.assertEqual(
+            [message["role"]
+             for message in conversation.messages[stored_index:stored_index + 3]],
+            ["assistant", "tool", "user"],
+        )
+
     async def test_rejected_tool_call_records_trace_events(self) -> None:
         llm = FakeLLM([
             {"content": "", "tool_calls": [{"id": "1", "function": {
