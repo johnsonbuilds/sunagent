@@ -110,16 +110,46 @@ DeepSeek 要求 assistant 的 `tool_calls` 后面必须**紧跟**对应 tool 消
 
 ## 3. 建议修复
 
-1. **修顺序（最小改动）**：`ToolRunner.dispatch` 改两阶段——先执行并 append 所有合法调用的 tool 消息，再统一 append 被拒调用的 user 说明；这样 assistant 的 `tool_calls` 后永远先接满 tool 消息。
-   - 位置：`src/agent_runtime/agent/tool_runner.py:78-88`、`src/agent_runtime/agent/tool_dispatch.py:200-212`。
-2. **wire 层加“紧邻配对”校验**：现有 `_drop_dangling_tool_calls`（`providers/llm.py:149`）只做全局 id 存在性判断，建议增加顺序校验/重排，并把修复动作记为独立事件（如 `llm.wire.contract_repaired`），别只复用 dangling。
-3. **400 invalid_request 不要重试 6 次**：这类请求级 400 重发同一 payload 不可能成功，应在第一次就 fail fast，或先做本地修复再重试。
-4. **补回归测试**：一轮内 `[非法调用, 合法调用]` 的混合批次，断言 wire 上 assistant `tool_calls` 后紧跟对应 tool 消息；可直接用 `build-pmars` iteration 17 的形态做 fixture。
-5. **新增观测点**：在 trace 里记录“adjacency violation”计数（assistant tool_calls 到 tool 响应之间夹了非 tool 消息），这是本次 §8 三条观测点都漏掉的一维。
+> 状态（2026-11-06）：#1、#2、#4 已修复并合入 `main`（PR #8，commit `99cb9a4`）；#3 未做；#5 未采用。
+
+1. ✅ **修顺序（最小改动）**：`ToolRunner.dispatch` 已改为两阶段——先执行并 append 所有合法调用的 tool 消息，再在 `finally` 中统一 append 被拒调用的 user 说明；guard stop / 提前结束时也不会丢拒绝说明。现在 assistant 的 `tool_calls` 后总是先接满 tool 消息，再接拒绝说明。
+   - 位置：`src/agent_runtime/agent/tool_runner.py:52-143`。
+2. ✅ **wire 层加“紧邻配对”校验**：`_drop_dangling_tool_calls` 已替换为 `_repair_tool_call_pairing`：
+   - 被 user/assistant 隔开的 tool 响应直接移到 assistant 后面；
+   - 完全未响应的调用丢弃；
+   - 孤儿 tool 消息丢弃；
+   - 只修改 wire 副本，不动存储历史；
+   - 修复动作记录为 `llm.wire.contract_repaired moved=... dropped_calls=... dropped_orphan_tools=...`，旧 `llm.wire.dangling_tool_calls_dropped` 指标保留兼容。
+   - 位置：`src/agent_runtime/providers/llm.py:151-295`。
+3. ⏳ **400 invalid_request 不要重试 6 次**：未做。当前 `provider_error` 仍按 harness 配置重试；本次修复保证正常情况下不再产生这类非法 payload，因此没有引入 fail-fast。若后续仍出现请求级 400，可再单独处理。
+4. ✅ **补回归测试**：
+   - `tests/agent/test_loop.py::test_rejection_first_batch_keeps_tool_reply_adjacent`：坏调用在前、合法调用在后的混合批次，断言第二轮请求与持久化历史均为 `assistant → tool → user(rejection)`。
+   - `tests/providers/test_llm.py`：覆盖旧结构重排、孤儿 tool 丢弃、多调用乱序/未响应调用混合，以及相邻乱序响应保持配对。
+5. ❌ **新增观测点（adjacency violation）**：未采用。原因：旧 session 由 #2 在发送时兜底，未来回归由 #4 的单测保证；不再为纯观测增加一个生产 helper 和 trace 事件。因此当前代码没有 `llm.wire.adjacency_violation`。
 
 ---
 
 ## 4. 后续观测点
 
-- 重跑 `build-pmars` 和 `constraints-scheduling` 这两个任务，验证 `LLM error 400 ... tool_calls must be followed by tool messages` 归零。
-- 每轮同时确认 `llm.wire.dangling_tool_calls_dropped` 仍为 0；若 400 再现而 dangling 为 0，按 §2.1 的 `assistant → user → tool` 顺序违规继续定位。
+已完成观测结果（2026-11-06，harness `tb-v9`）：
+
+- 复跑 `build-pmars` 和 `constraints-scheduling`，job：`jobs/tb-v9-fixcheck-20261106-pmars-constraints`
+  - 2/2 trial 完成，0 异常，mean reward **1.0**
+  - `build-pmars` reward 1.0（4/4 verifier tests passed）
+  - `constraints-scheduling` reward 1.0（3/3 verifier tests passed）
+- 400 归零：
+  - `build-pmars`：34 次 LLM 调用，0 次 `llm.error` / `agent.error`，0 次 retry
+  - `constraints-scheduling`：13 次 LLM 调用，0 次 `llm.error` / `agent.error`，0 次 retry
+  - 所有实际发送 payload 的 adjacency 违规数为 **0**
+  - 未再出现 `LLM error 400 ... tool_calls must be followed by tool messages`
+- `llm.wire.dangling_tool_calls_dropped` 仍为 0；新 trial 中没有再次出现“拒绝调用 + 合法调用”混合批次，因此没有触发 wire 重排（日志无 `contract_repaired`）。
+- 旧失败 payload 回放：
+  - `build-pmars` iteration 18：修复前 1 个 adjacency 违规，当前 wire 投影后 0，输出 `llm.wire.contract_repaired moved=1`
+  - `constraints-scheduling` iteration 8：同样 1 → 0，`moved=1`
+- 回归测试：`638 passed, 13 subtests passed`。
+
+后续若再看到 400：
+
+- 先确认请求是否仍包含 `assistant tool_calls → 非 tool 消息 → tool 响应` 的顺序；#2 正常会在 wire 上修掉。
+- 同时确认 `llm.wire.contract_repaired` 是否出现；若出现，说明存量历史或新代码路径又产生了不合规结构。
+- 如果是请求级 400 重试，再考虑 #3 的 fail-fast。
