@@ -62,66 +62,82 @@ class ToolRunner:
         events, trace = self.events, self.trace
         tools, harness = self.tools, self.harness
         submit_tool = self.finisher.rules.submit_tool
-        for outcome in outcomes:
-            if (submit_args is not None and outcome.validated is not None
-                    and outcome.validated.name == submit_tool):
-                continue  # finish attempt, validated below
-            tool_call = outcome.tool_call
-            tool_meta = tool_trace_metadata(tool_call)
-            logger.debug("tool.dispatch iteration=%d tool=%r tool_call_id=%r",
-                         iteration, tool_meta.get("tool"),
-                         tool_meta.get("tool_call_id"))
-            payload = tool_call_payload(tool_call)
-            events.emit("tool.started", iteration, call_id=payload["call_id"],
-                        tool=payload["tool"], arguments=payload["arguments"])
-            tool_started = time.monotonic()
-            if outcome.rejection is not None:
-                observation = self.guard.rejection_observation(outcome, iteration)
+        # Rejection observations are user messages. Append them only after
+        # every executed call's tool message has landed: an assistant
+        # tool_calls block must be followed directly by its role:tool
+        # responses, never by a runtime user message in between.
+        deferred_rejections: list[dict[str, Any]] = []
+        stop: str | None = None
+        try:
+            for outcome in outcomes:
+                if (submit_args is not None and outcome.validated is not None
+                        and outcome.validated.name == submit_tool):
+                    continue  # finish attempt, validated below
+                tool_call = outcome.tool_call
+                tool_meta = tool_trace_metadata(tool_call)
+                logger.debug("tool.dispatch iteration=%d tool=%r tool_call_id=%r",
+                             iteration, tool_meta.get("tool"),
+                             tool_meta.get("tool_call_id"))
+                payload = tool_call_payload(tool_call)
+                events.emit("tool.started", iteration, call_id=payload["call_id"],
+                            tool=payload["tool"], arguments=payload["arguments"])
+                tool_started = time.monotonic()
+                if outcome.rejection is not None:
+                    observation = self.guard.rejection_observation(
+                        outcome, iteration)
+                    deferred_rejections.append(observation)
+                    if payload["tool"] == submit_tool:
+                        # Malformed finish attempt, not work: no reset.
+                        self.finisher.note_finish_violation(iteration)
+                    stop = self.guard.check_tool_error(
+                        iteration, payload["tool"], outcome.rejection)
+                    if stop is not None:
+                        break
+                    continue
+                validated = outcome.validated
+                assert validated is not None
+                try:
+                    with trace.span("tool", iteration, **tool_meta) as span_meta:
+                        result = await tools.execute(validated.name,
+                                                     validated.arguments)
+                        span_meta.update(tool=validated.name,
+                                         tool_call_id=validated.id)
+                    logger.debug(
+                        "tool.result iteration=%d tool=%r result_chars=%d",
+                        iteration, validated.name, len(str(result)))
+                    events.emit("tool.completed", iteration,
+                                call_id=payload["call_id"],
+                                duration=round(time.monotonic() - tool_started, 3),
+                                **tool_result_summary(result))
+                except Exception as exc:
+                    logger.error("tool.error iteration=%d tool=%r error=%s",
+                                 iteration, validated.name, exc)
+                    events.emit("tool.failed", iteration,
+                                call_id=payload["call_id"],
+                                tool=payload["tool"], error=str(exc))
+                    observation = harness.tool_error_observation(
+                        exc, tool=payload["tool"])
+                    history.append(tool_observation_message(tool_call, observation))
+                    self.finisher.note_work_executed()  # executed: new information
+                    stop = self.guard.check_tool_error(
+                        iteration, validated.name, exc)
+                    if stop is not None:
+                        break
+                    continue
+                rendered = await self.observations.render(result, validated.id)
+                metadata = ({"spill_path": rendered.spill_path}
+                            if rendered.spill_path else None)
+                history.append(tool_observation_message(
+                    tool_call, rendered.text, metadata))
+                self.guard.note_success()
+                self.finisher.note_work_executed()  # executed work resets the fuse
+        finally:
+            # A guard stop or TurnFailure must not drop an already-produced
+            # rejection observation; appending it here keeps history usable
+            # for a later turn while preserving the pairing contract.
+            for observation in deferred_rejections:
                 history.append(observation)
-                if payload["tool"] == submit_tool:
-                    # Malformed finish attempt, not work: no reset.
-                    self.finisher.note_finish_violation(iteration)
-                stop = self.guard.check_tool_error(
-                    iteration, payload["tool"], outcome.rejection)
-                if stop is not None:
-                    return stop
-                continue
-            validated = outcome.validated
-            assert validated is not None
-            try:
-                with trace.span("tool", iteration, **tool_meta) as span_meta:
-                    result = await tools.execute(validated.name,
-                                                 validated.arguments)
-                    span_meta.update(tool=validated.name,
-                                     tool_call_id=validated.id)
-                logger.debug(
-                    "tool.result iteration=%d tool=%r result_chars=%d",
-                    iteration, validated.name, len(str(result)))
-                events.emit("tool.completed", iteration, call_id=payload["call_id"],
-                            duration=round(time.monotonic() - tool_started, 3),
-                            **tool_result_summary(result))
-            except Exception as exc:
-                logger.error("tool.error iteration=%d tool=%r error=%s",
-                             iteration, validated.name, exc)
-                events.emit("tool.failed", iteration, call_id=payload["call_id"],
-                            tool=payload["tool"], error=str(exc))
-                observation = harness.tool_error_observation(
-                    exc, tool=payload["tool"])
-                history.append(tool_observation_message(tool_call, observation))
-                self.finisher.note_work_executed()  # executed: new information
-                stop = self.guard.check_tool_error(
-                    iteration, validated.name, exc)
-                if stop is not None:
-                    return stop
-                continue
-            rendered = await self.observations.render(result, validated.id)
-            metadata = ({"spill_path": rendered.spill_path}
-                        if rendered.spill_path else None)
-            history.append(tool_observation_message(
-                tool_call, rendered.text, metadata))
-            self.guard.note_success()
-            self.finisher.note_work_executed()  # executed work resets the fuse
-        return None
+        return stop
 
 
 __all__ = ["ToolRunner"]
