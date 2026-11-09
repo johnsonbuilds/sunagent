@@ -863,5 +863,20 @@ class TB4HarnessTests(unittest.TestCase):
                          DEFAULT_SUMMARY_MAX_TOKENS)
 
 
+class SummarizerOutputBudgetTests(unittest.TestCase):
+    def test_default_and_task_authority_harness_have_headroom(self) -> None:
+        from agent_runtime.harness import load_named_harness
+        self.assertEqual(DEFAULT_SUMMARY_MAX_TOKENS, 4_096)
+        spec = load_named_harness("tb-v11")
+        self.assertEqual(spec.context.summary_max_tokens, 4_096)
+
+    def test_instruction_sets_hard_cap_and_forbids_raw_dumps(self) -> None:
+        from agent_runtime.agent.context.summary import SUMMARIZER_INSTRUCTION
+        text = " ".join(SUMMARIZER_INSTRUCTION.split())
+        self.assertIn("4,096 output tokens", text)
+        self.assertIn("raw arrays", text)
+        self.assertNotIn("2,000 output tokens", text)
+
+
 if __name__ == "__main__":
     unittest.main()

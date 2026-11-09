@@ -46,6 +46,15 @@ Rules:
 - For every failed or blocked attempt, record the exact error and root-cause lesson to prevent repeated failures (avoid Sisyphean loops).
 - Be extremely specific with key entities, file paths, parameters, tool invocations, exit codes, and intermediate values.
 - Keep it concise, precise, and information-dense.
+- Keep the whole snapshot within 4,096 output tokens. Use only as much
+  space as the state actually needs; do not pad, repeat, or restate the
+  history.
+- Do not paste raw arrays, full tool output, or long tables; cite the
+  script or file that holds them instead.
+- Always finish all three sections. If space runs short, compress
+  historical detail in "## 1. Work State" (cite scripts/files instead of
+  pasting their output) while keeping failure lessons; never drop
+  "## 2" or "## 3".
 
 Use exactly these sections:
 

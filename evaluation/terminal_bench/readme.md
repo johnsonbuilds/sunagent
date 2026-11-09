@@ -19,6 +19,19 @@ MODEL_ID=your-model
 
 ## Commands
 
+### Terminal-Bench 4.0 single task
+
+```bash
+cd /root/sunagent && env -u AGENT_RUNTIME_MEMORY uv run python scripts/run_with_image_gc.py \
+  --dataset terminal-bench/terminal-bench@4.0.0 \
+  --harness tb-v11 \
+  --job-name tb4-0-smoke-tb-v11-music-harmony-muse-spark-1.3 \
+  -n 1 -i "terminal-bench/music-harmony" --timeout-multiplier 1
+```
+
+`env -u AGENT_RUNTIME_MEMORY` unsets persistent memory for the run, so the
+agent starts from a clean context. Pick a unique `--job-name` for every run.
+
 ### Full Terminal-Bench 2.0 run
 
 ```bash
@@ -46,7 +59,7 @@ then runs `docker rmi` on each task image once that trial's `result.json` shows
 | Flag | Meaning |
 |------|---------|
 | `--dataset` | Local directory (Harbor `-p`) or registry name (Harbor `-d`, e.g. `terminal-bench/terminal-bench-2`) |
-| `--harness` | Sets `AGENT_RUNTIME_HARNESS`; Terminal-Bench uses `tb-v1` (`harnesses/tb-v1.yaml`) |
+| `--harness` | Sets `AGENT_RUNTIME_HARNESS`; e.g. `tb-v1` for TB 2.0 (`harnesses/tb-v1.yaml`) or `tb-v11` for TB 4.0 (`harnesses/tb-v11.yaml`) |
 | `--job-name` | Output directory `jobs/<job-name>/`. Must be unique per run — reusing a name raises a `lock.json` error |
 | `-n` | Concurrent trials (default 4) |
 | `--timeout-multiplier` | Scales the task timeouts (TB tasks are 900/1200/2400s; `3` makes them 2700/3600/7200s) |

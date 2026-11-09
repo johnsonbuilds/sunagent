@@ -132,7 +132,7 @@ DEFAULT_WINDOW_ROUNDS = 12               # context: compaction comfort window
 DEFAULT_KEEP_RECENT_ROUNDS = 2           # context: rounds never compacted under budget pressure
 DEFAULT_SUMMARY_TAIL_ROUNDS = 2          # context: llm_summary verbatim tail
 DEFAULT_USER_PRESERVE_BUDGET = 8_000     # context: CHARS (either budget unit) of mid-conversation user messages kept verbatim (newest first). Always chars by design: the preserve pool is a coarse guard, and routing it through the anchor-calibrated char/token ratio would inject conversion noise into a threshold chars serve fine.
-DEFAULT_SUMMARY_MAX_TOKENS = 2_048       # context: summarizer output cap; longer output is rejected, falls back
+DEFAULT_SUMMARY_MAX_TOKENS = 4_096       # context: summarizer output hard cap, not a target; avoids truncating verbose snapshots
 # Cap (chars) for the summarizer's input on the retry attempt. Pathological
 # segments (hundreds of k chars after repeated failures stall the boundary)
 # make the model return empty/off-schema snapshots; TB-2.1 showed invalid
