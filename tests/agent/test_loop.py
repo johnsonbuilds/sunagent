@@ -209,6 +209,8 @@ class AgentLoopErrorHandlingTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(is_runtime_user_message(nudges[0]))
             self.assertEqual(nudges[0]["metadata"]["kind"],
                              "reasoning_budget")
+            self.assertNotIn("or give your final answer", nudges[0]["content"])
+            self.assertIn("required result", nudges[0]["content"])
             budget_events = [e for e in trace.events
                              if e.event_type == "llm.reasoning_budget"]
             self.assertEqual(len(budget_events), 1)
@@ -657,6 +659,36 @@ class HarnessIntegrationTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(is_runtime_user_message(reminder))
         self.assertIn("Budget 2/5", reminder["content"])
+        self.assertIn("informational, not a restriction", reminder["content"])
+        self.assertIn("set a concrete cutoff", reminder["content"])
+        self.assertIn("One iteration is one model turn", reminder["content"])
+        self.assertNotIn("Source edit so far", reminder["content"])
+
+    async def test_budget_reminder_turns_urgent_near_the_limit(self) -> None:
+        harness = HarnessSpec(control=ControlGenome(
+            max_iterations=5,
+            budget_reminder=BudgetReminder(enabled=True,
+                                           at_fractions=(0.8,)),
+        ))
+        calls = [
+            {"content": "", "tool_calls": [{"id": str(i), "function": {
+                "name": "weather", "arguments": '{"location":"Oslo"}'}}]}
+            for i in range(1, 5)
+        ]
+        llm = FakeLLM(calls + [{"content": "done", "tool_calls": []}])
+        conversation = Conversation()
+
+        answer = await run_turn("weather", llm, make_registry(),
+                                harness=harness, conversation=conversation)
+
+        self.assertEqual(answer, "done")
+        reminder = next(
+            message for message in conversation.messages
+            if message.get("metadata", {}).get("kind") == "budget_reminder"
+        )
+        self.assertIn("Budget 4/5", reminder["content"])
+        self.assertIn("stop exploring", reminder["content"])
+        self.assertIn("producing and verifying", reminder["content"])
 
     async def test_max_iterations_defaults_to_harness_control_gene(self) -> None:
         harness = HarnessSpec(control=ControlGenome(max_iterations=1))

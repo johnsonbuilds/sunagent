@@ -1,0 +1,95 @@
+id: tb-v11
+parent: tb-v10
+mutation: 'task-authority prompt now names the full specification (result, inputs, constraints, allowed changes, acceptance criteria), adds generic finish rules that separate verified from unverified claims, and makes the budget reminder explain iterations and adapt its guidance at the halfway point'
+reason: 'The first user message contains more than an output path: it carries inputs, constraints, allowed changes, and acceptance criteria. The prompt now says all of it is binding. It also states that a check counts only when actually run and observed to pass, that failed checks must be fixed or reported as failures, and that the final report must separate verified from unverified work. This is worded generically so it applies to any task rather than to one artifact type. The budget reminder no longer tells an early-stage model to produce immediately; it explains that one iteration is one model turn, asks for an exploration cutoff while budget remains, and switches to a produce-and-verify instruction near the limit.'
+prompt:
+  system: |
+    You are an autonomous agent operating inside a Linux Docker container.
+    There is no human to ask; do not wait for clarification.
+
+    The first user message is the complete task specification. It defines the
+    required result, the inputs and constraints, the allowed changes, and the
+    criteria by which the result will be judged. Treat all of it as binding;
+    do not satisfy only one line, such as an output path, while ignoring the
+    constraints and acceptance criteria. Later budget, context, or recovery
+    messages only manage execution; they do not change the task.
+
+    Work through the available tools. Do not finish while the required result
+    is missing or failing. Your final message is only a brief report of the
+    result and verification; it never substitutes for the result.
+
+    Before finishing, verify the result against the acceptance criteria in the
+    task specification. A check counts only if you ran it in this session and
+    saw it pass; a result that merely looks complete or well-formed is not
+    verified. If a check fails or cannot run, do not describe it as passed:
+    diagnose the cause and fix it while iterations remain, and avoid repeating
+    cosmetic rewrites of the same failing check. Only when you stop should you
+    report a failure explicitly. Your final message must separate what you
+    actually verified from what you did not.
+  iteration_limit_notice: >-
+    Iteration limit reached. Report the result that exists, what you verified,
+    and what is still missing. Do not describe a failed or unrun check as passed.
+tools:
+  enabled:
+  - run_command
+  - read_file
+  - apply_patch
+  - edit_file
+  - write_file
+  - grep_search
+  - find_files
+  - execute_code
+control:
+  max_iterations: 120
+  max_observation_chars: 16000
+  spill_preview_chars: 4000
+  finish_violation_limit: 3
+  budget_reminder:
+    enabled: true
+    at_fractions: [0.25, 0.6, 0.85]
+context:
+  strategy: llm_summary
+  budget_unit: tokens
+  head_chars: 200
+  context_budget: 60000
+  window_rounds: 12
+  keep_recent_rounds: 2
+  summary_tail_rounds: 2
+  user_preserve_budget: 8000
+  summary_max_tokens: 2048
+  retrieval_exempt_tools: []
+recovery:
+  tool_error: feed_error_and_continue
+  tool_error_max_retries: 3
+  llm_errors:
+    stream_idle_timeout:
+      max_retries: 5
+      backoff: exponential
+      base_delay: 0.5
+    stream_truncated:
+      max_retries: 3
+      backoff: exponential
+      base_delay: 0.5
+    stream_empty:
+      max_retries: 3
+      backoff: exponential
+      base_delay: 0.5
+    provider_error:
+      max_retries: 6
+      backoff: exponential
+      base_delay: 2.0
+    context_window:
+      max_retries: 2
+      backoff: none
+      base_delay: 0.0
+verification:
+  enabled: false
+  mode: 'off'
+  require: []
+  submit_tool: submit_result
+  edit_tools:
+  - edit_file
+  - apply_patch
+  - write_file
+  test_target_pattern: '[\w\-/]+\.(?:py|sh)\b|tests?/[\w\-/.]+|test_[\w\-/]+'
+skills: []

@@ -608,6 +608,66 @@ class SummarizerObservabilityTests(unittest.IsolatedAsyncioTestCase):
                     if a[0] == "context.llm_summary.invalid"]
         self.assertEqual(attempts, [1, 2])
 
+    async def test_invalid_event_reports_output_diagnostics(self) -> None:
+        class CutLLM:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def chat(self, messages, tools=None, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return {
+                        "content": ("# Agent Context Snapshot\n\n"
+                                    "## 1. Work State\n- cut here"),
+                        "tool_calls": [],
+                        "finish_reason": "length",
+                        "reasoning_content": "x" * 40,
+                        "usage": {"prompt_tokens": 11,
+                                  "completion_tokens": 22},
+                    }
+                return {"content": valid_summary("RECOVERED"),
+                        "tool_calls": []}
+
+        events: list[tuple] = []
+
+        class FakeTrace:
+            def emit(self, *args, **kwargs):
+                events.append((args, kwargs))
+
+        result = await summarize_history(
+            self._history(), budget=1, tail_rounds=2,
+            trace=FakeTrace(), iteration=9, llm=CutLLM())
+        self.assertTrue(any(
+            str(m.get("content", "")).startswith(SUMMARY_PREFIX)
+            for m in result))
+        payload = next(k for a, k in events
+                       if a[0] == "context.llm_summary.invalid")
+        self.assertEqual(payload["finish_reason"], "length")
+        self.assertEqual(payload["reasoning_chars"], 40)
+        self.assertEqual(payload["attempt_prompt_tokens"], 11)
+        self.assertEqual(payload["attempt_completion_tokens"], 22)
+        self.assertIn("- cut here", payload["summary_tail"])
+        yield_payload = next(k for a, k in events
+                             if a[0] == "context.llm_summary.yield")
+        self.assertIsNone(yield_payload["finish_reason"])
+        self.assertEqual(yield_payload["reasoning_chars"], 0)
+
+    async def test_usage_sink_receives_this_attempts_tokens(self) -> None:
+        class UsageLLM:
+            async def chat(self, messages, tools=None, **kwargs):
+                return {"content": valid_summary("OK"),
+                        "tool_calls": [],
+                        "usage": {"prompt_tokens": 7,
+                                  "completion_tokens": 3}}
+
+        seen: list[tuple[int, int]] = []
+
+        await summarize_history(
+            self._history(), budget=1, tail_rounds=2, iteration=9,
+            llm=UsageLLM(), usage_sink=lambda p, c: seen.append((p, c)))
+
+        self.assertEqual(seen, [(7, 3)])
+
     async def test_retry_uses_capped_input(self) -> None:
         from agent_runtime.agent.context import (
             DEFAULT_SUMMARIZER_INPUT_CAP_CHARS,

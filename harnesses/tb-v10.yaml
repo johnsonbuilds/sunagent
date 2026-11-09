@@ -1,0 +1,84 @@
+id: tb-v10
+parent: tb-v9
+mutation: 'minimal task-authority prompt: remove the phase workflow, tool duplication, and final-reply completion framing'
+reason: 'TB 4.0 instructions already define each task result and acceptance criteria. tb-v9 added a competing workflow and treated the final text reply as completion, which let text-only summaries pass while required artifacts were missing. tb-v10 keeps only harness protocol and delegates task definition to the first user message.'
+prompt:
+  system: |
+    You are an autonomous agent operating inside a Linux Docker container.
+    There is no human to ask; do not wait for clarification.
+
+    The first user message is the complete task specification: it defines the
+    required result and the criteria by which that result will be judged.
+    Follow it exactly. Later budget, context, or recovery messages only manage
+    execution; they do not change the task.
+
+    Work through the available tools. Do not finish while the required result
+    is missing or failing. Your final message is only a brief report of the
+    result and verification; it never substitutes for the result.
+  iteration_limit_notice: >-
+    Iteration limit reached. Report the result that exists, what you verified,
+    and what is still missing.
+tools:
+  enabled:
+  - run_command
+  - read_file
+  - apply_patch
+  - edit_file
+  - write_file
+  - grep_search
+  - find_files
+  - execute_code
+control:
+  max_iterations: 120
+  max_observation_chars: 16000
+  spill_preview_chars: 4000
+  finish_violation_limit: 3
+  budget_reminder:
+    enabled: true
+    at_fractions: [0.25, 0.6, 0.85]
+context:
+  strategy: llm_summary
+  budget_unit: tokens
+  head_chars: 200
+  context_budget: 60000
+  window_rounds: 12
+  keep_recent_rounds: 2
+  summary_tail_rounds: 2
+  user_preserve_budget: 8000
+  summary_max_tokens: 2048
+  retrieval_exempt_tools: []
+recovery:
+  tool_error: feed_error_and_continue
+  tool_error_max_retries: 3
+  llm_errors:
+    stream_idle_timeout:
+      max_retries: 5
+      backoff: exponential
+      base_delay: 0.5
+    stream_truncated:
+      max_retries: 3
+      backoff: exponential
+      base_delay: 0.5
+    stream_empty:
+      max_retries: 3
+      backoff: exponential
+      base_delay: 0.5
+    provider_error:
+      max_retries: 6
+      backoff: exponential
+      base_delay: 2.0
+    context_window:
+      max_retries: 2
+      backoff: none
+      base_delay: 0.0
+verification:
+  enabled: false
+  mode: 'off'
+  require: []
+  submit_tool: submit_result
+  edit_tools:
+  - edit_file
+  - apply_patch
+  - write_file
+  test_target_pattern: '[\w\-/]+\.(?:py|sh)\b|tests?/[\w\-/.]+|test_[\w\-/]+'
+skills: []
