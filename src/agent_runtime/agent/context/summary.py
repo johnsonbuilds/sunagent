@@ -7,7 +7,7 @@ See :func:`summarize_history` for the full policy.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, NamedTuple
 
 from agent_runtime.harness import (
     DEFAULT_CONTEXT_BUDGET,
@@ -134,11 +134,26 @@ def _strip_leading_system(messages: list[dict[str, Any]]) -> list[dict[str, Any]
     return messages[index:]
 
 
+class _SummaryCall(NamedTuple):
+    """One summarizer response plus the metadata needed to diagnose it.
+
+    ``finish_reason`` and ``reasoning_chars`` distinguish a snapshot that
+    the provider cut at ``max_tokens`` from one the model stopped on its
+    own without emitting every required section.
+    """
+
+    content: str | None
+    prompt_tokens: int
+    completion_tokens: int
+    finish_reason: str | None = None
+    reasoning_chars: int = 0
+
+
 async def _generate_summary(messages: list[dict[str, Any]], *,
                             previous_summary: str | None,
                             summary_max_tokens: int,
                             llm: Any = None,
-                            prompt: str | None = None) -> tuple[str | None, tuple[int, int]]:
+                            prompt: str | None = None) -> _SummaryCall:
     """Ask the LLM for a structured summary of the compaction segment.
 
     The payload is assembled as: a fixed summarizer-identity system message, the
@@ -175,7 +190,15 @@ async def _generate_summary(messages: list[dict[str, Any]], *,
         raise RuntimeError("no summarizer LLM is configured")
     response = await model.chat(summarizer_messages, tools=None,
                                 max_tokens=summary_max_tokens)
-    return (response.get("content") or "", response_usage(response))
+    prompt_tokens, completion_tokens = response_usage(response)
+    reasoning = response.get("reasoning_content") or ""
+    return _SummaryCall(
+        content=response.get("content") or "",
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        finish_reason=response.get("finish_reason"),
+        reasoning_chars=len(reasoning) if isinstance(reasoning, str) else 0,
+    )
 
 
 _REQUIRED_SECTIONS = ["## 1. Work State", "## 2. Next Move", "## 3. Working Context & Anchors"]
@@ -308,6 +331,10 @@ async def summarize_history(messages: list[dict[str, Any]], *,
     summary: str | None = None
     summarizer_prompt_tokens = 0
     summarizer_completion_tokens = 0
+    last_finish_reason: str | None = None
+    last_reasoning_chars = 0
+    last_prompt_tokens = 0
+    last_completion_tokens = 0
     used_capped_input = False
     full_input_chars = total_chars(summarizer_input, count)
     for attempt in (1, 2):
@@ -320,14 +347,20 @@ async def summarize_history(messages: list[dict[str, Any]], *,
                 exempt_tools=exempt_tools, count_reasoning=count)
             used_capped_input = True
         try:
-            summary, (attempt_prompt, attempt_completion) = await _generate_summary(
+            call = await _generate_summary(
                 attempt_input, previous_summary=previous_summary,
                 summary_max_tokens=summary_max_tokens, prompt=prompt, llm=llm)
-            summarizer_prompt_tokens += attempt_prompt
-            summarizer_completion_tokens += attempt_completion
+            summary = call.content
+            last_finish_reason = call.finish_reason
+            last_reasoning_chars = call.reasoning_chars
+            last_prompt_tokens = call.prompt_tokens
+            last_completion_tokens = call.completion_tokens
+            summarizer_prompt_tokens += call.prompt_tokens
+            summarizer_completion_tokens += call.completion_tokens
             if usage_sink is not None:
                 try:
-                    result_sink = usage_sink(attempt_prompt, attempt_completion)
+                    result_sink = usage_sink(call.prompt_tokens,
+                                             call.completion_tokens)
                     if hasattr(result_sink, "__await__"):
                         await result_sink
                 except Exception:
@@ -359,6 +392,11 @@ async def summarize_history(messages: list[dict[str, Any]], *,
                 trace.emit("context.llm_summary.invalid", iteration,
                            reason=str(exc)[:500], attempt=attempt,
                            summary_chars=len(summary or ""),
+                           summary_tail=(summary or "")[-200:],
+                           finish_reason=last_finish_reason,
+                           reasoning_chars=last_reasoning_chars,
+                           attempt_prompt_tokens=last_prompt_tokens,
+                           attempt_completion_tokens=last_completion_tokens,
                            prompt_tokens=summarizer_prompt_tokens,
                            completion_tokens=summarizer_completion_tokens,
                            total_tokens=(summarizer_prompt_tokens
@@ -385,6 +423,10 @@ async def summarize_history(messages: list[dict[str, Any]], *,
                    summarizer_input_count=len(summarizer_input),
                    input_capped=used_capped_input,
                    boundary=boundary, char_budget=char_budget,
+                   finish_reason=last_finish_reason,
+                   reasoning_chars=last_reasoning_chars,
+                   attempt_prompt_tokens=last_prompt_tokens,
+                   attempt_completion_tokens=last_completion_tokens,
                    prompt_tokens=summarizer_prompt_tokens,
                    completion_tokens=summarizer_completion_tokens,
                    total_tokens=(summarizer_prompt_tokens

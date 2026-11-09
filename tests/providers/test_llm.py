@@ -252,9 +252,11 @@ class _FakeMessage:
 
 
 class _FakeCompletions:
-    def __init__(self, reasoning: str = "") -> None:
+    def __init__(self, reasoning: str = "",
+                 finish_reason: str | None = None) -> None:
         self.calls: list[dict[str, Any]] = []
         self.reasoning = reasoning
+        self.finish_reason = finish_reason
 
     async def create(self, **kwargs: Any) -> Any:
         self.calls.append(kwargs)
@@ -263,8 +265,10 @@ class _FakeCompletions:
                 yield _Chunk("ok", "stop", reasoning=self.reasoning)
             return _chunks()
         response = unittest.mock.MagicMock()
-        response.choices = [unittest.mock.MagicMock(
-            message=_FakeMessage(reasoning=self.reasoning))]
+        choice = unittest.mock.MagicMock(
+            message=_FakeMessage(reasoning=self.reasoning))
+        choice.finish_reason = self.finish_reason
+        response.choices = [choice]
         return response
 
 
@@ -305,6 +309,18 @@ class ProviderEgressTests(unittest.IsolatedAsyncioTestCase):
         # History stays intact for the next iteration and the trace.
         self.assertEqual(history[0]["reasoning_content"], "thinking")
         self.assertIn("metadata", history[0])
+
+    async def test_chat_exposes_finish_reason(self) -> None:
+        self.completions.finish_reason = "length"
+
+        result = await self.llm.chat([])
+
+        self.assertEqual(result["finish_reason"], "length")
+
+    async def test_chat_omits_finish_reason_when_unknown(self) -> None:
+        result = await self.llm.chat([])
+
+        self.assertNotIn("finish_reason", result)
 
     async def test_stream_projects_messages_for_the_wire(self) -> None:
         with patch.dict(os.environ, {"AGENT_RUNTIME_REASONING_ECHO": "never"}):

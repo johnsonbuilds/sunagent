@@ -276,12 +276,18 @@ class OpenAICompatibleLLM:
             if _looks_like_context_overflow(exc):
                 raise ContextWindowExceededError(str(exc)) from exc
             raise
-        message = response.choices[0].message
+        choice = response.choices[0]
+        message = choice.message
         calls = [call.model_dump(exclude_none=True) for call in (message.tool_calls or [])]
         result = {"content": message.content or "", "tool_calls": calls}
         reasoning = _reasoning_text(message)
         if reasoning:
             result["reasoning_content"] = reasoning
+        # Keep the provider's stop reason so callers can tell a natural
+        # stop from a max_tokens cut (e.g. a truncated summarizer output).
+        finish_reason = getattr(choice, "finish_reason", None)
+        if isinstance(finish_reason, str) and finish_reason:
+            result["finish_reason"] = finish_reason
         usage = getattr(response, "usage", None)
         if usage is not None:
             result["usage"] = _usage_dict(usage)
