@@ -106,10 +106,11 @@ class TurnGuard:
     def maybe_remind(self, history: TurnHistory, iteration: int) -> None:
         """Nudge at configured budget fractions (control gene).
 
-        Fires once per threshold: reports the remaining iteration budget
-        and whether a source edit exists. Iterations are often mistaken
-        for tokens, so the message names the unit explicitly.
-        Detection reuses verification helpers — no new state tracked.
+        Fires once per threshold: reports the remaining iteration budget,
+        explains what an iteration is, and points the model back at the
+        required result. Early reminders ask for an exploration cutoff;
+        later ones ask for production and verification. The reminder is
+        informational, not a restriction.
         """
         reminder = self.harness.control.budget_reminder
         if not reminder.enabled:
@@ -124,11 +125,24 @@ class TurnGuard:
             return
         edited = has_source_edit(history.messages, self.rules)
         remaining = self.max_iterations - iteration
+        if remaining > self.max_iterations // 2:
+            guidance = (
+                "You may still be exploring; set a concrete cutoff for "
+                "exploration and reserve enough iterations for implementation "
+                "and verification."
+            )
+        else:
+            guidance = (
+                "You are closer to the limit; stop exploring and spend the "
+                "remaining iterations producing and verifying the required "
+                "result."
+            )
         history.append(runtime_user_message(
             f"Budget {iteration}/{self.max_iterations} "
-            f"({remaining} left). Source edit so far: {edited}. "
-            "This counts iterations, not tokens: roughly "
-            f"{remaining} more tool calls remain.",
+            f"({remaining} iterations left). One iteration is one model turn; "
+            "a turn may contain multiple tool calls. This is informational, "
+            f"not a restriction. {guidance} The required result must exist and "
+            "be verified before the budget runs out.",
             kind="budget_reminder",
         ))
         self.trace.emit("budget.reminder", iteration,
