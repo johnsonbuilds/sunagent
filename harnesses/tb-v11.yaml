@@ -57,6 +57,7 @@ context:
   summary_tail_rounds: 2
   user_preserve_budget: 8000
   summary_max_tokens: 4096
+  summary_reasoning_effort: none
   retrieval_exempt_tools: []
 recovery:
   tool_error: feed_error_and_continue

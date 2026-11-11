@@ -47,6 +47,26 @@ LANGUAGE_SPECS: dict[str, dict[str, str]] = {
              "install_hint": "install Node.js (e.g. apt-get install -y nodejs)"},
 }
 LANGUAGES = {name: spec["extension"] for name, spec in LANGUAGE_SPECS.items()}
+
+# Input tolerance: models routinely pass the interpreter name ("python3")
+# or a familiar short form instead of the canonical language key.  Mapping
+# aliases here prevents a wasted tool call without changing the canonical
+# names used by the spec, guard, extension table, and result payload.
+LANGUAGE_ALIASES: dict[str, str] = {
+    "python": "python", "python3": "python", "py": "python", "py3": "python",
+    "bash": "bash", "sh": "bash", "shell": "bash",
+    "r": "r", "rscript": "r",
+    "node": "node", "nodejs": "node", "js": "node", "javascript": "node",
+}
+
+_C_HINT = ("C/C++ is not a script language here; write the source with "
+           "write_file and compile/run it with run_command "
+           "(e.g. cc -O2 foo.c -o foo && ./foo)")
+_UNSUPPORTED_LANGUAGE_HINTS: dict[str, str] = {
+    "python2": "python2 is not supported; use python (python3) or run_command",
+    "c": _C_HINT, "cc": _C_HINT, "gcc": _C_HINT,
+    "cpp": _C_HINT, "c++": _C_HINT, "cxx": _C_HINT,
+}
 # Canonical definitions live in execution.base; re-exported here for
 # backwards compatibility (older imports used ``tools.code.OUTPUTS_DIR``).
 DEFAULT_TIMEOUT = 120.0
@@ -73,6 +93,27 @@ def _interpreter_for(language: str) -> str:
     return interpreter() if callable(interpreter) else interpreter
 
 
+def normalize_language(language: str) -> str:
+    """Return the canonical language key for ``language``.
+
+    Accepts case-insensitive aliases (``python3``, ``py``, ``sh``, ``js``,
+    ``Rscript``, ...).  Languages that cannot be handled by a single
+    interpreter invocation (C/C++) or that would silently change runtime
+    semantics (python2) get an actionable error instead of a wrong alias.
+    """
+    key = (language or "").strip().lower()
+    hint = _UNSUPPORTED_LANGUAGE_HINTS.get(key)
+    if hint is not None:
+        raise ValueError(f"execute_code: {hint}")
+    canonical = LANGUAGE_ALIASES.get(key)
+    if canonical is None:
+        raise ValueError(
+            f"execute_code: unsupported language: {language!r} "
+            f"(choose from {sorted(LANGUAGES)}; "
+            f"aliases: python3/py, sh, js, Rscript)")
+    return canonical
+
+
 async def _next_script_name(workspace: Workspace, extension: str) -> str:
     """Continue the .scripts/NNNN.ext sequence across all languages."""
     listing = await workspace.list_dir(SCRIPTS_DIR)
@@ -88,25 +129,34 @@ def _run_command_for(language: str, script: str) -> str:
     return f"{_interpreter_for(language)} {shlex.quote(script)}"
 
 
+def _is_scripts_path(path: str) -> bool:
+    return path == SCRIPTS_DIR or path.startswith(SCRIPTS_DIR + "/")
+
+
 def validate_script_path(path: str, root: Any = None) -> tuple[str | None, str | None]:
-    """Check an explicit ``execute_code(path=...)``.
+    """Check and normalize an explicit ``execute_code(path=...)``.
 
     Scripts must live under ``.scripts/``: the auto-naming default
     already does, and allowing arbitrary paths would let one tool call
-    silently overwrite workspace source files.
+    silently overwrite workspace source files.  Inside that boundary the
+    resolver is forgiving: a bare filename is placed under ``.scripts/``
+    and an absolute path inside a known workspace root is relativized.
 
     Returns ``(script, reason)``: on success ``script`` is the
-    normalized workspace-relative path to write (an absolute path
-    inside a known workspace root is relativized, matching what
-    ``Workspace._resolve`` already accepts); on failure ``script`` is
-    None and ``reason`` distinguishes a true workspace escape from a
+    normalized workspace-relative path to write; on failure ``script``
+    is None and ``reason`` distinguishes a true workspace escape from a
     mere convention violation, so the model is not misled into
     re-orienting itself when only the spelling was wrong.
     """
     if not path or not path.strip():
         return None, "path must not be empty"
     raw = path.strip().replace("\\", "/")
+    if raw.startswith("~"):
+        return None, "path must be relative to the workspace (no ~ expansion)"
     candidate = posixpath.normpath(raw)
+    if candidate in (".", ".."):
+        return None, (f"path must name a file under {SCRIPTS_DIR}/ "
+                       f"(got {path!r})")
     if posixpath.isabs(raw):
         if root is None:
             return None, (f"use a workspace-relative path under {SCRIPTS_DIR}/ "
@@ -118,14 +168,56 @@ def validate_script_path(path: str, root: Any = None) -> tuple[str | None, str |
             return None, f"path escapes the workspace: {path}"
         candidate = posixpath.relpath(candidate, norm_root)
         if candidate == ".":
-            return None, (f"path must be under {SCRIPTS_DIR}/ "
-                           f"(got {path!r}); the default .scripts/NNNN.ext is preferred")
-    elif candidate == ".." or candidate.startswith("../"):
-        return None, f"path escapes the workspace: {path}"
-    if candidate != SCRIPTS_DIR and not candidate.startswith(SCRIPTS_DIR + "/"):
-        return None, (f"path must be under {SCRIPTS_DIR}/ "
-                       f"(got {path!r}); the default .scripts/NNNN.ext is preferred")
+            return None, (f"path must name a file under {SCRIPTS_DIR}/ "
+                           f"(got {path!r})")
+        if not _is_scripts_path(candidate):
+            return None, (f"scripts must live under {SCRIPTS_DIR}/ "
+                           f"(got {path!r}); use "
+                           f"{SCRIPTS_DIR}/{posixpath.basename(candidate)}")
+    else:
+        if candidate == ".." or candidate.startswith("../"):
+            return None, f"path escapes the workspace: {path}"
+        if candidate == SCRIPTS_DIR:
+            return None, (f"path must name a file under {SCRIPTS_DIR}/, "
+                           f"not the directory")
+        if "/" not in candidate:
+            candidate = posixpath.join(SCRIPTS_DIR, candidate)
+        elif not _is_scripts_path(candidate):
+            return None, (f"scripts must live under {SCRIPTS_DIR}/ "
+                           f"(got {path!r}); use "
+                           f"{SCRIPTS_DIR}/{candidate.lstrip('./')}")
+    if candidate == SCRIPTS_DIR:
+        return None, (f"path must name a file under {SCRIPTS_DIR}/, "
+                       f"not the directory")
     return candidate, None
+
+
+def ensure_script_extension(script: str,
+                            language: str) -> tuple[str | None, str | None]:
+    """Append the language extension when missing; reject a mismatch.
+
+    Writing Python source to ``.scripts/foo.sh`` and running it with
+    ``python3`` works by accident but makes the saved script misleading
+    and breaks the "re-run with run_command" contract.
+    """
+    expected = LANGUAGES[language]
+    _, ext = posixpath.splitext(script)
+    if not ext:
+        return f"{script}.{expected}", None
+    if ext.lstrip(".").lower() != expected.lower():
+        return None, (f"path extension {ext!r} does not match language "
+                       f"{language!r} (expected .{expected})")
+    return script, None
+
+
+async def _script_exists(workspace: Workspace, script: str) -> bool:
+    """Whether an explicit script path already exists in the workspace."""
+    parent = posixpath.dirname(script) or "."
+    listing = await workspace.list_dir(parent)
+    if "error" in listing:
+        return False
+    return any(entry.get("name") == posixpath.basename(script)
+               for entry in listing.get("entries", []))
 
 
 def _check_python_footguns(code: str) -> str | None:
@@ -233,23 +325,27 @@ async def execute_code(code: str, language: str = "python",
     """
     ws = workspace or LocalWorkspace()
     ex = executor or LocalShellExecutor()
-    if language not in LANGUAGES:
-        raise ValueError(
-            f"execute_code: unsupported language: {language!r} "
-            f"(choose from {sorted(LANGUAGES)})")
+    language = normalize_language(language)
 
-    if path is not None:
+    overwritten = False
+    if path is not None and path.strip():
         script, reason = validate_script_path(path, ws.root)
         if reason is not None or script is None:
             raise ValueError(
                 f"execute_code: {reason or 'invalid script path'}")
+        script, ext_reason = ensure_script_extension(script, language)
+        if ext_reason is not None or script is None:
+            raise ValueError(
+                f"execute_code: {ext_reason or 'invalid script path'}")
+        overwritten = await _script_exists(ws, script)
         written = await ws.write_file(script, code)
     else:
         async with _SCRIPT_LOCK:
             script = await _next_script_name(ws, LANGUAGES[language])
             written = await ws.write_file(script, code)
     if "error" in written:
-        return {**written, "script_path": script, "language": language}
+        return {**written, "script_path": script, "language": language,
+                "overwritten": overwritten}
 
     cwd = str(ws.root) if ws.root is not None else None
     command = _run_command_for(language, script)
@@ -259,7 +355,8 @@ async def execute_code(code: str, language: str = "python",
                 "duration": 0.0,
                 "error": {"type": "CommandBlocked",
                           "message": decision.reason or "command blocked"},
-                "script_path": script, "language": language}
+                "script_path": script, "language": language,
+                "overwritten": overwritten}
     result = await ex.execute(command, cwd=cwd, timeout=timeout)
     result = _with_interpreter_hint(result, language)
 
@@ -269,7 +366,8 @@ async def execute_code(code: str, language: str = "python",
     # (agent_runtime.agent.observations), which handles every tool's
     # bulky results uniformly.  Returning the result as-is keeps tool
     # handlers policy-free.
-    return {**result, "script_path": script, "language": language}
+    return {**result, "script_path": script, "language": language,
+            "overwritten": overwritten}
 
 
 def execute_code_spec(executor: ShellExecutor, workspace: Workspace) -> ToolSpec:
@@ -282,8 +380,11 @@ def execute_code_spec(executor: ShellExecutor, workspace: Workspace) -> ToolSpec
                     "Write a complete script to the workspace and execute it "
                     "in one step, returning exit code, stdout, and stderr. "
                     "Supports python (runs via python3 by default, "
-                    "AGENT_RUNTIME_PYTHON override), bash (runs via bash), "
-                    "r (runs via Rscript), and node (runs via node). "
+                    "AGENT_RUNTIME_PYTHON override; aliases python3/py), "
+                    "bash (alias sh), r (alias Rscript), and node "
+                    "(aliases js/javascript). "
+                    "C/C++ are not supported here: write the source with "
+                    "write_file and compile/run it with run_command. "
                     "Missing interpreters are reported with an install hint; "
                     "install the runtime via run_command and retry. "
                     "Local execution has no sandbox (the command guard only "
@@ -300,18 +401,28 @@ def execute_code_spec(executor: ShellExecutor, workspace: Workspace) -> ToolSpec
                                  "description": "Complete script content"},
                         "language": {"type": "string", "enum": ["python", "bash", "r", "node"],
                                      "description": "Script language: python "
-                                                    "(python3 by default, "
-                                                    "AGENT_RUNTIME_PYTHON override), "
-                                                    "bash, r (Rscript), "
-                                                    "or node (node). Defaults to "
-                                                    "python — pass language "
-                                                    "explicitly for anything else",
+                                                    "(Python 3; aliases "
+                                                    "python3, py), bash "
+                                                    "(alias sh), r (alias "
+                                                    "Rscript), or node "
+                                                    "(aliases js, javascript). "
+                                                    "Defaults to python. "
+                                                    "C/C++ are not supported "
+                                                    "here; use write_file + "
+                                                    "run_command.",
                                      "default": "python"},
                         "path": {"type": "string",
-                                 "description": "Relative script path under "
-                                                ".scripts/ (in-root absolute "
-                                                "paths are relativized); "
-                                                "defaults to .scripts/NNNN.ext"},
+                                 "description": "Optional script path. A bare "
+                                                "filename (e.g. foo.py) is "
+                                                "placed under .scripts/; "
+                                                ".scripts/... and in-workspace "
+                                                "absolute paths under "
+                                                ".scripts/ are accepted. Other "
+                                                "workspace paths are rejected. "
+                                                "An explicit path may overwrite "
+                                                "an existing file; the result "
+                                                "reports overwritten=true. "
+                                                "Defaults to .scripts/NNNN.ext"},
                         "timeout": {"type": "number",
                                     "description": "Timeout in seconds",
                                     "default": 120}},
@@ -320,7 +431,7 @@ def execute_code_spec(executor: ShellExecutor, workspace: Workspace) -> ToolSpec
 
 
 __all__ = [
-    "DEFAULT_TIMEOUT", "LANGUAGES", "LANGUAGE_SPECS",
-    "OUTPUTS_DIR", "SCRIPTS_DIR", "execute_code", "validate_script_path",
-    "execute_code_spec",
+    "DEFAULT_TIMEOUT", "LANGUAGES", "LANGUAGE_ALIASES", "LANGUAGE_SPECS",
+    "OUTPUTS_DIR", "SCRIPTS_DIR", "ensure_script_extension", "execute_code",
+    "normalize_language", "validate_script_path", "execute_code_spec",
 ]

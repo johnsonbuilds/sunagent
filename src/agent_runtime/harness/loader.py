@@ -44,6 +44,7 @@ from .schema import (
     LLMRetryPolicy,
     PromptGenome,
     RecoveryGenome,
+    SUMMARY_REASONING_EFFORTS,
     TOOL_ERROR_STRATEGIES,
     ToolGenome,
     VERIFICATION_MODES,
@@ -89,6 +90,24 @@ def _optional_text(data: Mapping[str, Any], key: str, where: str) -> str | None:
     if value is not None and (not isinstance(value, str) or not value.strip()):
         raise HarnessError(f"{where}.{key} must be non-empty text or null")
     return value
+
+
+def _summary_reasoning_effort(section: Mapping[str, Any]) -> str | None:
+    """Parse ``context.summary_reasoning_effort`` as a normalized token.
+
+    The value is passed verbatim to the provider as ``reasoning_effort``;
+    validating the union of values the supported endpoints document keeps
+    a typo from turning every compaction into a failed summarizer call.
+    """
+    value = _optional_text(section, "summary_reasoning_effort", "context")
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if normalized not in SUMMARY_REASONING_EFFORTS:
+        raise HarnessError(
+            f"context.summary_reasoning_effort must be one of "
+            f"{list(SUMMARY_REASONING_EFFORTS)} or null, got {value!r}")
+    return normalized
 
 
 def _required_text(section: Mapping[str, Any], key: str, where: str,
@@ -197,6 +216,7 @@ def _context_genome(data: Mapping[str, Any]) -> ContextGenome:
                           "context_budget", "window_rounds",
                           "keep_recent_rounds", "summary_tail_rounds",
                           "user_preserve_budget", "summary_max_tokens",
+                          "summary_reasoning_effort",
                           "retrieval_exempt_tools"},
                 "context")
     strategy = _required_text(section, "strategy", "context", "full_history")
@@ -232,6 +252,7 @@ def _context_genome(data: Mapping[str, Any]) -> ContextGenome:
         summary_max_tokens=_positive_int(
             section.get("summary_max_tokens"),
             "context.summary_max_tokens", DEFAULT_SUMMARY_MAX_TOKENS),
+        summary_reasoning_effort=_summary_reasoning_effort(section),
         retrieval_exempt_tools=_name_list(
             section, "retrieval_exempt_tools", "context"))
 

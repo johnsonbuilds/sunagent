@@ -161,6 +161,7 @@ class _SummaryCall(NamedTuple):
 async def _generate_summary(messages: list[dict[str, Any]], *,
                             previous_summary: str | None,
                             summary_max_tokens: int,
+                            summary_reasoning_effort: str | None = None,
                             llm: Any = None,
                             prompt: str | None = None) -> _SummaryCall:
     """Ask the LLM for a structured summary of the compaction segment.
@@ -174,9 +175,12 @@ async def _generate_summary(messages: list[dict[str, Any]], *,
 
     ``summary_max_tokens`` caps the summarizer's output at the request
     level (pi-style bound: a snapshot is a checkpoint, not a retelling).
-    Exceptions propagate to the caller, which records them on the trace
-    and falls back to the deterministic compactor instead of aborting
-    the turn.
+    ``summary_reasoning_effort`` is forwarded as the provider's
+    ``reasoning_effort``; on endpoints that honour ``none`` this keeps
+    the cap a content-only cap instead of letting chain-of-thought eat
+    the budget.  Exceptions propagate to the caller, which records them
+    on the trace and falls back to the deterministic compactor instead
+    of aborting the turn.
     """
     from agent_runtime.agent.tokens import response_usage
 
@@ -197,8 +201,11 @@ async def _generate_summary(messages: list[dict[str, Any]], *,
     model = _resolve_summarizer(llm)
     if model is None:
         raise RuntimeError("no summarizer LLM is configured")
+    request_kwargs: dict[str, Any] = {"max_tokens": summary_max_tokens}
+    if summary_reasoning_effort is not None:
+        request_kwargs["reasoning_effort"] = summary_reasoning_effort
     response = await model.chat(summarizer_messages, tools=None,
-                                max_tokens=summary_max_tokens)
+                                **request_kwargs)
     prompt_tokens, completion_tokens = response_usage(response)
     reasoning = response.get("reasoning_content") or ""
     return _SummaryCall(
@@ -242,6 +249,7 @@ async def summarize_history(messages: list[dict[str, Any]], *,
                             tail_rounds: int | None = None,
                             user_preserve_budget: int = DEFAULT_USER_PRESERVE_BUDGET,
                             summary_max_tokens: int = DEFAULT_SUMMARY_MAX_TOKENS,
+                            summary_reasoning_effort: str | None = None,
                             boundary: int = 0,
                             previous_summary: str | None = None,
                             unit: str = "chars",
@@ -358,7 +366,9 @@ async def summarize_history(messages: list[dict[str, Any]], *,
         try:
             call = await _generate_summary(
                 attempt_input, previous_summary=previous_summary,
-                summary_max_tokens=summary_max_tokens, prompt=prompt, llm=llm)
+                summary_max_tokens=summary_max_tokens,
+                summary_reasoning_effort=summary_reasoning_effort,
+                prompt=prompt, llm=llm)
             summary = call.content
             last_finish_reason = call.finish_reason
             last_reasoning_chars = call.reasoning_chars
@@ -386,7 +396,8 @@ async def summarize_history(messages: list[dict[str, Any]], *,
                            input_capped=used_capped_input,
                            summarizer_input_count=len(summarizer_input),
                            boundary=boundary, char_budget=char_budget,
-                           summary_max_tokens=summary_max_tokens)
+                           summary_max_tokens=summary_max_tokens,
+                           summary_reasoning_effort=summary_reasoning_effort)
             logger.warning("context.summary.failed falling back to "
                            "compact_observations: %s", exc)
             return compact_observations(messages, budget=char_budget,
@@ -416,7 +427,8 @@ async def summarize_history(messages: list[dict[str, Any]], *,
                            input_capped=used_capped_input,
                            summarizer_input_count=len(summarizer_input),
                            boundary=boundary, char_budget=char_budget,
-                           summary_max_tokens=summary_max_tokens)
+                           summary_max_tokens=summary_max_tokens,
+                           summary_reasoning_effort=summary_reasoning_effort)
             if attempt == 2:
                 logger.warning("context.summary.invalid %s falling back to compact_observations", exc)
                 return compact_observations(messages, budget=char_budget,
@@ -434,6 +446,7 @@ async def summarize_history(messages: list[dict[str, Any]], *,
                    boundary=boundary, char_budget=char_budget,
                    finish_reason=last_finish_reason,
                    reasoning_chars=last_reasoning_chars,
+                   summary_reasoning_effort=summary_reasoning_effort,
                    attempt_prompt_tokens=last_prompt_tokens,
                    attempt_completion_tokens=last_completion_tokens,
                    prompt_tokens=summarizer_prompt_tokens,

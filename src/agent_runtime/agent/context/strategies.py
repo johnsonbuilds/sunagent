@@ -90,6 +90,7 @@ async def _llm_summary_strategy(
         tail_rounds=request.context.summary_tail_rounds,
         user_preserve_budget=request.context.user_preserve_budget,
         summary_max_tokens=request.context.summary_max_tokens,
+        summary_reasoning_effort=request.context.summary_reasoning_effort,
         boundary=request.boundary,
         previous_summary=request.previous_summary,
         unit=request.unit, usage_anchor=request.usage_anchor,

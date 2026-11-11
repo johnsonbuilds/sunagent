@@ -204,6 +204,7 @@ class ManifestTextTests(unittest.TestCase):
             "summary_tail_rounds": 4,
             "user_preserve_budget": 1200,
             "summary_max_tokens": 512,
+            "summary_reasoning_effort": "none",
             "retrieval_exempt_tools": ["grep_search", "read_file"],
         },
         "recovery": {

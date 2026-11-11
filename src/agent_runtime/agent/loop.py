@@ -222,8 +222,11 @@ class AgentTurn:
             nudge = runtime_user_message(
                 f"Your last turn produced {exc.reasoning_chars} characters "
                 f"of reasoning without any content or tool calls. Stop "
-                f"reasoning and act now: call a tool. Do not give a final "
-                f"answer unless the task's required result already exists.",
+                f"extending your reasoning. Produce the smallest deliverable "
+                f"that makes progress now: write the minimal artifact, or "
+                f"call the tool that creates it. Do not keep planning, and "
+                f"do not give a final answer unless the task's required "
+                f"result already exists.",
                 kind="reasoning_budget",
             )
             history.append(nudge)

@@ -467,6 +467,23 @@ class SummarizeHistoryTests(unittest.IsolatedAsyncioTestCase):
                                          llm=llm)
         self.assertIn("observation compacted", result[3]["content"])
 
+    async def test_summary_reasoning_effort_is_forwarded(self) -> None:
+        messages = build_rounds(10, 5_000)
+        llm = FakeSummaryLLM()
+        await summarize_history(messages, budget=1_000, tail_rounds=2,
+                                summary_reasoning_effort="none", llm=llm)
+
+        self.assertEqual(llm.last_request_kwargs.get("reasoning_effort"),
+                         "none")
+        self.assertEqual(llm.last_request_kwargs.get("max_tokens"), 4_096)
+
+    async def test_summary_reasoning_effort_is_omitted_by_default(self) -> None:
+        messages = build_rounds(10, 5_000)
+        llm = FakeSummaryLLM()
+        await summarize_history(messages, budget=1_000, tail_rounds=2, llm=llm)
+
+        self.assertNotIn("reasoning_effort", llm.last_request_kwargs)
+
 
 class ApplyContextStrategyLLMRoutingTests(unittest.IsolatedAsyncioTestCase):
     async def test_llm_summary_routes_to_summarizer(self) -> None:

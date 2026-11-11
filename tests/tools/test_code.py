@@ -75,9 +75,71 @@ class ExecuteCodeTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             registry = make_registry(directory)
 
-            with self.assertRaisesRegex(ValueError, "must be under .scripts/"):
+            with self.assertRaisesRegex(ValueError, "must live under .scripts/"):
                 await registry.execute("execute_code", {
                     "code": "print('x')\n", "path": "analysis/run.py"})
+
+    async def test_bare_filename_lands_in_scripts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            registry = make_registry(directory)
+
+            result = await registry.execute("execute_code", {
+                "code": "print('bare')\n", "path": "bare.py"})
+
+        self.assertEqual(result["script_path"], ".scripts/bare.py")
+        self.assertEqual(result["stdout"], "bare\n")
+
+    async def test_bare_filename_without_extension_gets_language_ext(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            registry = make_registry(directory)
+
+            result = await registry.execute("execute_code", {
+                "code": "print('bare')\n", "path": "bare"})
+
+        self.assertEqual(result["script_path"], ".scripts/bare.py")
+        self.assertFalse(result["overwritten"])
+
+    async def test_blank_path_falls_back_to_auto_naming(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            registry = make_registry(directory)
+
+            result = await registry.execute("execute_code", {
+                "code": "print('auto')\n", "path": "  "})
+
+        self.assertRegex(result["script_path"], r"^\.scripts/\d{4}\.py$")
+        self.assertEqual(result["stdout"], "auto\n")
+
+    async def test_absolute_workspace_path_outside_scripts_is_rejected(self) -> None:
+        import os
+
+        with tempfile.TemporaryDirectory() as directory:
+            registry = make_registry(directory)
+            absolute = os.path.join(directory, "analysis", "run.py")
+
+            with self.assertRaisesRegex(ValueError, "must live under .scripts/"):
+                await registry.execute("execute_code", {
+                    "code": "print('x')\n", "path": absolute})
+
+    async def test_scripts_directory_itself_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            registry = make_registry(directory)
+
+            with self.assertRaisesRegex(ValueError, "must name a file"):
+                await registry.execute("execute_code", {
+                    "code": "print('x')\n", "path": ".scripts"})
+
+    async def test_explicit_path_reports_overwrite(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            registry = make_registry(directory)
+
+            first = await registry.execute("execute_code", {
+                "code": "print(1)\n", "path": ".scripts/repeat.py"})
+            second = await registry.execute("execute_code", {
+                "code": "print(2)\n", "path": ".scripts/repeat.py"})
+
+        self.assertFalse(first["overwritten"])
+        self.assertTrue(second["overwritten"])
+        self.assertEqual(second["stdout"], "2\n")
 
     async def test_absolute_path_inside_root_is_relativized(self) -> None:
         import os
@@ -154,6 +216,34 @@ class ExecuteCodeTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(ValueError, "unsupported language"):
                 await registry.execute("execute_code", {
                     "code": "print('x')\n", "language": "cobol"})
+
+    def test_language_aliases_are_normalized(self) -> None:
+        from agent_runtime.tools.code import normalize_language
+
+        cases = {"python3": "python", "py": "python", "PY": "python",
+                 "sh": "bash", "shell": "bash", "js": "node",
+                 "javascript": "node", "Rscript": "r"}
+        for alias, expected in cases.items():
+            self.assertEqual(normalize_language(alias), expected)
+
+    def test_c_and_python2_get_actionable_errors(self) -> None:
+        from agent_runtime.tools.code import normalize_language
+
+        with self.assertRaisesRegex(ValueError, "run_command"):
+            normalize_language("c")
+        with self.assertRaisesRegex(ValueError, "python2"):
+            normalize_language("python2")
+
+    def test_script_extension_is_added_or_validated(self) -> None:
+        from agent_runtime.tools.code import ensure_script_extension
+
+        self.assertEqual(ensure_script_extension(".scripts/foo", "python"),
+                         (".scripts/foo.py", None))
+        self.assertEqual(ensure_script_extension(".scripts/foo.R", "r"),
+                         (".scripts/foo.R", None))
+        script, reason = ensure_script_extension(".scripts/foo.sh", "python")
+        self.assertIsNone(script)
+        self.assertIn("does not match", reason)
 
     async def test_oversized_stdout_is_capped_at_source(self) -> None:
         # The executor caps each stream at MAX_OUTPUT_CHARS so a runaway

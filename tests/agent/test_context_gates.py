@@ -854,6 +854,27 @@ class TB4HarnessTests(unittest.TestCase):
         policy = spec.recovery.llm_errors["context_window"]
         self.assertEqual((policy.max_retries, policy.backoff), (2, "none"))
 
+    def test_tb_v11_disables_summarizer_thinking(self) -> None:
+        from agent_runtime.harness import load_named_harness
+        spec = load_named_harness("tb-v11")
+        self.assertEqual(spec.context.summary_reasoning_effort, "none")
+
+    def test_summary_reasoning_effort_defaults_to_none(self) -> None:
+        genome = ContextGenome()
+        self.assertIsNone(genome.summary_reasoning_effort)
+
+    def test_invalid_summary_reasoning_effort_is_rejected(self) -> None:
+        from agent_runtime.harness import HarnessError, from_dict
+        with self.assertRaisesRegex(HarnessError, "summary_reasoning_effort"):
+            from_dict({"context": {"strategy": "llm_summary",
+                                   "summary_reasoning_effort": "off"}})
+
+    def test_summary_reasoning_effort_is_normalized(self) -> None:
+        from agent_runtime.harness import from_dict
+        spec = from_dict({"context": {"strategy": "llm_summary",
+                                      "summary_reasoning_effort": " NONE "}})
+        self.assertEqual(spec.context.summary_reasoning_effort, "none")
+
     def test_legacy_defaults_unchanged(self) -> None:
         genome = ContextGenome()
         self.assertEqual(genome.budget_unit, "chars")

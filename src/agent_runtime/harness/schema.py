@@ -133,6 +133,14 @@ DEFAULT_KEEP_RECENT_ROUNDS = 2           # context: rounds never compacted under
 DEFAULT_SUMMARY_TAIL_ROUNDS = 2          # context: llm_summary verbatim tail
 DEFAULT_USER_PRESERVE_BUDGET = 8_000     # context: CHARS (either budget unit) of mid-conversation user messages kept verbatim (newest first). Always chars by design: the preserve pool is a coarse guard, and routing it through the anchor-calibrated char/token ratio would inject conversion noise into a threshold chars serve fine.
 DEFAULT_SUMMARY_MAX_TOKENS = 4_096       # context: summarizer output hard cap, not a target; avoids truncating verbose snapshots
+# Accepted values for ``context.summary_reasoning_effort``.  Provider
+# support is not uniform: ``none`` disables thinking where the endpoint
+# allows it (DeepSeek, OpenAI GPT-5.1+, Qwen, OpenRouter, GLM-5.2), while
+# ``minimal`` is the lowest effort older OpenAI reasoning models accept
+# and is *not* a true off switch.  ``None`` omits the parameter and keeps
+# the provider default (which is thinking-enabled on several endpoints).
+SUMMARY_REASONING_EFFORTS: tuple[str, ...] = (
+    "none", "minimal", "low", "medium", "high", "xhigh", "max")
 # Cap (chars) for the summarizer's input on the retry attempt. Pathological
 # segments (hundreds of k chars after repeated failures stall the boundary)
 # make the model return empty/off-schema snapshots; TB-2.1 showed invalid
@@ -197,6 +205,11 @@ class ContextGenome:
     summary_tail_rounds: int = DEFAULT_SUMMARY_TAIL_ROUNDS
     user_preserve_budget: int = DEFAULT_USER_PRESERVE_BUDGET  # chars, either budget unit (coarse guard; no token conversion)
     summary_max_tokens: int = DEFAULT_SUMMARY_MAX_TOKENS
+    # Optional per-call reasoning effort for the summarizer.  Summaries
+    # are extraction, not problem solving; disabling thinking where the
+    # provider supports it keeps ``summary_max_tokens`` a content cap
+    # instead of a reasoning+content cap.  None keeps the provider default.
+    summary_reasoning_effort: str | None = None
     retrieval_exempt_tools: tuple[str, ...] = DEFAULT_RETRIEVAL_EXEMPT_TOOLS
 
 

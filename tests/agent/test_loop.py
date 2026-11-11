@@ -204,12 +204,13 @@ class AgentLoopErrorHandlingTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(answer, "It is sunny")
             # The nudge landed in the conversation before the retry.
             nudges = [m for m in llm.messages[1]
-                      if m["role"] == "user" and "Stop reasoning and act" in m["content"]]
+                      if m["role"] == "user" and "Stop extending your reasoning" in m["content"]]
             self.assertEqual(len(nudges), 1)
             self.assertTrue(is_runtime_user_message(nudges[0]))
             self.assertEqual(nudges[0]["metadata"]["kind"],
                              "reasoning_budget")
             self.assertNotIn("or give your final answer", nudges[0]["content"])
+            self.assertIn("smallest deliverable", nudges[0]["content"])
             self.assertIn("required result", nudges[0]["content"])
             budget_events = [e for e in trace.events
                              if e.event_type == "llm.reasoning_budget"]
@@ -238,7 +239,7 @@ class AgentLoopErrorHandlingTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(answer, "It is sunny")
             nudges = [m for m in llm.messages[1]
-                      if m["role"] == "user" and "Stop reasoning and act" in m["content"]]
+                      if m["role"] == "user" and "Stop extending your reasoning" in m["content"]]
             self.assertEqual(len(nudges), 0)
         finally:
             environ.pop("AGENT_RUNTIME_MAX_REASONING_CHARS", None)
