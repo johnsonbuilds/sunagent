@@ -7,8 +7,6 @@
 
 与上一轮 v9（70/89，0.7865）相比：新过 6 个（`build-pmars`、`gcode-to-text`、`headless-terminal`、`install-windows-3.11`、`nginx-request-logging`、`sam-cell-seg`），新挂 7 个（`dna-insert`、`filter-js-from-html`、`large-scale-text-editing`、`path-tracing-reverse`、`prove-plus-comm`、`raman-fitting`、`torch-pipeline-parallelism`）。净 -1 题（-1.1pp），落在单次 89 题运行的波动范围内；v11 的 prompt 改动**没有带来可测的通过率增益**。v11 与 v4 的 69/89（0.775）持平。
 
-> **2026-11-11 追加复验**：三项修复（summarizer 关闭 thinking、`execute_code` 输入宽容化、reasoning 熔断文案）已合入 `a28fd46`，并用 3 个真实 TB 2.1 job 复验；生产证据见 §5。第 1 点有效，但仍有正文 4096 截断；第 2 点已在真实容器中直接命中；第 3 点文案已生效，但 `regex-chess` 仍未救回。
-
 **0 分任务（20 个）的原因分布**：
 
 | 原因 | 数量 | 任务 |
@@ -168,12 +166,22 @@ v11 的 finish rules 明显改变了最终报告的形态：83 条非空报告�
    - 位置：`src/agent_runtime/agent/chat.py` / `turn_finisher.py`。
 2. **summarizer 关闭/限制 reasoning**：给 summarizer 单独传 provider 侧的“无思考”参数；若模型不支持，则在 attempt 1 出现 `finish_reason=length && content==""` 时，attempt 2 直接改用 `compact_observations`，不再用同样的 4096 预算重试。当前 12 次 attempt 2 全部是同一失败模式的重复付费。
    - 位置：`src/agent_runtime/agent/context/summary.py:351-425`。
+   - **✅ 已修复（`a28fd46`）**：新增 `context.summary_reasoning_effort`，tb-v11 设 `none`，summarizer per-call 透传 `reasoning_effort`；默认 `None`，避免强制 thinking 模型（GLM-5.3 / Kimi k3 等）拒绝参数。
+   - **✅ 已验证（真实 TB 2.1）**：`gcode-to-text` 旧运行 16,619 reasoning chars → 新运行 0，`summary_chars=0` 空摘要 1 → 0，有效 yield 1 → 6；`db-wal-recovery`、`adaptive-rejection-sampler`、`llm-inference-batching-scheduler` 均记录 `effort: none` + `reasoning_chars=0`。
+   - **⚠️ 未解决**：正文 4096 截断仍在。`gcode-to-text` 有一次压缩的 attempt 1/2 均 `finish_reason=length`、正文约 10k 字符、缺 `## 3`，第二次仍用同样预算重试后回退；attempt 2 放大预算或直接回退尚未实现。
+
 3. **`execute_code` 输入宽容化**：接受 `python3`/`py`/`c` 等别名（或给出明确的可用语言提示）；允许 workspace 内绝对路径与相对路径，默认落到 `.scripts/`，不要要求调用方先知道这个目录。可消除本轮 10/11 次 `execute_code` 错误。
    - 位置：`src/agent_runtime/tools/`（`execute_code` 参数解析与路径校验）。
+   - **✅ 已修复（`a28fd46`）**：`python3`/`py`/`py3`、`sh`/`shell`、`js`/`javascript`/`nodejs`、`Rscript` 归一化；`c`/`cpp` 不做执行别名，改为明确的 `write_file` + `run_command` 提示；`python2` 提示改用 python3。裸文件名自动落到 `.scripts/`，空白 `path` 走自动编号，缺扩展名自动补，显式覆盖返回 `overwritten=true`。
+   - **✅ 已验证（真实容器探针，`jobs/tb21-verify-execode-probe-20261111`）**：`language="python3"` → `.scripts/0001.py`；`path="probe"` → `.scripts/probe.py`；`path="probe2.py"` → `.scripts/probe2.py`；三次调用全部 `status=success`，任务 reward 1.0。6 个复验 trial 中 0 次 `unsupported language`、0 次旧路径错误。
+   - **保留边界**：不在 `.scripts/` 下的绝对路径、`~`、workspace 逃逸仍拒绝；C/C++ 与 python2 仍报错，但提示已可操作。
 4. **budget reminder 分级**：60% 与 85% 共用“接近上限”文案没问题，但 85% 应单独升级为“现在只做三件事：确认产物存在、跑一次验收、报告结果”，并在 `edited=false` 时附上“你还没有改动任何源文件”的提示。本轮 24 次提醒发生在 `edited=false` 时，仍未触发任何强制动作。
    - 位置：`src/agent_runtime/agent/turn_guard.py:130-150`。
 5. **reasoning 失败熔断**：同一 trial 连续 3 次 `reasoning exceeded 50000 chars` 后，注入一条“停止扩展推理，先写出最小可交付产物”的 user 消息；连续 5 次则强制结束并标记为模型侧失败，避免 `regex-chess` 式的 10 次空转。
    - 位置：`src/agent_runtime/agent/chat.py` 的 `llm.reasoning_budget` 处理。
+   - **✅ 文案已修复（`a28fd46`）**：注入内容改为 “Stop extending your reasoning. Produce the smallest deliverable that makes progress now…”，明确要求写最小产物或调用创建产物的工具。
+   - **✅ 已验证送达（真实 TB 2.1）**：`regex-chess` 新运行 23 次 `llm.reasoning_budget`，新文案在请求历史中出现 74 次；`adaptive-rejection-sampler` 4 次熔断后恢复并 reward 1.0。
+   - **❌ 未解决**：`regex-chess` 仍连续 10 次、再连续 13 次烧满 50k reasoning，`/app/re.json` 未产出，reward 0。仅改措辞不足；连续 3 次降 per-call `reasoning_effort` / 连续 5 次强制结束未实现。
 6. **长工具任务单独放宽 timeout**：对 `train-fasttext`、`gpt2-codegolf`、`extract-moves-from-video`、`torch-pipeline-parallelism` 这类“调用数少但单次工具长”的任务，使用 per-task `agent_timeout_multiplier`，而不是统一 3×。
 7. **任务侧修复（非 harness）**：
    - `prove-plus-comm`：测试改为检查 `admit.`/`Admitted` 的 tactic 级出现，或忽略注释；
@@ -187,98 +195,10 @@ v11 的 finish rules 明显改变了最终报告的形态：83 条非空报告�
 
 - **复跑验证**：优先复跑 5 个“差一点/可修复”任务——`dna-insert`、`video-processing`、`prove-plus-comm`、`make-doom-for-mips`、`make-mips-interpreter`，以及 2 个 prompt 相关回归 `filter-js-from-html`、`large-scale-text-editing`。这些不是能力缺口，复跑可区分任务方差与真实回归。
 - **summarizer**：修复后观察 `context.llm_summary.invalid` 是否从 35 降到个位数，尤其 `summary_chars=0 && finish_reason=length`；同时观察 summarizer completion 是否从 347k 明显下降。
+  - **✅ 已验证（`a28fd46` 复验）**：`summary_chars=0 && finish_reason=length` 在 `gcode-to-text` 旧运行 1 次 → 新运行 0 次；summarizer `reasoning_chars` 16,619 → 0；`db-wal-recovery` / `adaptive-rejection-sampler` 均正常 yield，`effort: none`。
+  - **⚠️ 仍需观察**：`invalid` 未清零。`gcode-to-text` 有 1 次压缩的 attempt 1/2 因正文 4096 截断、缺 `## 3` 而回退；全量 89 题的 `invalid` 是否从 35 降到个位数、completion 是否明显下降，尚未做全量复跑。
 - **DSML/最终回答**：上线协议守卫后，确认 `llm.final.invalid` 出现次数，以及是否还有“空 final + reward 0”的 trial。
 - **400 配对**：继续保持 0 次 `insufficient tool messages` / 0 次 `contract_repaired`；v9 的修复在本轮 4,263 次调用中未被击穿。
 - **apply_patch**：保持 ≥95% 成功率；若 `cannot write file` 仍集中在 `/tmp` 与仓库外路径，考虑在工具层直接把可写根目录报给模型。
 - **budget reminder**：85% 文案升级后，观察 6 个迭代耗尽任务（3 过 3 挂）是否出现“最后一轮只做验收”的行为，以及 `edited=false` 的 24 次提醒后是否仍无源文件改动。
 - **超时**：按任务类型拆分 timeout 后，观察 4 个纯超时任务是否转为“能跑完但结果不一定对”，避免把工具时长误判为模型能力。
-
----
-
-## 5. 2026-11-11 追加复验：三项修复的生产证据
-
-**代码提交**：`a28fd46`（`feat: configurable summarizer reasoning effort; tolerate execute_code language/path input; sharpen reasoning-budget nudge`）
-
-**复验 job**：
-
-| job | 任务 | 结果 | 用时 |
-|---|---|---|---:|
-| `jobs/tb21-verify-3chg-20261111` | `gcode-to-text` / `db-wal-recovery` / `regex-chess` | 1/3 通过 | 37m10s |
-| `jobs/tb21-verify-3chg-r2-20261111` | `adaptive-rejection-sampler` / `llm-inference-batching-scheduler` | 1/2 通过 | 25m15s |
-| `jobs/tb21-verify-execode-probe-20261111` | `db-wal-recovery` + 强制工具探针 | 1/1 通过 | 5m24s |
-
-### 5.1 Summarizer 关闭 thinking：目标失败模式已消除，残留正文截断
-
-新增 `context.summary_reasoning_effort`（默认 `None`，tb-v11 设 `none`），summarizer 的 per-call `reasoning_effort` 透传到 provider，并记录在 `context.llm_summary*` trace 中。
-
-同一道 `gcode-to-text` 前后对比：
-
-| 指标 | 旧运行 | 新运行 |
-|---|---:|---:|
-| summarizer 尝试 | 2 | 8 |
-| 有效 yield | 1 | 6 |
-| `summary_chars=0` 空摘要 | 1 | **0** |
-| summarizer `reasoning_chars` | **16,619** | **0** |
-| `summary_reasoning_effort` | 未发送 | 全部 `none` |
-| 回退 `compact_observations` | 0 次 | 1 次压缩 |
-
-另外三题同样验证了 `effort: none` + `reasoning_chars=0`：
-
-- `db-wal-recovery`：1 次 summary，正常 yield，reward 1.0；
-- `adaptive-rejection-sampler`：2 次 summary，全部 yield，reward 1.0；
-- `llm-inference-batching-scheduler`：2 次 summary，全部 yield（任务失败原因见 5.3）。
-
-结论：旧的“4096 token 全被 reasoning 吃掉、正文为空”失败模式已经消除；`summary_max_tokens` 现在确实是正文上限。但暴露了新的残留问题：`gcode-to-text` 有一次压缩的 attempt 1/2 都是 `finish_reason=length`、正文 10.4k/10.1k 字符、缺 `## 3`，第二次用同样的 4096 预算重试仍然失败并回退。**这是正文长度问题，不是 thinking 回归。** 当前未实现“length 时放大 attempt 2 预算或直接回退”的后续修复。
-
-`gcode-to-text` 本轮 reward 0 的直接原因是跑满 120 次迭代（模型换成了字体匹配 OCR 路线），不是被 summarizer 卡死；旧运行走另一条路线 66 次迭代通过。该题的任务级回归与 summarizer 改动没有足够证据建立因果，需要同题再跑来区分方差。
-
-### 5.2 `execute_code` 输入宽容化：真实容器直接命中
-
-在 `db-wal-recovery` 真实任务容器里，通过 `--extra-instruction-path` 强制模型先执行三个探针；三个调用全部 `status=success`，任务最终 reward 1.0：
-
-```text
-args: {"code": "print('alias-ok')",  "language": "python3"}
-result: alias-ok
-script: .scripts/0001.py
-
-args: {"code": "print('bare-ok')",   "path": "probe"}
-result: bare-ok
-script: .scripts/probe.py
-
-args: {"code": "print('bare-ok-2')", "path": "probe2.py"}
-result: bare-ok-2
-script: .scripts/probe2.py
-```
-
-验证点：
-
-- `language: "python3"` 已归一化为 `python` 并成功执行；
-- 裸文件名 `probe` 自动落到 `.scripts/probe.py`，并自动补 `.py`；
-- `probe2.py` 同样落到 `.scripts/`；
-- 6 个复验 trial 中 0 次 `unsupported language`、0 次旧路径错误。
-
-保守边界保持不变：不在 `.scripts/` 下的绝对路径仍拒绝；`~` 与 workspace 逃逸仍拒绝；C/C++ 与 python2 给出明确的 `run_command`/python3 提示。
-
-### 5.3 Reasoning 熔断文案：已送达，但单独改文案不足
-
-`regex-chess`（旧运行 10 次 `reasoning_budget`、reward 0）：
-
-- 新运行 23 次 `llm.reasoning_budget`、29 次主 LLM 调用、7 次工具调用；
-- `Stop extending your reasoning` / `smallest deliverable` 在请求历史中出现 74 次，说明新文案确实送达；
-- 但模型仍然连续 10 次、再连续 13 次烧满 50k reasoning，`/app/re.json` 未产出，reward 0。
-
-正向案例：`adaptive-rejection-sampler` 4 次熔断后恢复，最终 reward 1.0（旧运行 6 次熔断、同样通过）。
-
-结论：熔断注入机制正常，但仅改措辞无法打破 `regex-chess` 式的连续 reasoning 螺旋。建议的后续升级（连续 3 次后降低 per-call `reasoning_effort`、连续 5 次强制结束）**本轮未实现**。
-
-### 5.4 任务级结果说明
-
-- `llm-inference-batching-scheduler` 本轮 reward 0 的原因是任务侧约束 `combined unique shapes 11 exceed cap 8`，不是 harness/本次改动；该题旧运行为 1.0。
-- 复验中 `adaptive-rejection-sampler` 与 `db-wal-recovery` 均通过；`gcode-to-text` 与 `regex-chess` 失败原因分别见 5.1 / 5.3。
-- 提交前测试：`tests/tools/test_code.py` 27 passed；summarizer / harness / loop 聚焦测试全部通过；宽范围 `tests/agent tests/harness tests/tools` 为 **492 passed / 10 failed**，10 个失败与改动前 `git stash` 基线完全一致（persistent memory 注入 + `StaleReasoningPadTests`），与本次改动无关。
-
-### 5.5 仍未解决的后续项
-
-1. **summarizer 正文截断**：attempt 2 检测到 `finish_reason=length` 时应放大 `max_tokens`（1.5×/2×）或直接回退 `compact_observations`；prompt 中硬编码的 “4,096 output tokens” 应按实际 `summary_max_tokens` 留 20%–25% margin（tb-v10 实际为 2048，当前文案不一致）。
-2. **reasoning 连续失败升级**：按连续次数降低 per-call reasoning effort / 强制结束，而不是重复注入同一条 nudge。
-3. **`gcode-to-text` 复跑**：区分任务方差与 summarizer 改动的影响。
