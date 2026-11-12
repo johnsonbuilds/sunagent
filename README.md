@@ -59,10 +59,18 @@ Without `--harness`, the runtime uses `AGENT_RUNTIME_HARNESS`, then `common-v0`.
 ### Web UI
 
 ```bash
+# one-time / after front-end changes
+cd webui/frontend && npm install && npm run build && cd ../..
+
+# start the FastAPI host
 uv run webui --port 8000
 ```
 
-Open <http://127.0.0.1:8000>. Sessions and traces live under `workspace/`. The UI can run shell commands, so set credentials before exposing it:
+Open <http://127.0.0.1:8000>. The UI is a Next.js app (`webui/frontend/`)
+exported to static files and served by FastAPI. `./run.sh start` builds
+the front end automatically when its sources changed, then starts the
+server. Sessions and traces live under `workspace/`. The UI can run shell
+commands, so set credentials before exposing it:
 
 ```dotenv
 AGENT_RUNTIME_WEBUI_AUTH_USER=admin
@@ -80,7 +88,8 @@ Basic auth is not encryption — keep it on localhost, use an SSH tunnel, or ter
 | `src/agent_runtime/harness/` | Genome schema, YAML loader, lineage CLI |
 | `src/agent_runtime/execution/` | Local/Harbor executors, workspaces, command guard |
 | `src/agent_runtime/` | Events, tracing, memory, skills, storage, channels |
-| `webui/` | FastAPI server, session store, static client |
+| `webui/` | FastAPI server, session store, static-export hosting |
+| `webui/frontend/` | Next.js front end (title bar, sidebar, transcript, composer) |
 | `harnesses/` | Versioned agent manifests |
 | `evaluation/` | Benchmark tasks, records, analyses |
 | `scripts/` | Harbor runner with Docker image GC |

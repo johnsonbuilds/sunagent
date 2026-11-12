@@ -14,12 +14,24 @@ webui.sessions.FrameBus                        ← fan-out per session
 browser
 ```
 
+The web UI has two pieces:
+
+* a **Next.js front end** in `webui/frontend/` (App Router, TypeScript,
+  React), and
+* a **FastAPI host** in `webui/` that owns the sessions and serves the
+  front end's static export.
+
+In production the front end is exported with `output: "export"` and
+served by FastAPI, so the page, the API, and the SSE stream share one
+origin (and one basic-auth challenge) with no Node server in the middle.
+
 ## 1. Two Pieces
 
 | Piece | Location | Responsibility |
 |---|---|---|
 | `WebUIChannel` | `src/agent_runtime/channels/webui.py` | Translate `AgentEvent` into JSON frames. Knows nothing about HTTP. |
-| `webui/` | `webui/` (repo root) | FastAPI app, session store, static assets. Knows nothing about the event vocabulary. |
+| `webui/` | `webui/` (repo root) | FastAPI app, session store, and static-export hosting. Knows nothing about the event vocabulary. |
+| `webui/frontend/` | `webui/frontend/` | Next.js client: title bar, sidebar, transcript, composer. Knows nothing about the runtime. |
 
 The split matters: the channel is reusable by any transport (SSE today,
 WebSocket or a Telegram bridge tomorrow), and the server can be rewritten
@@ -94,14 +106,27 @@ resumes where it left off instead of starting from a blank transcript.
 ## 5. Running It
 
 ```bash
-# dependencies (FastAPI + uvicorn ship with the runtime)
-uv sync
+# build the Next.js front end (first run also installs dependencies)
+cd webui/frontend
+npm install
+npm run build
+cd ../..
 
-# start the server
+# start the FastAPI host
 uv run webui --port 8000
 ```
 
-Then open <http://127.0.0.1:8000>.
+`./run.sh start` does the frontend build for you (only when the sources
+changed) and then starts the server. Then open
+<http://127.0.0.1:8000>.
+
+For front-end development, run the API on port 8000 and the Next.js dev
+server on port 3000; the dev server proxies `/api` to FastAPI:
+
+```bash
+uv run webui --port 8000          # API + session host
+cd webui/frontend && npm run dev  # http://127.0.0.1:3000
+```
 
 The web UI **is** the agent host: the FastAPI process holds the LLM, the
 tools, and the harness, and every message runs `run_turn` as a background
@@ -164,11 +189,21 @@ turns are cancelled at the same time and their sessions are saved.
 
 ## 6. The Frontend
 
-`webui/static/` holds a dependency-free client: `index.html`, `style.css`,
-`app.js`, and `markdown.js` (a small Markdown renderer). There is no build
-step and no CDN — the page works offline and can be read top to bottom.
+`webui/frontend/` is a Next.js App Router project written in TypeScript.
+`app/page.tsx` owns the client state (sessions, frame upserts, composer,
+theme, settings), and the visual pieces live in `components/`
+(`TitleBar`, `Sidebar`, `Transcript`, `Composer`, `SettingsDialog`).
+`app/globals.css` carries the original design tokens and component styles
+unchanged; `lib/markdown.ts` is the same small Markdown renderer as
+before, ported to a module.
 
 The layout follows the same three-part frame as a desktop console app: a
 title bar, a conversation sidebar, and the transcript with a composer. Tool
 calls and thinking blocks are deliberately quiet — they are transcript
 metadata, not the main event — and expand on click.
+
+`npm run build` emits a static export to `webui/frontend/out/`. FastAPI
+mounts `/_next` from that directory and serves `index.html` at `/`; if the
+export is missing, the page says how to build it. `npm run dev` instead
+runs the regular Next.js server and rewrites `/api` to
+`http://127.0.0.1:8000`.

@@ -2,8 +2,9 @@
 
 The web UI is a channel: it consumes the same user-facing agent events
 as the CLI and renders them in a browser. This package holds the HTTP
-server, the session store, and the static assets; the event-to-frame
-translation lives in :mod:`agent_runtime.channels.webui`.
+server and the session store; the Next.js front end lives in
+``webui/frontend`` and the event-to-frame translation lives in
+:mod:`agent_runtime.channels.webui`.
 """
 
 from __future__ import annotations

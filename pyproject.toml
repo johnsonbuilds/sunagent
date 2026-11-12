@@ -22,6 +22,13 @@ webui = "webui.__main__:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build]
+exclude = [
+  "webui/frontend/node_modules",
+  "webui/frontend/.next",
+  "**/__pycache__",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/agent_runtime", "webui"]
 

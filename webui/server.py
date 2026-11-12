@@ -8,7 +8,7 @@ single injected sink that forwards frames to the session's frame bus.
 
 Endpoints:
 
-    GET    /                          the single page app
+    GET    /                          the Next.js static export (index.html)
     GET    /api/health                liveness probe
     GET    /api/config                model, harness, and tool configuration
     GET    /api/sessions              list sessions, newest first
@@ -41,7 +41,7 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -62,7 +62,39 @@ from .sessions import STREAM_STOP, Session, SessionStore
 
 logger = logging.getLogger(__name__)
 
-STATIC_ROOT = Path(__file__).resolve().parent / "static"
+# ``npm run build`` in webui/frontend emits a static Next.js export here.
+# FastAPI serves it, which keeps the page, the API, and the event stream
+# on one origin (and therefore behind the same basic-auth challenge).
+FRONTEND_ROOT = Path(__file__).resolve().parent / "frontend" / "out"
+
+_BUILD_HINT = """<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SunAgent — frontend not built</title>
+<style>
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center;
+         background: #0a0908; color: #eae0d5;
+         font: 15px/1.7 -apple-system, BlinkMacSystemFont, "Segoe UI",
+               system-ui, sans-serif; }
+  main { max-width: 560px; padding: 32px; }
+  h1 { margin: 0 0 12px; font-size: 20px; }
+  code { display: block; margin-top: 16px; padding: 12px 14px;
+         border: 1px solid #2c2a27; border-radius: 8px;
+         background: #15130f; color: #c6ac8f;
+         font-family: ui-monospace, Menlo, Consolas, monospace; }
+</style>
+</head>
+<body>
+<main>
+  <h1>SunAgent frontend is not built</h1>
+  <p>The Next.js UI has not been generated yet. Build it, then reload:</p>
+  <code>cd webui/frontend &amp;&amp; npm install &amp;&amp; npm run build</code>
+</main>
+</body>
+</html>
+"""
 
 _KEEPALIVE_SECONDS = 15.0
 
@@ -235,13 +267,16 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
     else:
         logger.info("webui.auth.disabled")
 
-    if STATIC_ROOT.is_dir():
-        app.mount("/static", StaticFiles(directory=str(STATIC_ROOT)),
-                  name="static")
+    if (FRONTEND_ROOT / "_next").is_dir():
+        app.mount("/_next", StaticFiles(directory=str(FRONTEND_ROOT / "_next")),
+                  name="next-assets")
 
     @app.get("/", include_in_schema=False)
-    async def index() -> FileResponse:
-        return FileResponse(STATIC_ROOT / "index.html")
+    async def index() -> Any:
+        page = FRONTEND_ROOT / "index.html"
+        if page.is_file():
+            return FileResponse(page)
+        return HTMLResponse(_BUILD_HINT, status_code=503)
 
     @app.get("/api/health")
     async def health() -> dict[str, Any]:
@@ -382,6 +417,24 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
                                  headers={"Cache-Control": "no-cache",
                                           "X-Accel-Buffering": "no",
                                           "Connection": "keep-alive"})
+
+    @app.get("/{path:path}", include_in_schema=False)
+    async def frontend_file(path: str) -> FileResponse:
+        """Serve remaining files from the static Next.js export.
+
+        The export is a directory of plain files (``index.txt``,
+        ``404.html``, icons and so on). Only paths that stay inside the
+        export root are served.
+        """
+        root = FRONTEND_ROOT.resolve()
+        candidate = (root / path).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="not found") from None
+        if candidate.is_file():
+            return FileResponse(candidate)
+        raise HTTPException(status_code=404, detail="not found")
 
     return app
 

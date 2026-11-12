@@ -12,6 +12,7 @@
 #   ./run.sh stop                     # 停止 webui
 #   ./run.sh status                   # 查看运行状态
 #   ./run.sh logs                     # 查看实时日志
+#   ./run.sh build                    # 重新构建 Next.js 前端
 #   ./run.sh harness record <name> <model> [notes]  # 记录一次运行（等价于 uv run python -m agent_runtime.harness record jobs/<name> --model <model> --notes <notes>）
 #   ./run.sh harbor run --job-name <job-name> [--harness <harness>] [--dataset <dataset>] [-n <n>]  # 运行 Harbor 任务
 #
@@ -37,6 +38,8 @@ PORT="${AGENT_RUNTIME_WEBUI_PORT:-8000}"
 PID_FILE="$ROOT_DIR/.webui.pid"
 HARNESS_FILE="$ROOT_DIR/.webui.harness"
 LOG_FILE="$ROOT_DIR/webui.log"
+FRONTEND_DIR="$ROOT_DIR/webui/frontend"
+FRONTEND_OUT="$FRONTEND_DIR/out"
 
 # 启动时默认使用的 harness：显式 --harness > 环境变量 > 不指定（webui 侧回落 common-v0）
 DEFAULT_HARNESS="${AGENT_RUNTIME_HARNESS:-}"
@@ -44,6 +47,57 @@ DEFAULT_HARNESS="${AGENT_RUNTIME_HARNESS:-}"
 # 是否安装了 uv
 has_uv() {
   command -v uv >/dev/null 2>&1
+}
+
+# 是否安装了 npm（Next.js 前端构建需要）
+has_npm() {
+  command -v npm >/dev/null 2>&1
+}
+
+# 前端源码是否比上次构建产出的 index.html 新
+frontend_needs_build() {
+  [[ -f "$FRONTEND_OUT/index.html" ]] || return 0
+  local paths=(
+    "$FRONTEND_DIR/app"
+    "$FRONTEND_DIR/components"
+    "$FRONTEND_DIR/lib"
+    "$FRONTEND_DIR/package.json"
+    "$FRONTEND_DIR/package-lock.json"
+    "$FRONTEND_DIR/next.config.mjs"
+    "$FRONTEND_DIR/tsconfig.json"
+  )
+  local existing=()
+  local path
+  for path in "${paths[@]}"; do
+    [[ -e "$path" ]] && existing+=("$path")
+  done
+  [[ -n "$(find "${existing[@]}" -newer "$FRONTEND_OUT/index.html" -print -quit 2>/dev/null)" ]]
+}
+
+# 构建 Next.js 静态导出（webui/frontend/out），由 FastAPI 直接托管。
+cmd_build_frontend() {
+  if ! has_npm; then
+    echo "错误: 未找到 npm，请先安装 Node.js/npm 以构建 Next.js 前端" >&2
+    return 1
+  fi
+  if [[ ! -d "$FRONTEND_DIR/node_modules" \
+        || ! -f "$FRONTEND_DIR/node_modules/.package-lock.json" \
+        || "$FRONTEND_DIR/package.json" -nt "$FRONTEND_DIR/node_modules/.package-lock.json" \
+        || "$FRONTEND_DIR/package-lock.json" -nt "$FRONTEND_DIR/node_modules/.package-lock.json" ]]; then
+    echo "安装前端依赖 ..."
+    (cd "$FRONTEND_DIR" && npm install --no-audit --no-fund) || {
+      echo "错误: 前端依赖安装失败" >&2
+      return 1
+    }
+  fi
+  if frontend_needs_build; then
+    echo "构建 Next.js 前端 ..."
+    (cd "$FRONTEND_DIR" && npm run build) || {
+      echo "错误: Next.js 前端构建失败" >&2
+      return 1
+    }
+  fi
+  return 0
 }
 
 # 检查进程是否还在运行
@@ -115,6 +169,11 @@ cmd_start() {
       echo "可用 harness: $(ls harnesses/*.yaml 2>/dev/null | xargs -n1 basename 2>/dev/null | sed 's/\.yaml$//' | tr '\n' ' ')" >&2
       return 1
     fi
+  fi
+
+  # FastAPI 托管的是 Next.js 的静态导出产物；源码改动后先重建。
+  if ! cmd_build_frontend; then
+    return 1
   fi
 
   if [[ -n "$harness" ]]; then
@@ -349,6 +408,7 @@ case "$CMD" in
   restart)   shift; cmd_restart "$@" ;;
   status)    cmd_status ;;
   logs)      cmd_logs ;;
+  build)     cmd_build_frontend ;;
   harness)
     shift
     subcmd="${1:-}"
@@ -370,15 +430,16 @@ case "$CMD" in
     esac
     ;;
   *)
-    echo "用法: $0 {start|stop|restart|status|logs|harness|harbor}"
+    echo "用法: $0 {start|stop|restart|status|logs|build|harness|harbor}"
     echo ""
-    echo "  start [--harness <harness>]    启动 webui（后台运行）"
+    echo "  start [--harness <harness>]    启动 webui（后台运行，必要时自动构建 Next.js 前端）"
     echo "    例: $0 start --harness tb-v4"
     echo "        $0 start --harness harnesses/tb-v4.yaml"
     echo "  stop         停止 webui"
     echo "  restart [--harness <harness>]  重启 webui（不带参数时沿用上次的 harness）"
     echo "  status       查看运行状态（含 harness）"
     echo "  logs         查看实时日志"
+    echo "  build        重新构建 Next.js 前端（webui/frontend）"
     echo "  harness      运行记录相关命令"
     echo "    record <name> <model> [notes]"
     echo "               等价于 uv run python -m agent_runtime.harness record jobs/<name> --model <model> [--notes <notes>]"
