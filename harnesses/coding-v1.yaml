@@ -1,7 +1,7 @@
 id: coding-v1
 parent: tb-v11
-mutation: 'replace system prompt with expert coding agent prompt (plan-first, read-before-edit, no speculation, modular coding, mandatory tests, concise communication)'
-reason: 'derive coding harness from tb-v11: keep tools/control/context/recovery/verification identical, only swap system prompt to coding-specific behavior'
+mutation: 'system prompt with coding agent,context use turn fold,only keep 4 tools'
+reason: 'derive coding harness from tb-v11'
 prompt:
   system: |
     You are an expert coding agent. You write production-ready code by planning before acting.
@@ -56,13 +56,9 @@ tools:
   - run_command
   - read_file
   - apply_patch
-  - edit_file
   - write_file
-  - grep_search
-  - find_files
-  - execute_code
 control:
-  max_iterations: 120
+  max_iterations: 50
   max_observation_chars: 16000
   spill_preview_chars: 4000
   finish_violation_limit: 3
@@ -70,17 +66,11 @@ control:
     enabled: true
     at_fractions: [0.25, 0.6, 0.85]
 context:
-  strategy: llm_summary
+  strategy: turn_fold
   budget_unit: tokens
-  head_chars: 200
   context_budget: 60000
-  window_rounds: 12
-  keep_recent_rounds: 2
-  summary_tail_rounds: 2
   user_preserve_budget: 8000
   summary_max_tokens: 4096
-  summary_reasoning_effort: none
-  retrieval_exempt_tools: []
 recovery:
   tool_error: feed_error_and_continue
   tool_error_max_retries: 3
@@ -108,11 +98,4 @@ recovery:
 verification:
   enabled: false
   mode: 'off'
-  require: []
-  submit_tool: submit_result
-  edit_tools:
-  - edit_file
-  - apply_patch
-  - write_file
-  test_target_pattern: '[\w\-/]+\.(?:py|sh)\b|tests?/[\w\-/.]+|test_[\w\-/]+'
 skills: []
