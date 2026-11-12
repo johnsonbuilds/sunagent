@@ -1,7 +1,7 @@
 id: coding-v1
-parent: tb-v11
-mutation: 'system prompt with coding agent,context use turn fold,only keep 4 tools'
-reason: 'derive coding harness from tb-v11'
+parent: null
+mutation: null
+reason: 'create a new coding harness'
 prompt:
   system: |
     You are an expert coding agent. You write production-ready code by planning before acting.

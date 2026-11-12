@@ -34,7 +34,7 @@ ITERATION_LIMIT_NOTICE = (
 
 # The harness a run gets when nothing is requested: the generic
 # task base that fits code, analysis, lookup and chat tasks alike.
-DEFAULT_HARNESS_ID = "common-v0"
+DEFAULT_HARNESS_ID = "general-v1"
 
 
 def feed_error_and_continue(exc: Exception, *, tool: str | None = None) -> str:
