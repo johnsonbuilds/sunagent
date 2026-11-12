@@ -1,6 +1,7 @@
 "use client";
 
 import type { SessionSummary } from "@/lib/types";
+import { useI18n, type TFunction } from "@/lib/i18n";
 import { CloseIcon, PlusIcon, SearchIcon } from "./Icons";
 
 interface SessionsPanelProps {
@@ -14,12 +15,16 @@ interface SessionsPanelProps {
   onRename: (session: SessionSummary) => void;
 }
 
-function relativeTime(epochSeconds: number): string {
+function relativeTime(epochSeconds: number, t: TFunction): string {
   const delta = Date.now() / 1000 - epochSeconds;
-  if (delta < 60) return "now";
-  if (delta < 3600) return `${Math.floor(delta / 60)}m`;
-  if (delta < 86400) return `${Math.floor(delta / 3600)}h`;
-  return `${Math.floor(delta / 86400)}d`;
+  if (delta < 60) return t("timeNow");
+  if (delta < 3600) {
+    return t("timeMinutes", { count: Math.floor(delta / 60) });
+  }
+  if (delta < 86400) {
+    return t("timeHours", { count: Math.floor(delta / 3600) });
+  }
+  return t("timeDays", { count: Math.floor(delta / 86400) });
 }
 
 export default function SessionsPanel({
@@ -32,6 +37,7 @@ export default function SessionsPanel({
   onDelete,
   onRename,
 }: SessionsPanelProps) {
+  const { t } = useI18n();
   const needle = filter.trim().toLowerCase();
   const visible = sessions.filter(
     (session) =>
@@ -41,12 +47,12 @@ export default function SessionsPanel({
   return (
     <div className="panel">
       <div className="sidebar-head">
-        <span className="sidebar-label">Conversations</span>
+        <span className="sidebar-label">{t("conversations")}</span>
         <button
           className="icon-btn small"
           id="btnNewChatSide"
-          title="New conversation"
-          aria-label="New conversation"
+          title={t("newConversation")}
+          aria-label={t("newConversation")}
           onClick={onNewChat}
         >
           <PlusIcon />
@@ -57,7 +63,7 @@ export default function SessionsPanel({
         <input
           id="sessionSearch"
           type="search"
-          placeholder="Filter conversations…"
+          placeholder={t("filterConversations")}
           autoComplete="off"
           spellCheck={false}
           value={filter}
@@ -81,15 +87,15 @@ export default function SessionsPanel({
                 onRename(session);
               }}
             >
-              {session.title || "Untitled"}
+              {session.title || t("untitled")}
             </span>
             <span className="session-time">
-              {relativeTime(session.updated_at)}
+              {relativeTime(session.updated_at, t)}
             </span>
             <button
               className="session-delete"
               type="button"
-              title="Delete conversation"
+              title={t("deleteConversation")}
               onClick={(event) => {
                 event.stopPropagation();
                 onDelete(session);

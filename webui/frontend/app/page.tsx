@@ -9,6 +9,7 @@ import Sidebar from "@/components/Sidebar";
 import TitleBar, { type StatusState } from "@/components/TitleBar";
 import Transcript from "@/components/Transcript";
 import { api } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import type {
   DeltaFrame,
   Frame,
@@ -23,6 +24,9 @@ import type {
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+/** The server's placeholder title for a session that has no messages yet. */
+const NEW_SESSION_TITLE = "New conversation";
 
 function upsertSegment(list: Segment[], segment: Segment): Segment[] {
   const index = list.findIndex((block) => block.id === segment.id);
@@ -71,14 +75,17 @@ function toolSegment(frame: ToolFrame): ToolSegment {
 }
 
 export default function Home() {
+  const { t } = useI18n();
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [blocks, setBlocks] = useState<Segment[]>([]);
   const [busy, setBusy] = useState(false);
-  const [title, setTitle] = useState("New conversation");
+  const [title, setTitle] = useState(NEW_SESSION_TITLE);
   const [status, setStatus] = useState<StatusState | null>(null);
-  const [modelChip, setModelChip] = useState("");
-  const [modelTitle, setModelTitle] = useState("Model and harness");
+  const [modelInfo, setModelInfo] = useState({
+    model: "",
+    harness: "",
+  });
   const [filter, setFilter] = useState("");
   const [draft, setDraft] = useState("");
   const [activePanel, setActivePanel] = useState<PanelId>("sessions");
@@ -111,7 +118,7 @@ export default function Home() {
 
   const updateBusy = useCallback((value: boolean) => {
     setBusy(value);
-    setStatus(value ? { text: "running" } : null);
+    setStatus(value ? { label: "statusRunning" } : null);
   }, []);
 
   const refreshSessions = useCallback(async () => {
@@ -157,7 +164,7 @@ export default function Home() {
       source.onerror = () => {
         // The browser reconnects on its own and replays with
         // Last-Event-ID, so the stream recovers without user action.
-        setStatus({ text: "reconnecting", kind: "error" });
+        setStatus({ label: "statusReconnecting", kind: "error" });
       };
     },
     [disconnectStream],
@@ -176,7 +183,7 @@ export default function Home() {
         const detail = await api<SessionDetail>(
           `/api/sessions/${sessionId}`,
         );
-        setTitle(detail.title || "New conversation");
+        setTitle(detail.title || NEW_SESSION_TITLE);
         setBlocks(detail.segments || []);
       } catch (error) {
         showToast(errorMessage(error));
@@ -215,7 +222,7 @@ export default function Home() {
   const renameSession = useCallback(
     async (session: SessionSummary) => {
       const value = window.prompt(
-        "Conversation title",
+        t("conversationTitle"),
         session.title || "",
       );
       if (value === null) return;
@@ -232,14 +239,16 @@ export default function Home() {
         showToast(errorMessage(error));
       }
     },
-    [activeId, refreshSessions, showToast],
+    [activeId, refreshSessions, showToast, t],
   );
 
   const deleteSession = useCallback(
     async (session: SessionSummary) => {
       if (
         !window.confirm(
-          `Delete "${session.title || "this conversation"}"?`,
+          t("deleteConversationConfirm", {
+            title: session.title || t("thisConversation"),
+          }),
         )
       ) {
         return;
@@ -255,7 +264,7 @@ export default function Home() {
         showToast(errorMessage(error));
       }
     },
-    [activeId, newSession, refreshSessions, selectSession, showToast],
+    [activeId, newSession, refreshSessions, selectSession, showToast, t],
   );
 
   const send = useCallback(
@@ -316,7 +325,7 @@ export default function Home() {
       if (Date.now() > deadline) {
         setRestarting(false);
         setConfirmRestartOpen(false);
-        showToast("服务重启超时，请手动刷新页面");
+        showToast(t("restartTimeoutToast"));
         return;
       }
       fetch("/api/health", { cache: "no-store" })
@@ -330,13 +339,13 @@ export default function Home() {
           }, 1000);
         });
     },
-    [showToast],
+    [showToast, t],
   );
 
   const restartServer = useCallback(async () => {
     if (restarting) return;
     setRestarting(true);
-    showToast("正在重启服务，请稍候…");
+    showToast(t("restartingToast"));
     try {
       await api("/api/system/restart", { method: "POST", body: "{}" });
     } catch (error) {
@@ -350,7 +359,7 @@ export default function Home() {
     restartTimerRef.current = window.setTimeout(() => {
       pollForRestart(Date.now() + 60000);
     }, 2000);
-  }, [pollForRestart, restarting, showToast]);
+  }, [pollForRestart, restarting, showToast, t]);
 
   const requestRestart = useCallback(() => {
     setSidebarOpen(false);
@@ -389,8 +398,8 @@ export default function Home() {
         break;
       case "run.error":
         updateBusy(false);
-        setStatus({ text: "error", kind: "error" });
-        showToast(frame.error || "The run failed");
+        setStatus({ label: "statusError", kind: "error" });
+        showToast(frame.error || t("runFailed"));
         void refreshSessions().catch(() => {});
         break;
       default:
@@ -427,16 +436,13 @@ export default function Home() {
     void (async () => {
       try {
         const config = await api<RuntimeConfig>("/api/config");
-        const parts: string[] = [];
-        if (config.model) parts.push(config.model);
-        if (config.harness) parts.push(config.harness);
-        setModelChip(parts.join(" · "));
-        setModelTitle(
-          `model ${config.model || "?"} · harness ${config.harness || "?"}`,
-        );
+        setModelInfo({
+          model: config.model || "",
+          harness: config.harness || "",
+        });
         if (config.error) showToast(config.error);
       } catch {
-        setModelChip("");
+        setModelInfo({ model: "", harness: "" });
       }
 
       try {
@@ -472,10 +478,20 @@ export default function Home() {
     };
   }, [disconnectStream]);
 
+  const modelChip = [modelInfo.model, modelInfo.harness]
+    .filter(Boolean)
+    .join(" · ");
+  const modelTitle = t("modelHarnessTitle", {
+    model: modelInfo.model || "?",
+    harness: modelInfo.harness || "?",
+  });
+  const displayTitle =
+    title === NEW_SESSION_TITLE ? t("newConversation") : title;
+
   return (
     <div className="app">
       <TitleBar
-        title={title}
+        title={displayTitle}
         status={status}
         modelChip={modelChip}
         modelTitle={modelTitle}
@@ -531,11 +547,11 @@ export default function Home() {
 
       <ConfirmDialog
         open={confirmRestartOpen}
-        title="重启服务"
-        message="确定要重启 SunAgent 服务吗？当前页面会短暂断开连接。"
-        confirmText="确定重启"
-        cancelText="取消"
-        busyText="正在重启…"
+        title={t("restartDialogTitle")}
+        message={t("restartDialogMessage")}
+        confirmText={t("restartConfirm")}
+        cancelText={t("defaultCancel")}
+        busyText={t("restartBusy")}
         tone="danger"
         busy={restarting}
         onConfirm={() => void restartServer()}

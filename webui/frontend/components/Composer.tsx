@@ -2,6 +2,8 @@
 
 import type { RefObject } from "react";
 
+import { useI18n } from "@/lib/i18n";
+
 import { SendIcon, StopIcon } from "./Icons";
 
 interface ComposerProps {
@@ -21,6 +23,8 @@ export default function Composer({
   onSend,
   onStop,
 }: ComposerProps) {
+  const { t } = useI18n();
+
   return (
     <div className="composer-wrap">
       <div className="composer-box" id="composerBox">
@@ -28,7 +32,7 @@ export default function Composer({
           id="msgInput"
           ref={inputRef}
           rows={1}
-          placeholder="Message SunAgent…"
+          placeholder={t("composerPlaceholder")}
           spellCheck={false}
           value={value}
           onChange={(event) => onChange(event.target.value)}
@@ -42,15 +46,15 @@ export default function Composer({
         <div className="composer-footer">
           <div className="composer-left">
             <span className="composer-hint" id="composerHint">
-              Enter sends · Shift+Enter adds a line
+              {t("composerHint")}
             </span>
           </div>
           <div className="composer-right">
             <button
               className={`send-btn${busy ? " stop" : ""}`}
               id="btnSend"
-              title={busy ? "Stop" : "Send"}
-              aria-label={busy ? "Stop" : "Send"}
+              title={busy ? t("stop") : t("send")}
+              aria-label={busy ? t("stop") : t("send")}
               onClick={busy ? onStop : onSend}
             >
               {busy ? <StopIcon /> : <SendIcon />}

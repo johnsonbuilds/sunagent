@@ -1158,6 +1158,33 @@ button {
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+  flex: 1;
+}
+
+.settings-item-static {
+  cursor: default;
+}
+
+.settings-item-static:hover {
+  background: transparent;
+  border-color: transparent;
+}
+
+.settings-select {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-subtle);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.settings-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .settings-item-title {

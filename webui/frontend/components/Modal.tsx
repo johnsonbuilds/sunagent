@@ -3,6 +3,8 @@
 import { useEffect, useId, useRef } from "react";
 import type { ReactNode } from "react";
 
+import { useI18n } from "@/lib/i18n";
+
 import { CloseIcon } from "./Icons";
 
 interface ModalProps {
@@ -27,6 +29,7 @@ export default function Modal({
 }: ModalProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const titleId = useId();
+  const { t } = useI18n();
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -60,8 +63,8 @@ export default function Modal({
           <button
             className="icon-btn small"
             type="button"
-            title="Close"
-            aria-label="Close"
+            title={t("close")}
+            aria-label={t("close")}
             onClick={onClose}
           >
             <CloseIcon size={15} />

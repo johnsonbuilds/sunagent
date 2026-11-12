@@ -2,6 +2,8 @@
 
 import type { ReactNode } from "react";
 
+import { useI18n } from "@/lib/i18n";
+
 import Modal from "./Modal";
 
 interface ConfirmDialogProps {
@@ -22,14 +24,16 @@ export default function ConfirmDialog({
   open,
   title,
   message,
-  confirmText = "确定",
-  cancelText = "取消",
-  busyText = "处理中…",
+  confirmText,
+  cancelText,
+  busyText,
   tone = "default",
   busy = false,
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
+  const { t } = useI18n();
+
   return (
     <Modal
       open={open}
@@ -44,7 +48,7 @@ export default function ConfirmDialog({
             disabled={busy}
             onClick={onCancel}
           >
-            {cancelText}
+            {cancelText ?? t("defaultCancel")}
           </button>
           <button
             className={`btn${tone === "danger" ? " danger" : " primary"}`}
@@ -52,7 +56,9 @@ export default function ConfirmDialog({
             disabled={busy}
             onClick={onConfirm}
           >
-            {busy ? busyText : confirmText}
+            {busy
+              ? busyText ?? t("defaultBusy")
+              : confirmText ?? t("defaultConfirm")}
           </button>
         </>
       }

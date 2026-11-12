@@ -3,14 +3,15 @@
 import { useState, type RefObject } from "react";
 
 import { render as renderMarkdown } from "@/lib/markdown";
+import { useI18n, type MessageKey } from "@/lib/i18n";
 import type { Segment, TextSegment, ToolSegment } from "@/lib/types";
 import { EmptyMark } from "./Icons";
 
-const SUGGESTIONS = [
-  "What files are in the current directory?",
-  "Show me the project structure and explain what each part does.",
-  "Run the test suite and summarise the failures.",
-  "Read the README and give me a short orientation.",
+const SUGGESTIONS: MessageKey[] = [
+  "suggestionFiles",
+  "suggestionStructure",
+  "suggestionTests",
+  "suggestionReadme",
 ];
 
 interface TranscriptProps {
@@ -55,6 +56,7 @@ function TextBlock({ block }: { block: TextSegment }) {
 
 function ThinkingCard({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
+  const { t } = useI18n();
 
   return (
     <div className={`thinking-card${open ? " open" : ""}`}>
@@ -63,7 +65,7 @@ function ThinkingCard({ text }: { text: string }) {
         className="thinking-head"
         onClick={() => setOpen((value) => !value)}
       >
-        <span>Thinking</span>
+        <span>{t("thinking")}</span>
         <span className="thinking-caret">›</span>
       </button>
       <div className="thinking-body">
@@ -75,6 +77,7 @@ function ThinkingCard({ text }: { text: string }) {
 
 function ToolCard({ block }: { block: ToolSegment }) {
   const [open, setOpen] = useState(false);
+  const { t } = useI18n();
   const status = block.status || "running";
   const args = block.arguments;
   const hasArgs =
@@ -89,7 +92,9 @@ function ToolCard({ block }: { block: ToolSegment }) {
     block.exit_code !== undefined &&
     block.exit_code !== 0
   ) {
-    meta += `${meta ? " · " : ""}exit ${block.exit_code}`;
+    meta += `${meta ? " · " : ""}${t("exitCode", {
+      code: block.exit_code,
+    })}`;
   }
 
   return (
@@ -100,7 +105,7 @@ function ToolCard({ block }: { block: ToolSegment }) {
         onClick={() => setOpen((value) => !value)}
       >
         <span className="tool-dot" />
-        <span className="tool-name">{block.tool || "tool"}</span>
+        <span className="tool-name">{block.tool || t("toolFallback")}</span>
         <span className="tool-summary">{block.summary || ""}</span>
         <span className="tool-meta">{meta}</span>
         <span className="tool-caret">›</span>
@@ -124,25 +129,27 @@ function ToolCard({ block }: { block: ToolSegment }) {
 }
 
 function EmptyState({ onSuggestion }: { onSuggestion: (text: string) => void }) {
+  const { t } = useI18n();
+
   return (
     <div className="empty-state" id="emptyState">
       <EmptyMark />
-      <h2>What should we work on?</h2>
-      <p>
-        SunAgent runs tools, reads files, and executes commands. Ask a question
-        to get started.
-      </p>
+      <h2>{t("emptyTitle")}</h2>
+      <p>{t("emptyBody")}</p>
       <div className="suggestion-grid" id="suggestions">
-        {SUGGESTIONS.map((text) => (
-          <button
-            key={text}
-            type="button"
-            className="suggestion"
-            onClick={() => onSuggestion(text)}
-          >
-            {text}
-          </button>
-        ))}
+        {SUGGESTIONS.map((key) => {
+          const text = t(key);
+          return (
+            <button
+              key={key}
+              type="button"
+              className="suggestion"
+              onClick={() => onSuggestion(text)}
+            >
+              {text}
+            </button>
+          );
+        })}
       </div>
     </div>
   );

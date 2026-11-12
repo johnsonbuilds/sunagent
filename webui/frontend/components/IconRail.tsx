@@ -2,20 +2,22 @@
 
 import type { ReactElement } from "react";
 
+import { useI18n, type MessageKey } from "@/lib/i18n";
+
 import { ChatIcon, SettingsIcon } from "./Icons";
 
 export type PanelId = "sessions" | "settings";
 
 interface NavItem {
   id: PanelId;
-  label: string;
+  labelKey: MessageKey;
   Icon: () => ReactElement;
 }
 
 /** Add new sidebar destinations here; the rail and panel switch follow. */
 export const NAV_ITEMS: NavItem[] = [
-  { id: "sessions", label: "会话", Icon: ChatIcon },
-  { id: "settings", label: "设置", Icon: SettingsIcon },
+  { id: "sessions", labelKey: "conversations", Icon: ChatIcon },
+  { id: "settings", labelKey: "settings", Icon: SettingsIcon },
 ];
 
 interface IconRailProps {
@@ -24,10 +26,13 @@ interface IconRailProps {
 }
 
 export default function IconRail({ active, onSelect }: IconRailProps) {
+  const { t } = useI18n();
+
   return (
-    <nav className="rail" aria-label="Sidebar navigation">
+    <nav className="rail" aria-label={t("navSidebarLabel")}>
       <div className="rail-group">
-        {NAV_ITEMS.map(({ id, label, Icon }) => {
+        {NAV_ITEMS.map(({ id, labelKey, Icon }) => {
+          const label = t(labelKey);
           const isActive = id === active;
           return (
             <button
