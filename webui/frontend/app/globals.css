@@ -28,6 +28,7 @@
 
   --titlebar-h: 44px;
   --sidebar-w: 268px;
+  --rail-w: 52px;
   --msg-max: 780px;
 
   --body-size: 15px;
@@ -273,16 +274,93 @@ button {
 }
 
 .sidebar {
-  width: var(--sidebar-w);
+  width: calc(var(--sidebar-w) + var(--rail-w));
   flex-shrink: 0;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   background: var(--sidebar);
   border-right: 1px solid var(--border);
   transition: margin-left 0.22s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.sidebar.collapsed { margin-left: calc(var(--sidebar-w) * -1); }
+.sidebar.collapsed {
+  margin-left: calc((var(--sidebar-w) + var(--rail-w)) * -1);
+}
+
+/* Vertical icon rail along the sidebar's outer edge. */
+.rail {
+  width: var(--rail-w);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: var(--space-3) 0;
+  border-right: 1px solid var(--border);
+  background: color-mix(in srgb, var(--sidebar) 65%, var(--bg));
+}
+
+.rail-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.rail-btn {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.rail-btn svg { width: 19px; height: 19px; }
+
+.rail-btn:hover {
+  background: var(--surface-subtle);
+  color: var(--text);
+}
+
+.rail-btn.active {
+  background: var(--accent-bg);
+  color: var(--accent-strong);
+}
+
+.rail-btn.active::before {
+  content: "";
+  position: absolute;
+  left: calc((var(--rail-w) - 38px) / -2);
+  top: 50%;
+  transform: translateY(-50%);
+  width: 2px;
+  height: 18px;
+  border-radius: 0 2px 2px 0;
+  background: var(--accent);
+}
+
+.sidebar-content {
+  width: var(--sidebar-w);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
 
 .sidebar-head {
   display: flex;
@@ -416,38 +494,6 @@ button {
 
 .session-item:hover .session-delete { display: inline-flex; }
 .session-item .session-delete:hover { color: var(--error); }
-
-.sidebar-foot {
-  padding: var(--space-2) var(--space-3) var(--space-3);
-  border-top: 1px solid var(--border);
-}
-
-.settings-trigger {
-  width: 32px;
-  height: 30px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--accent-bg);
-  color: var(--accent-strong);
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
-}
-
-.settings-trigger svg {
-  width: 17px;
-  height: 17px;
-  flex-shrink: 0;
-}
-
-.settings-trigger:hover {
-  background: var(--accent-bg-strong);
-  border-color: var(--accent);
-  color: var(--text);
-}
 
 /* ----------------------------------------------------------------- main */
 
@@ -971,23 +1017,23 @@ button {
 
 .send-btn.stop svg { width: 13px; height: 13px; }
 
-/* -------------------------------------------------------------- settings */
+/* --------------------------------------------------------------- dialog */
 
-.settings-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding: 12vh var(--space-4) var(--space-4);
+.modal {
+  width: min(460px, calc(100vw - 2 * var(--space-4)));
+  max-width: none;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+}
+
+.modal::backdrop {
   background: rgba(0, 0, 0, 0.45);
   backdrop-filter: blur(2px);
 }
 
-.settings-panel {
-  width: min(460px, 100%);
-  max-height: 72vh;
+.modal-panel {
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -997,7 +1043,7 @@ button {
   box-shadow: 0 24px 64px var(--shadow);
 }
 
-.settings-head {
+.modal-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1006,14 +1052,72 @@ button {
   border-bottom: 1px solid var(--border);
 }
 
-.settings-title {
+.modal-title {
   margin: 0;
   font-size: var(--body-size);
   font-weight: 600;
   color: var(--text);
 }
 
+.modal-body {
+  padding: var(--space-4);
+  color: var(--muted);
+  font-size: var(--ui-size);
+  line-height: 1.6;
+}
+
+.modal-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+}
+
+.confirm-message { margin: 0; }
+
+.btn {
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-subtle);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--ui-size);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, filter 0.15s;
+}
+
+.btn:hover {
+  background: var(--surface);
+  border-color: var(--border-strong);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #17130d;
+}
+
+.btn.primary:hover { background: var(--accent-strong); }
+
+.btn.danger {
+  background: var(--error);
+  border-color: var(--error);
+  color: #1a0f0f;
+}
+
+.btn.danger:hover { filter: brightness(1.08); }
+
+/* -------------------------------------------------------------- settings */
+
 .settings-body {
+  flex: 1;
+  min-height: 0;
   padding: var(--space-2);
   overflow-y: auto;
 }
@@ -1090,6 +1194,11 @@ button {
 .sidebar-backdrop { display: none; }
 
 @media (max-width: 860px) {
+  :root {
+    --sidebar-w: 240px;
+    --rail-w: 48px;
+  }
+
   .sidebar-backdrop {
     position: absolute;
     inset: 0;
@@ -1107,7 +1216,9 @@ button {
     box-shadow: 0 0 30px var(--shadow);
   }
 
-  .sidebar.collapsed { margin-left: calc(var(--sidebar-w) * -1); }
+  .sidebar.collapsed {
+    margin-left: calc((var(--sidebar-w) + var(--rail-w)) * -1);
+  }
   .messages-inner { padding: var(--space-4) var(--space-3); }
   .composer-wrap { padding: var(--space-2) var(--space-3) var(--space-3); }
   .msg-bubble { max-width: 88%; }

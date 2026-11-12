@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import Composer from "@/components/Composer";
-import SettingsDialog from "@/components/SettingsDialog";
+import ConfirmDialog from "@/components/ConfirmDialog";
+import type { PanelId } from "@/components/IconRail";
 import Sidebar from "@/components/Sidebar";
 import TitleBar, { type StatusState } from "@/components/TitleBar";
 import Transcript from "@/components/Transcript";
@@ -80,9 +81,10 @@ export default function Home() {
   const [modelTitle, setModelTitle] = useState("Model and harness");
   const [filter, setFilter] = useState("");
   const [draft, setDraft] = useState("");
-  const [collapsed, setCollapsed] = useState(false);
+  const [activePanel, setActivePanel] = useState<PanelId>("sessions");
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [narrow, setNarrow] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [confirmRestartOpen, setConfirmRestartOpen] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [toast, setToast] = useState("");
 
@@ -185,7 +187,7 @@ export default function Home() {
       scheduleScroll();
       // On narrow screens the sidebar floats over the transcript, so it
       // gets out of the way once a conversation is picked.
-      if (window.innerWidth < 860) setCollapsed(true);
+      if (window.innerWidth < 860) setSidebarOpen(false);
     },
     [
       connectStream,
@@ -313,6 +315,7 @@ export default function Home() {
     (deadline: number) => {
       if (Date.now() > deadline) {
         setRestarting(false);
+        setConfirmRestartOpen(false);
         showToast("服务重启超时，请手动刷新页面");
         return;
       }
@@ -332,19 +335,13 @@ export default function Home() {
 
   const restartServer = useCallback(async () => {
     if (restarting) return;
-    if (
-      !window.confirm(
-        "确定要重启 SunAgent 服务吗？当前页面会短暂断开连接。",
-      )
-    ) {
-      return;
-    }
     setRestarting(true);
     showToast("正在重启服务，请稍候…");
     try {
       await api("/api/system/restart", { method: "POST", body: "{}" });
     } catch (error) {
       setRestarting(false);
+      setConfirmRestartOpen(false);
       showToast(errorMessage(error));
       return;
     }
@@ -354,6 +351,16 @@ export default function Home() {
       pollForRestart(Date.now() + 60000);
     }, 2000);
   }, [pollForRestart, restarting, showToast]);
+
+  const requestRestart = useCallback(() => {
+    setSidebarOpen(false);
+    setConfirmRestartOpen(true);
+  }, []);
+
+  const selectPanel = useCallback((id: PanelId) => {
+    setActivePanel(id);
+    setSidebarOpen(true);
+  }, []);
 
   const handleFrame = (frame: Frame) => {
     if (typeof frame.seq === "number") {
@@ -408,7 +415,7 @@ export default function Home() {
       setNarrow(window.innerWidth < 860);
     };
     sync();
-    if (window.innerWidth < 860) setCollapsed(true);
+    if (window.innerWidth < 860) setSidebarOpen(false);
     window.addEventListener("resize", sync);
     return () => window.removeEventListener("resize", sync);
   }, []);
@@ -448,13 +455,10 @@ export default function Home() {
         event.preventDefault();
         void newSession();
       }
-      if (event.key === "Escape" && settingsOpen) {
-        setSettingsOpen(false);
-      }
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [newSession, settingsOpen]);
+  }, [newSession]);
 
   useEffect(() => {
     return () => {
@@ -475,7 +479,7 @@ export default function Home() {
         status={status}
         modelChip={modelChip}
         modelTitle={modelTitle}
-        onToggleSidebar={() => setCollapsed((value) => !value)}
+        onToggleSidebar={() => setSidebarOpen((value) => !value)}
         onToggleTheme={toggleTheme}
         onNewChat={() => void newSession()}
       />
@@ -485,15 +489,17 @@ export default function Home() {
           sessions={sessions}
           activeId={activeId}
           filter={filter}
-          collapsed={collapsed}
-          backdropVisible={narrow && !collapsed}
+          activePanel={activePanel}
+          collapsed={!sidebarOpen}
+          backdropVisible={narrow && sidebarOpen}
+          onSelectPanel={selectPanel}
           onFilterChange={setFilter}
           onSelect={(id) => void selectSession(id)}
           onNewChat={() => void newSession()}
           onDelete={(session) => void deleteSession(session)}
           onRename={(session) => void renameSession(session)}
-          onOpenSettings={() => setSettingsOpen(true)}
-          onBackdropClick={() => setCollapsed(true)}
+          onRestart={requestRestart}
+          onBackdropClick={() => setSidebarOpen(false)}
         />
 
         <main className="main">
@@ -523,11 +529,17 @@ export default function Home() {
         </main>
       </div>
 
-      <SettingsDialog
-        open={settingsOpen}
-        restarting={restarting}
-        onClose={() => setSettingsOpen(false)}
-        onRestart={() => void restartServer()}
+      <ConfirmDialog
+        open={confirmRestartOpen}
+        title="重启服务"
+        message="确定要重启 SunAgent 服务吗？当前页面会短暂断开连接。"
+        confirmText="确定重启"
+        cancelText="取消"
+        busyText="正在重启…"
+        tone="danger"
+        busy={restarting}
+        onConfirm={() => void restartServer()}
+        onCancel={() => setConfirmRestartOpen(false)}
       />
 
       <div className="toast" id="toast" hidden={!toast}>
