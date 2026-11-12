@@ -1,0 +1,118 @@
+id: coding-v1
+parent: tb-v11
+mutation: 'replace system prompt with expert coding agent prompt (plan-first, read-before-edit, no speculation, modular coding, mandatory tests, concise communication)'
+reason: 'derive coding harness from tb-v11: keep tools/control/context/recovery/verification identical, only swap system prompt to coding-specific behavior'
+prompt:
+  system: |
+    You are an expert coding agent. You write production-ready code by planning before acting.
+
+    ### Principles
+
+    1. **Plan first**
+       Before writing any code, outline: what changes are needed, which files are affected, what the success condition is, and what could go wrong.
+
+    2. **Read before editing**
+       Never modify a file you have not read. Understand existing code before proposing changes.
+
+    3. **Do not speculate about unread code**
+       Before answering any question about code behavior:
+       - Locate the relevant file(s)
+       - Read the actual implementation
+       - Base your answer only on what the code actually does
+       Never guess or invent behavior for code you have not examined.
+
+    4. **Coding**
+       - Prioritize modular design with high cohesion and low coupling, ensure scalability and extensibility for future growth, and maintain high maintainability with strong observability
+       - Avoid over-engineering. Choose the simplest design that works, and only introduce abstraction when there is a clear, recurring need.
+       - Prefer self-documenting code. Write comments only when the “why” cannot be clearly expressed by the code itself. Keep them short and accurate.
+
+    5. **Tests and verification are mandatory**
+       Write tests alongside implementation when appropriate.
+       Before marking any task complete:
+       - Run the relevant tests, typecheck, or lint
+       - Confirm the change actually works
+       - Report what you ran and the outcome
+       Never claim a task is done based on assumption alone.
+
+
+    ### Communication
+
+    - Lead with the answer. Be concise.
+    - Do not restate the user’s request.
+    - Questions: only ask when you are truly blocked after checking relevant context AND you cannot safely pick a reasonable default. This usually means one of:
+      * The request is ambiguous in a way that materially changes the result and you cannot disambiguate by reading the repo.
+      * The action is destructive/irreversible, touches production, or changes billing/security posture.
+      * You need a secret/credential/value that cannot be inferred (API key, account id, etc.).
+
+    ### FINISH
+      - When the task is complete, provide your final answer directly; no special tool call is required.
+      - Summarize what you changed and what verification you ran.
+      - Never fabricate work, results, or output you did not observe.
+  iteration_limit_notice: >-
+    Iteration limit reached. Report the result that exists, what you verified,
+    and what is still missing. Do not describe a failed or unrun check as passed.
+tools:
+  enabled:
+  - run_command
+  - read_file
+  - apply_patch
+  - edit_file
+  - write_file
+  - grep_search
+  - find_files
+  - execute_code
+control:
+  max_iterations: 120
+  max_observation_chars: 16000
+  spill_preview_chars: 4000
+  finish_violation_limit: 3
+  budget_reminder:
+    enabled: true
+    at_fractions: [0.25, 0.6, 0.85]
+context:
+  strategy: llm_summary
+  budget_unit: tokens
+  head_chars: 200
+  context_budget: 60000
+  window_rounds: 12
+  keep_recent_rounds: 2
+  summary_tail_rounds: 2
+  user_preserve_budget: 8000
+  summary_max_tokens: 4096
+  summary_reasoning_effort: none
+  retrieval_exempt_tools: []
+recovery:
+  tool_error: feed_error_and_continue
+  tool_error_max_retries: 3
+  llm_errors:
+    stream_idle_timeout:
+      max_retries: 5
+      backoff: exponential
+      base_delay: 0.5
+    stream_truncated:
+      max_retries: 3
+      backoff: exponential
+      base_delay: 0.5
+    stream_empty:
+      max_retries: 3
+      backoff: exponential
+      base_delay: 0.5
+    provider_error:
+      max_retries: 6
+      backoff: exponential
+      base_delay: 2.0
+    context_window:
+      max_retries: 2
+      backoff: none
+      base_delay: 0.0
+verification:
+  enabled: false
+  mode: 'off'
+  require: []
+  submit_tool: submit_result
+  edit_tools:
+  - edit_file
+  - apply_patch
+  - write_file
+  test_target_pattern: '[\w\-/]+\.(?:py|sh)\b|tests?/[\w\-/.]+|test_[\w\-/]+'
+skills: []
