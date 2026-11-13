@@ -154,22 +154,6 @@ button {
   flex: 0 1 auto;
 }
 
-.brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--accent);
-}
-
-.brand-mark { width: 17px; height: 17px; }
-
-.brand-name {
-  font-size: var(--label-size);
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--text);
-}
-
 .titlebar-title {
   font-size: var(--label-size);
   font-weight: 500;
@@ -215,20 +199,6 @@ button {
 @keyframes pulse {
   0%, 100% { opacity: 0.35; }
   50% { opacity: 1; }
-}
-
-.meta-chip {
-  font-family: var(--font-mono);
-  font-size: var(--meta-size);
-  color: var(--muted);
-  background: var(--surface-subtle);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  padding: 3px 9px;
-  max-width: 34vw;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .icon-btn {

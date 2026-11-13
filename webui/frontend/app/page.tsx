@@ -542,11 +542,6 @@ export default function Home() {
   const modelLabel =
     models.find((model) => model.id === activeModel)?.label ||
     activeModel;
-  const modelChip = [modelLabel, activeHarness].filter(Boolean).join(" · ");
-  const modelTitle = t("modelHarnessTitle", {
-    model: modelLabel || "?",
-    harness: activeHarness || "?",
-  });
   const displayTitle =
     title === NEW_SESSION_TITLE ? t("newConversation") : title;
 
@@ -555,8 +550,6 @@ export default function Home() {
       <TitleBar
         title={displayTitle}
         status={status}
-        modelChip={modelChip}
-        modelTitle={modelTitle}
         onToggleSidebar={() => setSidebarOpen((value) => !value)}
         onToggleTheme={toggleTheme}
         onNewChat={() => void newSession()}

@@ -2,7 +2,7 @@
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
 
-import { BrandMark, MenuIcon, PlusIcon, ThemeIcon } from "./Icons";
+import { MenuIcon, PlusIcon, ThemeIcon } from "./Icons";
 
 export interface StatusState {
   label: MessageKey;
@@ -12,8 +12,6 @@ export interface StatusState {
 interface TitleBarProps {
   title: string;
   status: StatusState | null;
-  modelChip: string;
-  modelTitle: string;
   onToggleSidebar: () => void;
   onToggleTheme: () => void;
   onNewChat: () => void;
@@ -22,8 +20,6 @@ interface TitleBarProps {
 export default function TitleBar({
   title,
   status,
-  modelChip,
-  modelTitle,
   onToggleSidebar,
   onToggleTheme,
   onNewChat,
@@ -42,10 +38,6 @@ export default function TitleBar({
         >
           <MenuIcon />
         </button>
-        <span className="brand">
-          <BrandMark />
-          <span className="brand-name">SunAgent</span>
-        </span>
       </div>
 
       <div className="titlebar-center">
@@ -63,9 +55,6 @@ export default function TitleBar({
       </div>
 
       <div className="titlebar-right">
-        <span className="meta-chip" id="modelChip" title={modelTitle}>
-          {modelChip}
-        </span>
         <button
           className="icon-btn"
           id="btnTheme"

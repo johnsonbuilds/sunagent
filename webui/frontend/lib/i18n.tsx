@@ -28,7 +28,6 @@ const en = {
   toggleSidebar: "Toggle sidebar",
   toggleTheme: "Toggle theme",
   newConversationShortcut: "New conversation (Ctrl+K)",
-  modelHarnessTitle: "model {model} · harness {harness}",
   modelPickerTitle: "Select model",
   harnessPickerTitle: "Select harness",
   harnessLockedHint:
@@ -98,7 +97,6 @@ const zh: Record<MessageKey, string> = {
   toggleSidebar: "切换侧边栏",
   toggleTheme: "切换主题",
   newConversationShortcut: "新会话 (Ctrl+K)",
-  modelHarnessTitle: "模型 {model} · 执行框架 {harness}",
   modelPickerTitle: "选择模型",
   harnessPickerTitle: "选择执行框架",
   harnessLockedHint: "会话开始后执行框架不可更改，如需更换请新建会话。",

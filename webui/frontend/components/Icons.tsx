@@ -14,27 +14,6 @@ export function MenuIcon() {
   );
 }
 
-export function BrandMark() {
-  return (
-    <svg className="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
-      <circle
-        cx="16"
-        cy="16"
-        r="9"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-      />
-      <path
-        d="M16 3v5M16 24v5M3 16h5M24 16h5"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
 export function ThemeIcon() {
   return (
     <svg
