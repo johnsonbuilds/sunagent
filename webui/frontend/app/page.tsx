@@ -214,13 +214,12 @@ export default function Home() {
 
   const newSession = useCallback(async () => {
     try {
-      const body = JSON.stringify({
-        model: activeModel || defaultsRef.current.model || undefined,
-        harness: activeHarness || defaultsRef.current.harness || undefined,
-      });
+      // A new conversation starts from the service defaults (the
+      // model.json default entry and the startup harness), never from
+      // the conversation that happens to be selected right now.
       const session = await api<SessionSummary>("/api/sessions", {
         method: "POST",
-        body,
+        body: "{}",
       });
       await refreshSessions();
       await selectSession(session.id);
@@ -228,7 +227,7 @@ export default function Home() {
     } catch (error) {
       showToast(errorMessage(error));
     }
-  }, [activeHarness, activeModel, refreshSessions, selectSession, showToast]);
+  }, [refreshSessions, selectSession, showToast]);
 
   const changeModel = useCallback(
     async (model: string) => {
