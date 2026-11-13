@@ -176,6 +176,47 @@ class SessionStoreTests(unittest.TestCase):
             session.append_user_message("Explain the agent loop to me")
             self.assertEqual(session.title, "Explain the agent loop to me")
 
+    def test_model_and_harness_round_trip_through_disk(self) -> None:
+        with TemporaryDirectory() as root:
+            store = SessionStore(Path(root))
+            session = store.create(model="fast", harness="coding-v1")
+            session.append_user_message("Hello there")
+            store.save(session)
+
+            reloaded = SessionStore(Path(root))
+            reloaded.load()
+            restored = reloaded.get(session.id)
+            self.assertIsNotNone(restored)
+            self.assertEqual(restored.model, "fast")
+            self.assertEqual(restored.harness, "coding-v1")
+            self.assertTrue(restored.harness_locked)
+
+    def test_a_legacy_record_without_a_selection_loads_as_unset(self) -> None:
+        with TemporaryDirectory() as root:
+            path = Path(root) / "sess-legacy.json"
+            path.write_text(json.dumps({
+                "id": "sess-legacy", "title": "Old",
+                "created_at": 0.0, "updated_at": 0.0,
+                "segments": [{"id": "s1", "type": "user", "content": "hi"}],
+                "messages": [],
+            }), encoding="utf-8")
+
+            store = SessionStore(Path(root))
+            store.load()
+            restored = store.get("sess-legacy")
+
+            self.assertIsNotNone(restored)
+            self.assertIsNone(restored.model)
+            self.assertIsNone(restored.harness)
+            self.assertTrue(restored.harness_locked)
+
+    def test_an_empty_session_is_not_harness_locked(self) -> None:
+        with TemporaryDirectory() as root:
+            store = SessionStore(Path(root))
+            session = store.create()
+
+            self.assertFalse(session.harness_locked)
+
     def test_sessions_are_listed_newest_first(self) -> None:
         with TemporaryDirectory() as root:
             store = SessionStore(Path(root))

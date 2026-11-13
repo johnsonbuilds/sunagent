@@ -1,4 +1,6 @@
 .env
+# May contain provider secrets; keep the example under version control.
+model.json
 .venv/
 __pycache__/
 *.py[cod]

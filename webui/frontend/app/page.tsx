@@ -13,6 +13,8 @@ import { useI18n } from "@/lib/i18n";
 import type {
   DeltaFrame,
   Frame,
+  HarnessOption,
+  ModelOption,
   RuntimeConfig,
   Segment,
   SessionDetail,
@@ -82,10 +84,11 @@ export default function Home() {
   const [busy, setBusy] = useState(false);
   const [title, setTitle] = useState(NEW_SESSION_TITLE);
   const [status, setStatus] = useState<StatusState | null>(null);
-  const [modelInfo, setModelInfo] = useState({
-    model: "",
-    harness: "",
-  });
+  const [models, setModels] = useState<ModelOption[]>([]);
+  const [harnesses, setHarnesses] = useState<HarnessOption[]>([]);
+  const [activeModel, setActiveModel] = useState("");
+  const [activeHarness, setActiveHarness] = useState("");
+  const [harnessLocked, setHarnessLocked] = useState(false);
   const [filter, setFilter] = useState("");
   const [draft, setDraft] = useState("");
   const [activePanel, setActivePanel] = useState<PanelId>("sessions");
@@ -104,6 +107,7 @@ export default function Home() {
   const toastTimerRef = useRef<number | null>(null);
   const restartTimerRef = useRef<number | null>(null);
   const bootedRef = useRef(false);
+  const defaultsRef = useRef({ model: "", harness: "" });
   const handleFrameRef = useRef<(frame: Frame) => void>(() => {});
 
   const showToast = useCallback((message: string) => {
@@ -185,6 +189,9 @@ export default function Home() {
         );
         setTitle(detail.title || NEW_SESSION_TITLE);
         setBlocks(detail.segments || []);
+        setActiveModel(detail.model || defaultsRef.current.model);
+        setActiveHarness(detail.harness || defaultsRef.current.harness);
+        setHarnessLocked(Boolean(detail.harness_locked));
       } catch (error) {
         showToast(errorMessage(error));
         return;
@@ -207,9 +214,13 @@ export default function Home() {
 
   const newSession = useCallback(async () => {
     try {
+      const body = JSON.stringify({
+        model: activeModel || defaultsRef.current.model || undefined,
+        harness: activeHarness || defaultsRef.current.harness || undefined,
+      });
       const session = await api<SessionSummary>("/api/sessions", {
         method: "POST",
-        body: "{}",
+        body,
       });
       await refreshSessions();
       await selectSession(session.id);
@@ -217,7 +228,44 @@ export default function Home() {
     } catch (error) {
       showToast(errorMessage(error));
     }
-  }, [refreshSessions, selectSession, showToast]);
+  }, [activeHarness, activeModel, refreshSessions, selectSession, showToast]);
+
+  const changeModel = useCallback(
+    async (model: string) => {
+      if (!activeId || model === activeModel) return;
+      const previous = activeModel;
+      setActiveModel(model);
+      try {
+        await api(`/api/sessions/${activeId}`, {
+          method: "PATCH",
+          body: JSON.stringify({ model }),
+        });
+      } catch (error) {
+        setActiveModel(previous);
+        showToast(errorMessage(error));
+      }
+    },
+    [activeId, activeModel, showToast],
+  );
+
+  const changeHarness = useCallback(
+    async (harness: string) => {
+      if (!activeId || harness === activeHarness) return;
+      const previous = activeHarness;
+      setActiveHarness(harness);
+      try {
+        await api(`/api/sessions/${activeId}`, {
+          method: "PATCH",
+          body: JSON.stringify({ harness }),
+        });
+        setHarnessLocked(false);
+      } catch (error) {
+        setActiveHarness(previous);
+        showToast(errorMessage(error));
+      }
+    },
+    [activeHarness, activeId, showToast],
+  );
 
   const renameSession = useCallback(
     async (session: SessionSummary) => {
@@ -288,6 +336,8 @@ export default function Home() {
           body: JSON.stringify({ message: text }),
         });
         updateBusy(true);
+        // The first message fixes the harness for this conversation.
+        setHarnessLocked(true);
       } catch (error) {
         updateBusy(false);
         showToast(errorMessage(error));
@@ -380,6 +430,7 @@ export default function Home() {
     switch (frame.type) {
       case "run.started":
         updateBusy(true);
+        setHarnessLocked(true);
         break;
       case "delta":
         setBlocks((list) => appendDelta(list, frame));
@@ -436,13 +487,23 @@ export default function Home() {
     void (async () => {
       try {
         const config = await api<RuntimeConfig>("/api/config");
-        setModelInfo({
-          model: config.model || "",
-          harness: config.harness || "",
-        });
+        const modelList = config.models || [];
+        const harnessList = config.harnesses || [];
+        const defaultModel = config.default_model || modelList[0]?.id || "";
+        const defaultHarness =
+          config.default_harness || harnessList[0]?.id || "";
+        setModels(modelList);
+        setHarnesses(harnessList);
+        setActiveModel(defaultModel);
+        setActiveHarness(defaultHarness);
+        defaultsRef.current = {
+          model: defaultModel,
+          harness: defaultHarness,
+        };
         if (config.error) showToast(config.error);
       } catch {
-        setModelInfo({ model: "", harness: "" });
+        setModels([]);
+        setHarnesses([]);
       }
 
       try {
@@ -478,12 +539,13 @@ export default function Home() {
     };
   }, [disconnectStream]);
 
-  const modelChip = [modelInfo.model, modelInfo.harness]
-    .filter(Boolean)
-    .join(" · ");
+  const modelLabel =
+    models.find((model) => model.id === activeModel)?.label ||
+    activeModel;
+  const modelChip = [modelLabel, activeHarness].filter(Boolean).join(" · ");
   const modelTitle = t("modelHarnessTitle", {
-    model: modelInfo.model || "?",
-    harness: modelInfo.harness || "?",
+    model: modelLabel || "?",
+    harness: activeHarness || "?",
   });
   const displayTitle =
     title === NEW_SESSION_TITLE ? t("newConversation") : title;
@@ -538,9 +600,18 @@ export default function Home() {
             value={draft}
             busy={busy}
             inputRef={inputRef}
+            modelId={activeModel}
+            modelLabel={modelLabel || "—"}
+            harnessId={activeHarness}
+            harnessLabel={activeHarness || "—"}
+            harnessLocked={harnessLocked}
+            models={models}
+            harnesses={harnesses}
             onChange={setDraft}
             onSend={() => void send()}
             onStop={() => void stop()}
+            onModelChange={(id) => void changeModel(id)}
+            onHarnessChange={(id) => void changeHarness(id)}
           />
         </main>
       </div>

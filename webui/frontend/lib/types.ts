@@ -32,15 +32,32 @@ export interface SessionSummary {
   created_at: number;
   updated_at: number;
   busy?: boolean;
+  model?: string | null;
+  harness?: string | null;
+  harness_locked?: boolean;
 }
 
 export interface SessionDetail extends SessionSummary {
   segments?: Segment[];
 }
 
+export interface ModelOption {
+  id: string;
+  label: string;
+  model_id: string;
+}
+
+export interface HarnessOption {
+  id: string;
+}
+
 export interface RuntimeConfig {
   model?: string;
   harness?: string;
+  models?: ModelOption[];
+  default_model?: string;
+  harnesses?: HarnessOption[];
+  default_harness?: string;
   stream?: boolean;
   tools?: string[];
   error?: string | null;

@@ -1,0 +1,19 @@
+{
+  "default": "main",
+  "models": [
+    {
+      "id": "main",
+      "label": "DeepSeek Chat",
+      "base_url": "https://api.deepseek.com/v1",
+      "api_key": "${DEEPSEEK_API_KEY}",
+      "model_id": "deepseek-chat"
+    },
+    {
+      "id": "fast",
+      "label": "Fast",
+      "base_url": "https://api.example.com/v1",
+      "api_key": "${FAST_API_KEY}",
+      "model_id": "fast-model"
+    }
+  ]
+}

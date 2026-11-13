@@ -18,6 +18,8 @@ from .loader import (
     REPO_HARNESSES_DIR,
     default_harness,
     from_dict,
+    harnesses_dir,
+    list_harnesses,
     load_harness,
     load_named_harness,
     manifest_candidates,
@@ -79,6 +81,7 @@ __all__ = [
     "DEFAULT_USER_PRESERVE_BUDGET", "DEFAULT_SUMMARY_MAX_TOKENS",
     "DEFAULT_SUMMARIZER_INPUT_CAP_CHARS", "DEFAULT_RETRIEVAL_EXEMPT_TOOLS",
     "DEFAULT_SUBMIT_TOOL", "DEFAULT_EDIT_TOOLS", "DEFAULT_TEST_TARGET_PATTERN",
-    "default_harness", "feed_error_and_continue", "from_dict", "load_harness",
-    "load_named_harness", "manifest_candidates", "resolve_harness",
+    "default_harness", "feed_error_and_continue", "from_dict", "harnesses_dir",
+    "list_harnesses", "load_harness", "load_named_harness",
+    "manifest_candidates", "resolve_harness",
 ]

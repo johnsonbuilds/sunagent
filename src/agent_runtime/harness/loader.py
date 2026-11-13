@@ -7,6 +7,7 @@ pulls the research tooling into a runtime process.
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Mapping
 from functools import lru_cache
@@ -56,6 +57,8 @@ from .schema import (
 # are also looked up relative to the repository root: the package can
 # run from a directory other than the project root.
 REPO_HARNESSES_DIR = Path(__file__).resolve().parents[3] / "harnesses"
+
+logger = logging.getLogger(__name__)
 
 
 def _positive_int(value: Any, label: str, default: int) -> int:
@@ -415,6 +418,36 @@ def manifest_candidates(harness_id: str) -> list[Path]:
     first, then the repository's own ``harnesses/``."""
     return [Path("harnesses") / f"{harness_id}.yaml",
             REPO_HARNESSES_DIR / f"{harness_id}.yaml"]
+
+
+def harnesses_dir() -> Path:
+    """The directory a harness listing scans.
+
+    The same precedence as :func:`manifest_candidates`: a ``harnesses/``
+    directory in the working directory wins over the repository's own.
+    """
+    local = Path("harnesses")
+    return local if local.is_dir() else REPO_HARNESSES_DIR
+
+
+def list_harnesses() -> list[HarnessSpec]:
+    """Every selectable harness, sorted by id.
+
+    Only ``harnesses/*.yaml`` is scanned — never subdirectories — so the
+    archived manifests under ``harnesses/archived/`` stay out of the
+    picker.  A manifest that fails to load is logged and skipped instead
+    of hiding the rest of the list.
+    """
+    directory = harnesses_dir()
+    if not directory.is_dir():
+        return []
+    specs: list[HarnessSpec] = []
+    for path in sorted(directory.glob("*.yaml")):
+        try:
+            specs.append(load_harness(path))
+        except HarnessError as exc:
+            logger.warning("harness.list.skipped path=%s error=%s", path, exc)
+    return sorted(specs, key=lambda spec: spec.id)
 
 
 def load_named_harness(harness_id: str) -> HarnessSpec:

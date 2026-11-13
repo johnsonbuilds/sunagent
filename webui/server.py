@@ -10,11 +10,11 @@ Endpoints:
 
     GET    /                          the Next.js static export (index.html)
     GET    /api/health                liveness probe
-    GET    /api/config                model, harness, and tool configuration
+    GET    /api/config                model catalog, harnesses, tool defaults
     GET    /api/sessions              list sessions, newest first
-    POST   /api/sessions              create a session
+    POST   /api/sessions              create a session (model/harness optional)
     GET    /api/sessions/{id}         one session with its transcript
-    PATCH  /api/sessions/{id}         rename a session
+    PATCH  /api/sessions/{id}         rename, switch model, pick harness
     DELETE /api/sessions/{id}         delete a session
     POST   /api/sessions/{id}/messages  send a message, start a turn
     POST   /api/sessions/{id}/cancel    stop the running turn
@@ -52,12 +52,21 @@ from agent_runtime.agent import RunTrace, run_turn
 from agent_runtime.runtime_config import RuntimeConfig
 from agent_runtime.channels.webui import WebUIChannel
 from agent_runtime.events import EventEmitter
-from agent_runtime.harness import HarnessError, resolve_harness
-from agent_runtime.providers import OpenAICompatibleLLM
-from agent_runtime.tools import create_default_registry
+from agent_runtime.harness import (
+    HarnessError,
+    HarnessSpec,
+    list_harnesses,
+    resolve_harness,
+)
+from agent_runtime.model_catalog import (
+    ModelCatalog,
+    ModelCatalogError,
+    load_model_catalog,
+)
 
 from .auth import BasicAuthMiddleware, credentials_from_env
 from .sessions import STREAM_STOP, Session, SessionStore
+from .turn_context import TurnSnapshot, resolve_turn
 
 
 logger = logging.getLogger(__name__)
@@ -151,58 +160,60 @@ class MessageRequest(BaseModel):
     message: str = Field(default="", max_length=100_000)
 
 
-class RenameRequest(BaseModel):
-    title: str = Field(default="", max_length=200)
+class PatchSessionRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=200)
+    model: str | None = None
+    harness: str | None = None
 
 
 class CreateSessionRequest(BaseModel):
     title: str = Field(default="", max_length=200)
+    model: str | None = None
+    harness: str | None = None
 
 
 class AgentRunner:
-    """The LLM, tools, and harness shared by every web UI session.
+    """Defaults shared by every web UI session.
 
-    The provider is created lazily so the page still loads (and can
-    report a helpful error) when no API key is configured.
+    The model catalog and the harness list are read once at startup.
+    Per-turn objects are built by :func:`webui.turn_context.resolve_turn`
+    when a turn starts, so a session can switch models without touching
+    a turn that is already running.
     """
 
     def __init__(self, runtime: RuntimeConfig | None = None) -> None:
         self.runtime = runtime if runtime is not None else RuntimeConfig.from_env()
-        self.harness = self._resolve_harness()
-        self.tools = create_default_registry(enabled=list(self.harness.tools.enabled))
+        self.catalog: ModelCatalog = load_model_catalog()
+        self.harness: HarnessSpec = self._resolve_harness()
+        listed = list_harnesses()
+        if not any(spec.id == self.harness.id for spec in listed):
+            # The default may come from a path outside ``harnesses/``; it
+            # still belongs in the picker so the current value is visible.
+            listed = [self.harness, *listed]
+        self.harnesses: list[HarnessSpec] = listed
         self.stream = self.runtime.streaming
-        self._llm: OpenAICompatibleLLM | None = None
-        self._llm_error: str | None = None
 
     @staticmethod
-    def _resolve_harness():
+    def _resolve_harness() -> HarnessSpec:
         try:
             return resolve_harness(os.getenv("AGENT_RUNTIME_HARNESS"))
         except HarnessError as exc:
             logger.warning("webui.harness.invalid error=%s", exc)
             return resolve_harness(None)
 
-    @property
-    def llm(self) -> OpenAICompatibleLLM:
-        if self._llm is None:
-            try:
-                self._llm = OpenAICompatibleLLM(config=self.runtime)
-                self._llm_error = None
-            except Exception as exc:
-                self._llm_error = str(exc)
-                raise
-        return self._llm
-
     def status(self) -> dict[str, Any]:
-        model = os.getenv("MODEL_ID", "")
-        if not self._llm_error and self._llm is not None:
-            model = self._llm.model
+        """The browser-safe startup view: ids and labels, never secrets."""
+        default_entry = self.catalog.default_entry
         return {
-            "model": model,
+            "model": default_entry.model_id,
             "harness": self.harness.id,
+            "models": self.catalog.public(),
+            "default_model": self.catalog.default,
+            "harnesses": [{"id": spec.id} for spec in self.harnesses],
+            "default_harness": self.harness.id,
             "stream": self.stream,
             "tools": list(self.harness.tools.enabled),
-            "error": self._llm_error,
+            "error": None,
         }
 
 
@@ -325,25 +336,54 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
     async def create_session(
             payload: CreateSessionRequest | None = None) -> dict[str, Any]:
         title = payload.title if payload is not None else None
-        session = sessions.create(title or None)
+        model = payload.model if payload is not None else None
+        harness = payload.harness if payload is not None else None
+        if model:
+            _require_model(runner.catalog, model)
+        if harness:
+            _require_harness(harness)
+        # New sessions always carry explicit ids, so the browser does not
+        # have to guess the defaults and the first turn needs no backfill.
+        session = sessions.create(
+            title or None,
+            model=model or runner.catalog.default,
+            harness=harness or runner.harness.id,
+        )
         return session.summary()
 
     @app.get("/api/sessions/{session_id}")
     async def get_session(session_id: str) -> dict[str, Any]:
-        session = _require_session(sessions, session_id)
-        return {"id": session.id, "title": session.title,
-                "created_at": session.created_at,
-                "updated_at": session.updated_at,
-                "segments": session.segments,
-                "busy": session.busy}
+        return _session_detail(_require_session(sessions, session_id))
 
     @app.patch("/api/sessions/{session_id}")
-    async def rename_session(session_id: str,
-                             payload: RenameRequest) -> dict[str, Any]:
-        session = sessions.rename(session_id, payload.title)
-        if session is None:
-            raise HTTPException(status_code=404, detail="session not found")
-        return session.summary()
+    async def patch_session(session_id: str,
+                            payload: PatchSessionRequest) -> dict[str, Any]:
+        session = _require_session(sessions, session_id)
+        harness_changed = bool(
+            payload.harness and payload.harness != session.harness)
+        # Validate everything before mutating, so a rejected request
+        # leaves the session untouched.
+        if payload.model:
+            _require_model(runner.catalog, payload.model)
+        if harness_changed:
+            # The harness owns the system prompt and tool set, so it is
+            # only pickable before the first turn. The model can change
+            # at any time; it takes effect on the next turn.
+            if session.harness_locked:
+                raise HTTPException(
+                    status_code=409,
+                    detail="harness is locked for this session")
+            _require_harness(payload.harness or "")
+
+        if payload.title is not None:
+            session.title = payload.title.strip() or session.title
+        if payload.model:
+            session.model = payload.model
+        if harness_changed:
+            session.harness = payload.harness
+        session.updated_at = time.time()
+        sessions.save(session)
+        return _session_detail(session)
 
     @app.delete("/api/sessions/{session_id}")
     async def delete_session(session_id: str) -> dict[str, Any]:
@@ -361,19 +401,26 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
         if session.busy:
             raise HTTPException(status_code=409, detail="session is busy")
 
+        # Resolve the session's ids into an immutable snapshot before the
+        # user message is recorded: a bad catalog entry is a 4xx, not a
+        # dangling empty turn. The snapshot is all the turn will see.
+        session.model = session.model or runner.catalog.default
+        session.harness = session.harness or runner.harness.id
+        snapshot = _resolve_snapshot(session, runner)
+
         session.append_user_message(message)
         sessions.save(session)
 
         run_id = f"run-{uuid4().hex[:12]}"
         trace = RunTrace(run_id=run_id,
                          output_path=_trace_path(run_id),
-                         harness=runner.harness)
+                         harness=snapshot.harness)
         events = EventEmitter(run_id=trace.run_id)
         channel = WebUIChannel(sink=_session_sink(session))
         events.subscribe(channel)
         session.busy = True
 
-        task = asyncio.create_task(_execute(session, message, runner, trace,
+        task = asyncio.create_task(_execute(session, message, snapshot, trace,
                                              events, channel, sessions))
         session.task = task
         return {"run_id": trace.run_id}
@@ -439,15 +486,21 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
     return app
 
 
-async def _execute(session: Session, message: str, runner: AgentRunner,
+async def _execute(session: Session, message: str, snapshot: TurnSnapshot,
                    trace: RunTrace, events: EventEmitter,
                    channel: WebUIChannel, store: SessionStore) -> None:
-    """Run one agent turn for a session and report the outcome."""
+    """Run one agent turn for a session and report the outcome.
+
+    ``snapshot`` is captured when the turn starts; nothing here reads the
+    session's current model or harness, so a switch made while the turn
+    is running cannot affect it.
+    """
     try:
-        await run_turn(message, runner.llm, runner.tools,
+        await run_turn(message, snapshot.llm, snapshot.tools,
                        conversation=session.conversation,
-                       harness=runner.harness, stream=runner.stream,
-                       trace=trace, events=events, runtime=runner.runtime)
+                       harness=snapshot.harness, stream=snapshot.stream,
+                       trace=trace, events=events, runtime=snapshot.runtime,
+                       summarizer_factory=snapshot.summarizer_factory)
     except asyncio.CancelledError:
         session.bus.publish({"type": "run.error", "stage": "cancelled",
                              "error": "run cancelled"})
@@ -463,6 +516,42 @@ async def _execute(session: Session, message: str, runner: AgentRunner,
         session.updated_at = time.time()
         session.task = None
         store.save(session)
+
+
+def _session_detail(session: Session) -> dict[str, Any]:
+    return {**session.summary(), "segments": session.segments}
+
+
+def _require_model(catalog: ModelCatalog, model_id: str) -> None:
+    try:
+        catalog.require(model_id)
+    except ModelCatalogError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _require_harness(harness_id: str) -> HarnessSpec:
+    try:
+        return resolve_harness(harness_id)
+    except HarnessError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _resolve_snapshot(session: Session, runner: AgentRunner) -> TurnSnapshot:
+    try:
+        return resolve_turn(catalog=runner.catalog, model_id=session.model,
+                            harness_id=session.harness,
+                            base_runtime=runner.runtime)
+    except (ModelCatalogError, HarnessError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        # The exception text may carry endpoint details; log only the
+        # type and keep the browser message generic.
+        logger.warning("webui.snapshot.failed session=%s model=%s error=%s",
+                       session.id, session.model, type(exc).__name__)
+        raise HTTPException(
+            status_code=503,
+            detail="could not create the model client; check model.json",
+        ) from None
 
 
 def _require_session(store: SessionStore, session_id: str) -> Session:

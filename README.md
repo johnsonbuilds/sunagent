@@ -145,6 +145,7 @@ Context strategies are `full_history`, `compact_observations` (deterministic fol
 | Variable | Default | Effect |
 |---|---|---|
 | `LLM_API_KEY` / `LLM_BASE_URL` / `MODEL_ID` | — | provider connection |
+| `AGENT_RUNTIME_MODEL_CATALOG` | `./model.json` | per-model endpoints for the Web UI picker |
 | `AGENT_RUNTIME_HARNESS` | `common-v0` | default harness |
 | `AGENT_RUNTIME_HOME` | `<repo>/workspace` | sessions, traces, runtime state |
 | `AGENT_RUNTIME_WORKSPACE` | cwd | agent sandbox for file tools and scripts |

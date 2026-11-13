@@ -122,6 +122,11 @@ class Session:
     bus: FrameBus = field(default_factory=FrameBus)
     busy: bool = False
     task: Any = None
+    # Catalog id and harness id, not endpoint settings: the secret never
+    # reaches a session file. Both are resolved to a per-turn snapshot
+    # when a turn starts (see ``webui.turn_context``).
+    model: str | None = None
+    harness: str | None = None
 
     @property
     def is_empty(self) -> bool:
@@ -153,15 +158,27 @@ class Session:
         """Copy the runtime conversation into the persistable form."""
         self.messages = [dict(message) for message in self.conversation.messages]
 
+    @property
+    def harness_locked(self) -> bool:
+        """Whether the harness choice is frozen for this session.
+
+        The harness shapes the system prompt and the tool set, so it may
+        only be picked while the session is still empty — before the
+        first turn. After that only the model can change.
+        """
+        return not self.is_empty
+
     def summary(self) -> dict[str, Any]:
         return {"id": self.id, "title": self.title,
                 "created_at": self.created_at, "updated_at": self.updated_at,
-                "busy": self.busy}
+                "busy": self.busy, "model": self.model,
+                "harness": self.harness, "harness_locked": self.harness_locked}
 
     def to_record(self) -> dict[str, Any]:
         return {"id": self.id, "title": self.title,
                 "created_at": self.created_at, "updated_at": self.updated_at,
-                "segments": self.segments, "messages": self.messages}
+                "segments": self.segments, "messages": self.messages,
+                "model": self.model, "harness": self.harness}
 
 
 def _derive_title(message: str) -> str:
@@ -232,7 +249,9 @@ class SessionStore:
     def get(self, session_id: str) -> Session | None:
         return self._sessions.get(session_id)
 
-    def create(self, title: str | None = None) -> Session:
+    def create(self, title: str | None = None, *,
+               model: str | None = None,
+               harness: str | None = None) -> Session:
         """Start a session in memory.
 
         Nothing is written to disk yet: the session earns its file the
@@ -243,6 +262,7 @@ class SessionStore:
             id="sess-" + time.strftime("%Y%m%d-%H%M%S", time.localtime(now)),
             title=title or "New conversation",
             created_at=now, updated_at=now,
+            model=model, harness=harness,
         )
         self._sessions[session.id] = session
         return session
@@ -301,6 +321,12 @@ def _session_from_record(record: dict[str, Any]) -> Session | None:
                           updated_at=float(record.get("updated_at", 0.0)))
     except (KeyError, TypeError, ValueError):
         return None
+    model = record.get("model")
+    if isinstance(model, str) and model.strip():
+        session.model = model.strip()
+    harness = record.get("harness")
+    if isinstance(harness, str) and harness.strip():
+        session.harness = harness.strip()
     segments = record.get("segments")
     if isinstance(segments, list):
         session.segments = [segment for segment in segments

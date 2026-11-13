@@ -83,17 +83,66 @@ arrives.  Otherwise every "new chat" click would leave a stub behind
 and the sidebar would fill up with blank conversations.  See
 [storage.md](storage.md) for the full map of what the project writes.
 
+### Model and harness per session
+
+Each session stores a catalog id (`model`) and a harness id (`harness`),
+not endpoint settings, so the session file never contains a secret.
+
+* The **model** can be switched at any time. It is read when the next
+  turn starts, so a turn that is already running keeps using the model it
+  started with.
+* The **harness** can only be picked while the session is still empty —
+  before its first message. It shapes the system prompt and the tool set,
+  so changing it later would not retrofit the conversation. A `PATCH`
+  that tries to change a locked harness returns `409`.
+
+At the start of every turn the two ids are resolved into an immutable
+`webui.turn_context.TurnSnapshot` (provider, harness, tools, runtime),
+which the turn uses for its whole lifetime.
+
+### `model.json`
+
+The model catalog is a JSON file (default `./model.json`, overridable with
+`AGENT_RUNTIME_MODEL_CATALOG`). Start from `model.json.example`:
+
+```json
+{
+  "default": "main",
+  "models": [
+    {
+      "id": "main",
+      "label": "DeepSeek Chat",
+      "base_url": "https://api.deepseek.com/v1",
+      "api_key": "${DEEPSEEK_API_KEY}",
+      "model_id": "deepseek-chat"
+    }
+  ]
+}
+```
+
+`id` is what the session stores and the picker shows; `model_id` is sent
+to the provider. `api_key` may be a literal secret or an `${ENV_VAR}` /
+`env:ENV_VAR` reference, expanded at startup. Without a `model.json` the
+runtime builds a single-entry catalog from `MODEL_ID`, `LLM_BASE_URL` and
+`LLM_API_KEY`.
+
+Only ids and labels cross the HTTP boundary: `/api/config` never returns
+`base_url` or `api_key`.
+
+Harness choices come from `harnesses/*.yaml` — a flat scan, so manifests
+under `harnesses/archived/` never appear in the picker.
+
 ## 4. HTTP API
 
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/` | the single page app |
 | `GET` | `/api/health` | liveness probe |
-| `GET` | `/api/config` | model, harness, and enabled tools |
+| `GET` | `/api/config` | default model/harness, catalogs, and enabled tools |
 | `GET` | `/api/sessions` | list sessions, newest first |
-| `POST` | `/api/sessions` | create a session |
-| `GET` | `/api/sessions/{id}` | one session with its transcript |
-| `PATCH` | `/api/sessions/{id}` | rename a session |
+| `POST` | `/api/sessions` | create a session (optional `model` / `harness`) |
+| `GET` | `/api/sessions/{id}` | one session with its transcript and selection |
+| `PATCH` | `/api/sessions/{id}` | rename, switch `model`, or pick a `harness` |
 | `DELETE` | `/api/sessions/{id}` | delete a session |
 | `POST` | `/api/sessions/{id}/messages` | send a message, start a turn |
 | `POST` | `/api/sessions/{id}/cancel` | stop the running turn |
