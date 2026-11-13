@@ -12,12 +12,20 @@ under one root:
     <home>/
       sessions/   one JSON document per browser conversation
       traces/     one JSONL file per agent turn
+      memory/     persistent cross-session memory (AGENT_RUNTIME_MEMORY)
 
 ``<home>`` is ``AGENT_RUNTIME_HOME`` when set, and ``workspace/`` next
 to the project root otherwise.
 
+Persistent memory sits here rather than in the sandbox because it is
+durable state: it has to survive a change of sandbox, and a sandbox
+narrowed to a subdirectory must not hide it.  ``memory.memory_root()``
+resolves the directory (``AGENT_RUNTIME_MEMORY_DIR`` overrides it); the
+model is still told a *sandbox-relative* path, because the file tools
+refuse anything outside the sandbox.
+
 What this module does *not* own is the agent's sandbox (``AGENT_RUNTIME_WORKSPACE``
-with its ``.outputs/`` spills, ``.scripts/`` and persistent-memory tree) and the
+with its ``.outputs/`` spills and ``.scripts/``) and the
 versioned research artefacts (``harnesses/``, ``evaluation/records/``).  Those
 are deliberately separate: the sandbox is the agent's own working area and
 its paths are part of the model's contract, while the research artefacts

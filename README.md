@@ -138,7 +138,7 @@ Scripts are saved under `.scripts/`; long observations spill to `.outputs/`.
 
 ## Context, Memory, Skills
 
-Context strategies are `full_history`, `compact_observations` (deterministic folding over budget), and `llm_summary` (structured LLM snapshot plus a verbatim recent tail). Set `AGENT_RUNTIME_MEMORY=1` to inject a `workspace/memory/` listing; the agent maintains it with file tools. A harness declaring `skills: [coder]` loads `skills/coder/SKILL.md` into the prompt.
+Context strategies are `full_history`, `compact_observations` (deterministic folding over budget), and `llm_summary` (structured LLM snapshot plus a verbatim recent tail). Set `AGENT_RUNTIME_MEMORY=1` to inject a `workspace/memory/` listing; the agent maintains it with file tools. The directory lives under the runtime home (`<home>/memory`), not under the sandbox root, so it survives a change of `AGENT_RUNTIME_WORKSPACE`; the prompt spells the paths relative to the sandbox because the file tools reject anything outside it. A harness declaring `skills: [coder]` loads `skills/coder/SKILL.md` into the prompt.
 
 ## Configuration
 
@@ -153,6 +153,7 @@ Context strategies are `full_history`, `compact_observations` (deterministic fol
 | `AGENT_RUNTIME_REASONING_ECHO` | `auto` | `auto`, `always`, or `never` |
 | `AGENT_RUNTIME_COMMAND_GUARD` | `blocklist` | `off`, `blocklist`, or `allowlist` |
 | `AGENT_RUNTIME_MEMORY` | off | set `1` for persistent memory |
+| `AGENT_RUNTIME_MEMORY_DIR` | `<home>/memory` | where persistent memory lives (keep it inside the sandbox) |
 | `AGENT_RUNTIME_WEBUI_HOST` / `PORT` | `127.0.0.1` / `8000` | Web UI bind address |
 
 See [`.env.example`](.env.example) for all knobs. Keep real keys out of Git.

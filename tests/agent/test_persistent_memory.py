@@ -30,8 +30,9 @@ from agent_runtime.memory import (
     MAX_MEMORY_CHARS,
     MAX_MEMORY_ENTRIES,
     ENV_MEMORY,
-    MEMORY_CONVENTION,
+    ENV_MEMORY_DIR,
     memory_enabled,
+    memory_root,
     render_memory_block,
 )
 from agent_runtime.tools.tools import ToolRegistry
@@ -58,6 +59,28 @@ def _workspace(tmp: str) -> LocalWorkspace:
     return LocalWorkspace(root=Path(tmp))
 
 
+HOME_ENV = "AGENT_RUNTIME_HOME"
+
+
+def _memory_env(tmp: str, **extra: str) -> dict[str, str]:
+    """Env that pins this test's memory directory to ``<tmp>/memory``.
+
+    Memory is anchored on the runtime home (``AGENT_RUNTIME_HOME``), not
+    on the sandbox, so every enabled test has to say where the home is --
+    otherwise the render would create ``workspace/memory/`` inside the
+    checkout.  ``tmp`` doubles as sandbox root, so the listing is spelled
+    ``memory/...``: memory sits directly under the root here.
+    """
+    env = {ENV_MEMORY: "1", HOME_ENV: tmp}
+    env.update(extra)
+    return env
+
+
+def _convention(location: str = "memory/") -> str:
+    """The convention paragraph as rendered for ``location``."""
+    return memory_module._convention(location)
+
+
 class MemorySwitchTests(unittest.TestCase):
     def test_off_by_default(self) -> None:
         with mock.patch.dict(environ, {}, clear=False):
@@ -76,11 +99,14 @@ class MemorySwitchTests(unittest.TestCase):
 
     def test_off_renders_empty_and_creates_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            with mock.patch.dict(environ, {}, clear=False):
+            home = Path(tmp) / "home"
+            with mock.patch.dict(environ, {HOME_ENV: str(home)}):
                 environ.pop(ENV_MEMORY, None)
                 view = render_memory_block(_workspace(tmp))
             self.assertEqual(view.block, "")
             self.assertFalse((Path(tmp) / "memory").exists())
+            # A disabled run must not bootstrap the runtime home either.
+            self.assertFalse(home.exists())
 
     def test_none_workspace_is_a_wiring_error(self) -> None:
         with mock.patch.dict(environ, {}, clear=False):
@@ -107,7 +133,7 @@ class MemorySwitchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = _workspace(tmp)
             workspace.root = ""
-            with mock.patch.dict(environ, {ENV_MEMORY: "1"}):
+            with mock.patch.dict(environ, _memory_env(tmp)):
                 with self.assertLogs("agent_runtime.memory", level="WARNING"):
                     view = render_memory_block(workspace)
             self.assertEqual(view.block, "")
@@ -118,21 +144,35 @@ class MemorySwitchTests(unittest.TestCase):
             # A regular file where the memory directory should be: mkdir
             # must fail, and render must degrade instead of raising.
             (Path(tmp) / "memory").write_text("in the way")
-            with mock.patch.dict(environ, {ENV_MEMORY: "1"}):
+            with mock.patch.dict(environ, _memory_env(tmp)):
                 view = render_memory_block(_workspace(tmp))
             self.assertEqual(view.block, "")
+
+    def test_memory_outside_sandbox_is_skipped_with_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            sandbox = Path(tmp) / "sandbox"
+            sandbox.mkdir()
+            home = Path(tmp) / "home"
+            with mock.patch.dict(environ, {ENV_MEMORY: "1",
+                                           HOME_ENV: str(home)}):
+                with self.assertLogs("agent_runtime.memory", level="WARNING"):
+                    view = render_memory_block(_workspace(str(sandbox)))
+            # The file tools would reject the paths, so rendering them
+            # would only teach the agent paths it cannot open.
+            self.assertEqual(view.block, "")
+            self.assertFalse(home.exists())
 
 
 class MemoryRenderTests(unittest.TestCase):
     def _render(self, tmp: str):
-        with mock.patch.dict(environ, {ENV_MEMORY: "1"}):
+        with mock.patch.dict(environ, _memory_env(tmp)):
             return render_memory_block(_workspace(tmp))
 
     def test_empty_memory_creates_directory_and_notes_it(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             view = self._render(tmp)
             self.assertTrue((Path(tmp) / "memory").is_dir())
-            self.assertIn(MEMORY_CONVENTION, view.block)
+            self.assertIn(_convention(), view.block)
             self.assertIn("nothing recorded", view.block)
             self.assertEqual(view.files, 0)
             self.assertEqual(view.tree_hash, "")
@@ -245,7 +285,7 @@ class MemoryRenderTests(unittest.TestCase):
             self.assertTrue(view.truncated)
             self.assertEqual(view.files, count)
             self.assertLessEqual(len(view.block),
-                                 MAX_MEMORY_CHARS + len(MEMORY_CONVENTION) + 200)
+                                 MAX_MEMORY_CHARS + len(_convention()) + 200)
             self.assertIn("more entries not shown", view.block)
 
     def test_trace_meta_shape(self) -> None:
@@ -259,6 +299,67 @@ class MemoryRenderTests(unittest.TestCase):
             "tree_hash": view.tree_hash})
 
 
+class MemoryLocationTests(unittest.IsolatedAsyncioTestCase):
+    """Memory is runtime state; the paths it shows are sandbox-relative."""
+
+    def test_runtime_home_anchors_memory_not_the_sandbox(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            home = repo / "workspace"
+            (home / "memory").mkdir(parents=True)
+            (home / "memory" / "facts.md").write_text("x" * 12)
+            with mock.patch.dict(environ, {ENV_MEMORY: "1",
+                                           HOME_ENV: str(home)}):
+                self.assertEqual(memory_root(), home / "memory")
+                view = render_memory_block(_workspace(str(repo)))
+            # Memory is under the home, not next to it under the sandbox...
+            self.assertTrue((home / "memory" / "facts.md").is_file())
+            self.assertFalse((repo / "memory").exists())
+            # ...and the listing says so, spelled from the sandbox root.
+            self.assertIn("`workspace/memory/`", view.block)
+            self.assertIn("Current contents of workspace/memory/:", view.block)
+            self.assertIn("  workspace/memory/facts.md (12 B)", view.block)
+
+    async def test_listed_paths_resolve_through_the_file_tools(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            home = repo / "workspace"
+            (home / "memory").mkdir(parents=True)
+            (home / "memory" / "facts.md").write_text("sunagent author: johnson")
+            workspace = _workspace(str(repo))
+            with mock.patch.dict(environ, {ENV_MEMORY: "1",
+                                           HOME_ENV: str(home)}):
+                view = render_memory_block(workspace)
+                listed = [line.split(" (")[0].strip() for line in
+                          view.block.splitlines()
+                          if line.startswith("  workspace/")]
+                self.assertEqual(listed, ["workspace/memory/facts.md"])
+                self.assertIn("johnson",
+                              (await workspace.read_file(listed[0]))["content"])
+                await workspace.write_file("workspace/memory/new.md", "hi")
+            self.assertEqual((home / "memory" / "new.md").read_text(), "hi")
+
+    def test_memory_dir_override_wins(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            notes = repo / "notes"
+            with mock.patch.dict(environ, _memory_env(tmp,
+                                                      **{ENV_MEMORY_DIR: str(notes)})):
+                self.assertEqual(memory_root(), notes)
+                view = render_memory_block(_workspace(str(repo)))
+            self.assertTrue(notes.is_dir())
+            self.assertFalse((notes.parent / "memory").exists())
+            self.assertIn("`notes/`", view.block)
+
+    def test_default_layout_under_the_project_checkout(self) -> None:
+        # The shipped default: sandbox = project root, home = <root>/workspace.
+        with mock.patch.dict(environ, {ENV_MEMORY: "1"}, clear=False):
+            environ.pop(HOME_ENV, None)
+            environ.pop(ENV_MEMORY_DIR, None)
+            self.assertEqual(memory_root(),
+                             Path(__file__).parents[2] / "workspace" / "memory")
+
+
 class MemoryLoopIntegrationTests(unittest.IsolatedAsyncioTestCase):
     """End to end: the block rides the system prompt; the trace records it."""
 
@@ -270,7 +371,7 @@ class MemoryLoopIntegrationTests(unittest.IsolatedAsyncioTestCase):
             llm = FakeLLM([_plain_answer()])
             tools = ToolRegistry([], workspace=_workspace(tmp))
             trace = RunTrace(run_id="memory-on")
-            with mock.patch.dict(environ, {ENV_MEMORY: "1"}):
+            with mock.patch.dict(environ, _memory_env(tmp)):
                 await run_turn("hi", llm, tools, harness=HarnessSpec(),
                                trace=trace)
             system = llm.messages[0][0]
@@ -308,7 +409,7 @@ class MemoryLoopIntegrationTests(unittest.IsolatedAsyncioTestCase):
             tools = ToolRegistry([], workspace=_workspace(tmp))
             conversation = Conversation()
             trace = RunTrace(run_id="memory-two-turns")
-            with mock.patch.dict(environ, {ENV_MEMORY: "1"}):
+            with mock.patch.dict(environ, _memory_env(tmp)):
                 await run_turn("first", llm, tools, harness=HarnessSpec(),
                                conversation=conversation, trace=trace)
                 await run_turn("second", llm, tools, harness=HarnessSpec(),

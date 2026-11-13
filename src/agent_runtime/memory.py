@@ -9,8 +9,20 @@ the system prompt at session start — injection point A, the same channel
 as the skills block — consisting of:
 
 * a short convention paragraph (what memory is, how to update it), and
-* a flat listing of ``workspace/memory/`` (one line per file, path plus
+* a flat listing of the memory directory (one line per file, path plus
   human size; no file contents are read).
+
+The memory directory is *not* part of the sandbox.  It lives under the
+runtime home -- ``storage.runtime_home()/memory``, i.e. ``workspace/memory/``
+by default, next to ``sessions/`` and ``traces/`` -- so memory survives a
+change of sandbox and stays put even when the sandbox is narrowed to a
+subdirectory.  ``AGENT_RUNTIME_MEMORY_DIR`` overrides the location
+outright.  The listing is still *spelled* relative to the sandbox root
+(``workspace/memory/notes.md`` with the default layout) because the file
+tools resolve relative paths there and refuse anything that escapes it; a
+memory directory outside the sandbox therefore cannot be reached by the
+agent, and is reported at warning level and skipped rather than silently
+rendered as unusable paths.
 
 The agent reads and updates memory with the ordinary file tools
 (read_file / write_file / edit_file, run_command for renames and
@@ -35,6 +47,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from agent_runtime import storage
 from agent_runtime.execution.base import Workspace
 
 logger = logging.getLogger(__name__)
@@ -42,7 +55,10 @@ logger = logging.getLogger(__name__)
 #: Environment switch; off unless explicitly enabled.
 ENV_MEMORY = "AGENT_RUNTIME_MEMORY"
 
-#: Directory inside the workspace root where memory lives.
+#: Overrides the memory directory itself (absolute, or relative to cwd).
+ENV_MEMORY_DIR = "AGENT_RUNTIME_MEMORY_DIR"
+
+#: Directory under the runtime home where memory lives.
 MEMORY_DIR = "memory"
 
 #: Cap on listed entries, mirroring the skills-block budgets.
@@ -60,7 +76,8 @@ TRUNCATION_MARKER = "… {remaining} more entries not shown"
 MEMORY_CONVENTION = """\
 ## Persistent memory
 
-You have persistent, cross-session memory in `workspace/memory/`.
+You have persistent, cross-session memory in `{location}` (relative to
+the sandbox root; write there with paths like `{location}notes.md`).
 Its organization is entirely up to you: create files and folders,
 name them, and format their contents however serves you best.
 
@@ -100,6 +117,46 @@ def memory_enabled() -> bool:
     return os.getenv(ENV_MEMORY, "").strip().lower() in {"1", "true", "on"}
 
 
+def memory_root() -> Path:
+    """The absolute directory that holds persistent memory.
+
+    Anchored on :func:`agent_runtime.storage.runtime_home` -- not on the
+    agent's sandbox -- so memory counts as durable run state, like
+    ``sessions/`` and ``traces/``.  ``AGENT_RUNTIME_MEMORY_DIR`` overrides
+    it; a relative override resolves against the process working
+    directory, exactly like ``AGENT_RUNTIME_HOME``.  Read per call so the
+    environment can be changed without rebuilding anything.
+    """
+    raw = os.getenv(ENV_MEMORY_DIR, "").strip()
+    if raw:
+        return Path(raw).expanduser().resolve()
+    return storage.runtime_home() / MEMORY_DIR
+
+
+def _convention(location: str) -> str:
+    """Fill the convention paragraph with the path the agent must use."""
+    return MEMORY_CONVENTION.format(location=location)
+
+
+def _display_prefix(memory_dir: Path, workspace_root: Path) -> str | None:
+    """How the model must spell a memory path, or ``None`` if unreachable.
+
+    File tools resolve relative paths against the sandbox root and reject
+    anything that escapes it, so the listing needs a sandbox-relative
+    prefix: ``"workspace/memory/"`` for the default layout (sandbox = the
+    project root, memory = the runtime home's ``memory/``), ``""`` when
+    memory *is* the sandbox root.  ``None`` means the memory directory is
+    outside the sandbox, where the agent could not open those files at
+    all.
+    """
+    try:
+        rel = memory_dir.resolve().relative_to(workspace_root.resolve())
+    except (ValueError, OSError):
+        return None
+    inner = rel.as_posix()
+    return "" if inner == "." else inner + "/"
+
+
 _KB = 1024
 _MB = 1024 ** 2
 _GB = 1024 ** 3
@@ -118,7 +175,7 @@ def _human_size(size: int) -> str:
     return f"{size / _TB:.1f} TB"
 
 
-def _scan_tree(memory_root: Path) -> list[tuple[str, int]]:
+def _scan_tree(memory_dir: Path, prefix: str) -> list[tuple[str, int]]:
     """Flat, deterministically ordered (path, size) pairs under memory/.
 
     Hidden entries (dot-prefixed files and directories) and symbolic
@@ -128,7 +185,7 @@ def _scan_tree(memory_root: Path) -> list[tuple[str, int]]:
     Sizes come from stat, so no file contents are read while rendering.
     """
     entries: list[tuple[str, int]] = []
-    for dirpath, dirnames, filenames in os.walk(memory_root, followlinks=False):
+    for dirpath, dirnames, filenames in os.walk(memory_dir, followlinks=False):
         dirnames[:] = [
             name
             for name in dirnames
@@ -145,8 +202,8 @@ def _scan_tree(memory_root: Path) -> list[tuple[str, int]]:
                 size = full.stat().st_size
             except OSError:  # vanished mid-scan
                 continue
-            rel = full.relative_to(memory_root).as_posix()
-            entries.append((f"{MEMORY_DIR}/{rel}", size))
+            rel = full.relative_to(memory_dir).as_posix()
+            entries.append((f"{prefix}{rel}", size))
     entries.sort(key=lambda item: item[0])
     return entries
 
@@ -219,26 +276,36 @@ def render_memory_block(workspace: Workspace) -> MemoryView:
             "the workspace has no root; persistent memory requires a rooted "
             "workspace and will be skipped")
         return MemoryView()
+    memory_dir = memory_root()
+    prefix = _display_prefix(memory_dir, Path(str(root)).expanduser())
+    if prefix is None:
+        logger.warning(
+            "memory.outside_sandbox: memory directory %s is outside the "
+            "sandbox root %s, so file tools cannot reach it; persistent "
+            "memory is skipped (point AGENT_RUNTIME_MEMORY_DIR inside the "
+            "sandbox, or widen AGENT_RUNTIME_WORKSPACE)", memory_dir, root)
+        return MemoryView()
     try:
-        memory_root = Path(root) / MEMORY_DIR
-        memory_root.mkdir(parents=True, exist_ok=True)
-        entries = _scan_tree(memory_root)
+        memory_dir.mkdir(parents=True, exist_ok=True)
+        entries = _scan_tree(memory_dir, prefix)
     except OSError:
         return MemoryView()
     tree_text, truncated = _render_tree(entries)
+    location = prefix or "./"
     if entries:
-        tree_section = f"Current contents of memory/:\n\n{tree_text}"
+        tree_section = f"Current contents of {location}:\n\n{tree_text}"
     else:
-        tree_section = ("Current contents of memory/ (nothing recorded "
+        tree_section = (f"Current contents of {location} (nothing recorded "
                         "yet — the directory is yours to organize).")
-    block = f"{MEMORY_CONVENTION}\n\n{tree_section}"
+    block = f"{_convention(location)}\n\n{tree_section}"
     return MemoryView(block=block, files=len(entries),
                       total_bytes=sum(size for _, size in entries),
                       truncated=truncated, tree_hash=_tree_hash(entries))
 
 
 __all__ = [
-    "ENV_MEMORY", "MEMORY_DIR", "MAX_MEMORY_ENTRIES", "MAX_MEMORY_CHARS",
+    "ENV_MEMORY", "ENV_MEMORY_DIR", "MEMORY_DIR",
+    "MAX_MEMORY_ENTRIES", "MAX_MEMORY_CHARS",
     "MEMORY_CONVENTION", "TRUNCATION_MARKER",
-    "MemoryView", "memory_enabled", "render_memory_block",
+    "MemoryView", "memory_enabled", "memory_root", "render_memory_block",
 ]
