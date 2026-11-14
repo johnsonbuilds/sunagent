@@ -58,7 +58,7 @@ tools:
   - apply_patch
   - write_file
 control:
-  max_iterations: 50
+  max_iterations: 100
   max_observation_chars: 16000
   spill_preview_chars: 4000
   finish_violation_limit: 3

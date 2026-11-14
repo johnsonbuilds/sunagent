@@ -35,7 +35,7 @@ tools:
   - find_files
   - execute_code
 control:
-  max_iterations: 120
+  max_iterations: 100
   budget_reminder:
     enabled: false
 context:
