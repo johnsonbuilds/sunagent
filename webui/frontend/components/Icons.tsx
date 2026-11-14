@@ -54,9 +54,8 @@ export function BoardIcon() {
       strokeLinecap="round"
       strokeLinejoin="round"
     >
-      <rect x="3" y="4" width="5" height="16" rx="1.4" />
-      <rect x="10" y="4" width="5" height="11" rx="1.4" />
-      <rect x="17" y="4" width="4" height="14" rx="1.4" />
+      <rect x="3" y="4" width="18" height="16" rx="2.2" />
+      <path d="M9 4v16M15 4v16" />
     </svg>
   );
 }
