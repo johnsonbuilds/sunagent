@@ -1,0 +1,936 @@
+import asyncio
+import json
+import sys
+import threading
+import time
+import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
+
+
+sys.path.insert(0, str(Path(__file__).parents[2]))
+sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
+
+from starlette.testclient import TestClient
+
+from webui import server
+from webui.board import (
+    BoardNotFoundError,
+    BoardStorageError,
+    BoardStore,
+    BoardValidationError,
+)
+from webui.sessions import SessionStore
+
+
+class BoardStoreTests(unittest.TestCase):
+    def _board(self, root: str) -> BoardStore:
+        store = BoardStore(Path(root))
+        store.load()
+        return store
+
+    def _sessions(self, root: str) -> SessionStore:
+        return SessionStore(Path(root) / "sessions")
+
+    def _create(self, board: BoardStore, title: str, **kwargs):
+        kwargs.setdefault("description", f"{title} description")
+        return BoardStore.create(board, title, **kwargs)
+
+    def test_create_round_trips_through_disk(self) -> None:
+        with TemporaryDirectory() as root:
+            board = self._board(root)
+            created = self._create(
+                board, "  Write docs  ",
+                description="Cover the board API",
+                status="todo",
+                priority="high",
+                tags=["docs", "docs", " ui "],
+            )
+
+            self.assertEqual(created["title"], "Write docs")
+            self.assertEqual(created["status"], "todo")
+            self.assertEqual(created["priority"], "high")
+            self.assertEqual(created["tags"], ["docs", "ui"])
+            self.assertEqual(created["position"], 0)
+
+            reloaded = self._board(root)
+            snapshot = reloaded.snapshot(self._sessions(root))
+            self.assertEqual(len(snapshot["tasks"]), 1)
+            self.assertEqual(snapshot["tasks"][0]["id"], created["id"])
+            self.assertEqual(snapshot["tasks"][0]["title"], "Write docs")
+            self.assertIsNone(snapshot["tasks"][0]["session"])
+
+    def test_update_fields_keeps_position(self) -> None:
+        with TemporaryDirectory() as root:
+            board = self._board(root)
+            first = self._create(board, "First")
+            self._create(board, "Second")
+
+            updated = board.update(first["id"], {
+                "title": "Renamed",
+                "description": "More detail",
+                "priority": "urgent",
+                "tags": ["ops"],
+            })
+
+            self.assertEqual(updated["title"], "Renamed")
+            self.assertEqual(updated["description"], "More detail")
+            self.assertEqual(updated["priority"], "urgent")
+            self.assertEqual(updated["tags"], ["ops"])
+            self.assertEqual(updated["position"], 0)
+
+    def test_edit_without_status_does_not_reorder(self) -> None:
+        with TemporaryDirectory() as root:
+            board = self._board(root)
+            first = self._create(board, "First")
+            self._create(board, "Second")
+
+            board.update(first["id"], {"title": "Renamed"})
+
+            titles = [task["title"] for task in
+                      board.snapshot(self._sessions(root))["tasks"]]
+            self.assertEqual(titles, ["Renamed", "Second"])
+
+    def test_move_within_column(self) -> None:
+        with TemporaryDirectory() as root:
+            board = self._board(root)
+            first = self._create(board, "First")
+            second = self._create(board, "Second")
+            third = self._create(board, "Third")
+
+            board.move(third["id"], "backlog", 0)
+            snapshot = board.snapshot(self._sessions(root))
+            self.assertEqual([task["id"] for task in snapshot["tasks"]],
+                             [third["id"], first["id"], second["id"]])
+            self.assertEqual([task["position"] for task in snapshot["tasks"]],
+                             [0, 1, 2])
+
+            board.move(third["id"], "backlog")
+            snapshot = board.snapshot(self._sessions(root))
+            self.assertEqual([task["id"] for task in snapshot["tasks"]],
+                             [first["id"], second["id"], third["id"]])
+
+    def test_move_across_columns(self) -> None:
+        with TemporaryDirectory() as root:
+            board = self._board(root)
+            first = self._create(board, "First")
+            second = self._create(board, "Second")
+            third = self._create(board, "Third", status="todo")
+
+            board.move(first["id"], "todo", 0)
+
+            snapshot = board.snapshot(self._sessions(root))
+            by_status = {}
+            for task in snapshot["tasks"]:
+                by_status.setdefault(task["status"], []).append(task["id"])
+            self.assertEqual(by_status["backlog"], [second["id"]])
+            self.assertEqual(by_status["todo"], [first["id"], third["id"]])
+            self.assertEqual([task["position"] for task in snapshot["tasks"]
+                              if task["status"] == "todo"], [0, 1])
+
+    def test_move_without_position_appends(self) -> None:
+        with TemporaryDirectory() as root:
+            board = self._board(root)
+            first = self._create(board, "First")
+            self._create(board, "Second")
+            target = self._create(board, "Target", status="todo")
+
+            board.move(first["id"], "todo")
+
+            todo = [task["id"] for task in
+                    board.snapshot(self._sessions(root))["tasks"]
+                    if task["status"] == "todo"]
+            self.assertEqual(todo, [target["id"], first["id"]])
+
+    def test_delete(self) -> None:
+        with TemporaryDirectory() as root:
+            board = self._board(root)
+            task = self._create(board, "Remove me")
+
+            self.assertTrue(board.delete(task["id"]))
+            self.assertFalse(board.delete(task["id"]))
+            self.assertEqual(
+                board.snapshot(self._sessions(root))["tasks"], [])
+
+    def test_validation_rejects_bad_input(self) -> None:
+        with TemporaryDirectory() as root:
+            board = self._board(root)
+            with self.assertRaises(BoardValidationError):
+                self._create(board, "   ")
+            with self.assertRaises(BoardValidationError):
+                self._create(board, "x" * 201)
+            with self.assertRaises(BoardValidationError):
+                self._create(board, "Task", status="unknown")
+            with self.assertRaises(BoardValidationError):
+                self._create(board, "Task", priority="unknown")
+            with self.assertRaises(BoardValidationError):
+                self._create(board, "Task", tags=["x" * 33])
+
+            task = self._create(board, "Task")
+            with self.assertRaises(BoardValidationError):
+                board.update(task["id"], {"status": "unknown"})
+            with self.assertRaises(BoardNotFoundError):
+                board.update("task-missing", {"title": "Nope"})
+
+    def test_corrupt_file_is_backed_up(self) -> None:
+        with TemporaryDirectory() as root:
+            path = Path(root) / "board.json"
+            path.write_text("{not-json", encoding="utf-8")
+            board = self._board(root)
+
+            self.assertEqual(
+                board.snapshot(self._sessions(root))["tasks"], [])
+            backups = list(Path(root).glob("board.json.corrupt-*"))
+            self.assertEqual(len(backups), 1)
+            self.assertEqual(backups[0].read_text(encoding="utf-8"),
+                             "{not-json")
+
+    def test_write_failure_keeps_memory_unchanged(self) -> None:
+        with TemporaryDirectory() as root:
+            board = self._board(root)
+            task = self._create(board, "Keep me")
+
+            with patch.object(board, "_write_atomic",
+                              side_effect=BoardStorageError("disk full")):
+                with self.assertRaises(BoardStorageError):
+                    board.update(task["id"], {"title": "Changed"})
+
+            stored = board.get(task["id"])
+            self.assertIsNotNone(stored)
+            self.assertEqual(stored.title, "Keep me")
+
+    def test_ensure_session_creates_once_then_reuses(self) -> None:
+        with TemporaryDirectory() as root:
+            board = self._board(root)
+            sessions = self._sessions(root)
+            task = self._create(board, "Talk to the agent")
+
+            session_id, created = board.ensure_session(
+                task["id"], sessions, model="main", harness="common-v0")
+            self.assertTrue(created)
+            session = sessions.get(session_id)
+            self.assertIsNotNone(session)
+            self.assertEqual(session.title, "Talk to the agent")
+            self.assertEqual(session.model, "main")
+            self.assertEqual(session.harness, "common-v0")
+
+            again, created_again = board.ensure_session(
+                task["id"], sessions, model="main", harness="common-v0")
+            self.assertEqual(again, session_id)
+            self.assertFalse(created_again)
+            self.assertEqual(board.get(task["id"]).session_id, session_id)
+
+    def test_unlink_session(self) -> None:
+        with TemporaryDirectory() as root:
+            board = self._board(root)
+            sessions = self._sessions(root)
+            task = self._create(board, "Linked")
+            session_id, _ = board.ensure_session(task["id"], sessions)
+
+            board.unlink_session(session_id)
+
+            self.assertIsNone(board.get(task["id"]).session_id)
+            reloaded = self._board(root)
+            self.assertIsNone(reloaded.get(task["id"]).session_id)
+
+    def test_reconcile_drops_missing_sessions(self) -> None:
+        with TemporaryDirectory() as root:
+            board = self._board(root)
+            sessions = self._sessions(root)
+            task = self._create(board, "Linked")
+            board.ensure_session(task["id"], sessions)
+
+            reloaded = self._board(root)
+            reloaded.reconcile(self._sessions(root))
+
+            self.assertIsNone(reloaded.get(task["id"]).session_id)
+            persisted = self._board(root)
+            self.assertIsNone(persisted.get(task["id"]).session_id)
+
+    def test_session_view_is_derived(self) -> None:
+        with TemporaryDirectory() as root:
+            board = self._board(root)
+            sessions = self._sessions(root)
+            task = self._create(board, "Linked")
+            session_id, _ = board.ensure_session(task["id"], sessions)
+            sessions.get(session_id).busy = True
+
+            snapshot = board.snapshot(sessions)
+            self.assertEqual(snapshot["tasks"][0]["session"]["id"],
+                             session_id)
+            self.assertTrue(snapshot["tasks"][0]["session"]["busy"])
+
+    def test_snapshot_sorts_columns_and_positions(self) -> None:
+        with TemporaryDirectory() as root:
+            board = self._board(root)
+            done = self._create(board, "Done", status="done")
+            todo = self._create(board, "Todo", status="todo")
+            backlog = self._create(board, "Backlog", status="backlog")
+
+            snapshot = board.snapshot(self._sessions(root))
+            self.assertEqual(
+                [task["id"] for task in snapshot["tasks"]],
+                [backlog["id"], todo["id"], done["id"]])
+
+    def test_claim_orders_by_priority_then_position(self) -> None:
+        with TemporaryDirectory() as root:
+            board = self._board(root)
+            low = self._create(board, "Low", status="todo", priority="low")
+            urgent = self._create(board, "Urgent", status="todo",
+                                  priority="urgent")
+            normal = self._create(board, "Normal", status="todo",
+                                  priority="normal")
+
+            self.assertEqual(board.next_todo().id, urgent["id"])
+            first = board.claim_next_todo()
+            self.assertEqual(first.id, urgent["id"])
+            self.assertEqual(first.status, "doing")
+            self.assertIsNotNone(first.run_id)
+            self.assertIsNotNone(first.started_at)
+            self.assertIsNone(first.queued_at)
+
+            second = board.claim_next_todo()
+            self.assertEqual(second.id, normal["id"])
+            third = board.claim_next_todo()
+            self.assertEqual(third.id, low["id"])
+            self.assertIsNone(board.claim_next_todo())
+
+    def test_priority_change_while_queued_changes_claim_order(self) -> None:
+        with TemporaryDirectory() as root:
+            board = self._board(root)
+            low = self._create(board, "Low", status="todo", priority="low")
+            normal = self._create(board, "Normal", status="todo",
+                                  priority="normal")
+            self.assertEqual(board.next_todo().id, normal["id"])
+
+            board.update(low["id"], {"priority": "urgent"})
+            self.assertEqual(board.next_todo().id, low["id"])
+            claimed = board.claim_next_todo()
+            self.assertEqual(claimed.id, low["id"])
+
+    def test_claim_uses_position_for_equal_priority(self) -> None:
+        with TemporaryDirectory() as root:
+            board = self._board(root)
+            first = self._create(board, "First", status="todo")
+            second = self._create(board, "Second", status="todo")
+
+            claimed = board.claim_next_todo()
+            self.assertEqual(claimed.id, first["id"])
+            claimed = board.claim_next_todo()
+            self.assertEqual(claimed.id, second["id"])
+
+    def test_finish_and_requeue_require_run_ownership(self) -> None:
+        with TemporaryDirectory() as root:
+            board = self._board(root)
+            task = self._create(board, "Run me", status="todo")
+            claimed = board.claim_next_todo()
+            self.assertEqual(claimed.id, task["id"])
+
+            self.assertTrue(board.finish_run(claimed.id, claimed.run_id,
+                                             status="review"))
+            stored = board.get(claimed.id)
+            self.assertEqual(stored.status, "review")
+            self.assertIsNotNone(stored.finished_at)
+            self.assertIsNone(stored.last_error)
+            self.assertFalse(board.finish_run(claimed.id, claimed.run_id,
+                                              status="done"))
+
+    def test_user_status_change_wins_over_finish(self) -> None:
+        with TemporaryDirectory() as root:
+            board = self._board(root)
+            task = self._create(board, "Run me", status="todo")
+            claimed = board.claim_next_todo()
+            board.move(claimed.id, "done")
+
+            self.assertFalse(board.finish_run(claimed.id, claimed.run_id,
+                                              status="review"))
+            self.assertEqual(board.get(claimed.id).status, "done")
+
+    def test_requeue_interrupted_run(self) -> None:
+        with TemporaryDirectory() as root:
+            board = self._board(root)
+            task = self._create(board, "Run me", status="todo")
+            claimed = board.claim_next_todo()
+
+            self.assertTrue(board.requeue_run(claimed.id, claimed.run_id,
+                                              error="boom"))
+            stored = board.get(claimed.id)
+            self.assertEqual(stored.status, "todo")
+            self.assertIsNotNone(stored.queued_at)
+            self.assertIsNone(stored.run_id)
+            self.assertEqual(stored.last_error, "boom")
+
+    def test_recover_interrupted_returns_doing_to_todo(self) -> None:
+        with TemporaryDirectory() as root:
+            board = self._board(root)
+            task = self._create(board, "Run me", status="todo")
+            claimed = board.claim_next_todo()
+
+            reloaded = self._board(root)
+            self.assertEqual(reloaded.recover_interrupted(), 1)
+            stored = reloaded.get(task["id"])
+            self.assertEqual(stored.status, "todo")
+            self.assertIsNotNone(stored.queued_at)
+            self.assertIsNone(stored.run_id)
+            self.assertIn("restart", stored.last_error or "")
+            self.assertEqual(claimed.id, task["id"])
+
+    def test_manual_doing_is_not_recovered(self) -> None:
+        with TemporaryDirectory() as root:
+            board = self._board(root)
+            task = self._create(board, "Manual", status="doing")
+            self.assertIsNone(board.next_todo())
+
+            reloaded = self._board(root)
+            self.assertEqual(reloaded.recover_interrupted(), 0)
+            stored = reloaded.get(task["id"])
+            self.assertEqual(stored.status, "doing")
+            self.assertIsNone(stored.run_id)
+
+    def test_old_todo_without_queued_at_is_not_claimed(self) -> None:
+        with TemporaryDirectory() as root:
+            path = Path(root) / "board.json"
+            path.write_text(json.dumps({
+                "version": 1,
+                "updated_at": 1.0,
+                "tasks": [{
+                    "id": "task-old", "title": "Old", "description": "old",
+                    "status": "todo", "priority": "normal",
+                }],
+            }), encoding="utf-8")
+            board = self._board(root)
+
+            self.assertIsNone(board.next_todo())
+            self.assertIsNone(board.claim_next_todo())
+
+    def test_description_is_required_and_queue_markers_follow_status(self) -> None:
+        with TemporaryDirectory() as root:
+            board = self._board(root)
+            with self.assertRaises(BoardValidationError):
+                BoardStore.create(board, "No detail", description="  ")
+
+            task = self._create(board, "Backlog", status="backlog")
+            self.assertIsNone(task["queued_at"])
+            queued = board.update(task["id"], {"status": "todo"})
+            self.assertIsNotNone(queued["queued_at"])
+            cleared = board.update(task["id"], {"status": "backlog"})
+            self.assertIsNone(cleared["queued_at"])
+
+            with self.assertRaises(BoardValidationError):
+                board.update(task["id"], {"description": "  "})
+
+    def test_loaded_record_with_invalid_status_is_skipped(self) -> None:
+        with TemporaryDirectory() as root:
+            path = Path(root) / "board.json"
+            path.write_text(json.dumps({
+                "version": 1,
+                "updated_at": 1.0,
+                "tasks": [
+                    {"id": "task-1", "title": "Good", "status": "todo"},
+                    {"id": "task-2", "title": "Bad", "status": "nope"},
+                    {"id": "task-3", "title": "", "status": "todo"},
+                ],
+            }), encoding="utf-8")
+
+            board = self._board(root)
+            tasks = board.snapshot(self._sessions(root))["tasks"]
+            self.assertEqual([task["id"] for task in tasks], ["task-1"])
+
+
+class BoardApiTests(unittest.TestCase):
+    """Exercise the HTTP wiring, not just the store."""
+
+    def setUp(self) -> None:
+        self._root = TemporaryDirectory()
+        self.addCleanup(self._root.cleanup)
+        root = Path(self._root.name)
+        self.sessions = SessionStore(root / "sessions")
+        self.board = BoardStore(root)
+        # The repository's .env may enable auth; these tests are about
+        # the board routes, so run the app unauthenticated.
+        with patch.object(server, "credentials_from_env", return_value=None):
+            app = server.create_app(self.sessions, self.board,
+                                    enable_executor=False)
+        self.client = TestClient(app)
+        self.client.__enter__()
+        self.addCleanup(self.client.__exit__, None, None, None)
+
+    def _tasks(self) -> list[dict]:
+        return self.client.get("/api/board").json()["tasks"]
+
+    def test_create_edit_move_and_delete(self) -> None:
+        response = self.client.post("/api/board/tasks", json={
+            "title": "Ship the board",
+            "description": "Five columns",
+            "status": "todo",
+            "priority": "high",
+            "tags": ["webui"],
+        })
+        self.assertEqual(response.status_code, 201)
+        task = response.json()["tasks"][0]
+        self.assertEqual(task["title"], "Ship the board")
+        self.assertEqual(task["status"], "todo")
+
+        response = self.client.patch(
+            f"/api/board/tasks/{task['id']}",
+            json={"title": "Ship it", "priority": "urgent"},
+        )
+        self.assertEqual(response.status_code, 200)
+        updated = response.json()["tasks"][0]
+        self.assertEqual(updated["title"], "Ship it")
+        self.assertEqual(updated["priority"], "urgent")
+        self.assertEqual(updated["position"], 0)
+
+        response = self.client.patch(
+            f"/api/board/tasks/{task['id']}",
+            json={"status": "doing"},
+        )
+        self.assertEqual(response.status_code, 200)
+        moved = response.json()["tasks"][0]
+        self.assertEqual(moved["status"], "doing")
+
+        response = self.client.delete(f"/api/board/tasks/{task['id']}")
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["deleted_session"])
+        self.assertEqual(response.json()["board"]["tasks"], [])
+
+    def test_validation_and_missing_task(self) -> None:
+        response = self.client.post("/api/board/tasks", json={
+            "title": " ", "description": "desc",
+        })
+        self.assertEqual(response.status_code, 400)
+
+        response = self.client.post("/api/board/tasks", json={
+            "title": "Task", "description": "desc", "status": "nope",
+        })
+        self.assertEqual(response.status_code, 400)
+
+        response = self.client.post("/api/board/tasks", json={
+            "title": "Task", "description": "   ",
+        })
+        self.assertEqual(response.status_code, 400)
+
+        response = self.client.post("/api/board/tasks", json={
+            "title": "Task",
+        })
+        self.assertEqual(response.status_code, 422)
+
+        response = self.client.patch(
+            "/api/board/tasks/task-missing", json={"title": "Nope"})
+        self.assertEqual(response.status_code, 404)
+
+        response = self.client.delete("/api/board/tasks/task-missing")
+        self.assertEqual(response.status_code, 404)
+
+    def test_executor_pause_state_is_in_the_snapshot(self) -> None:
+        response = self.client.get("/api/board")
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["executor"]["paused"])
+
+        response = self.client.patch("/api/board/executor",
+                                     json={"paused": True})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["executor"]["paused"])
+        self.assertTrue(self.client.get("/api/board").json()["executor"]["paused"])
+
+    def test_task_conversation_is_created_lazily_and_can_be_deleted(self) -> None:
+        created = self.client.post(
+            "/api/board/tasks",
+            json={"title": "Talk to the agent",
+                  "description": "Talk to the agent description"},
+        ).json()
+        task = created["tasks"][0]
+
+        response = self.client.post(
+            f"/api/board/tasks/{task['id']}/session", json={})
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["created"])
+        session_id = payload["session_id"]
+        self.assertIsNotNone(self.sessions.get(session_id))
+        linked = payload["board"]["tasks"][0]
+        self.assertEqual(linked["session_id"], session_id)
+        self.assertEqual(linked["session"]["id"], session_id)
+
+        again = self.client.post(
+            f"/api/board/tasks/{task['id']}/session", json={}).json()
+        self.assertEqual(again["session_id"], session_id)
+        self.assertFalse(again["created"])
+
+        response = self.client.delete(
+            f"/api/board/tasks/{task['id']}?delete_session=true")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["deleted_session"])
+        self.assertIsNone(self.sessions.get(session_id))
+
+    def test_deleting_a_conversation_unlinks_its_task(self) -> None:
+        task = self.client.post(
+            "/api/board/tasks",
+            json={"title": "Linked", "description": "Linked description"},
+        ).json()["tasks"][0]
+        session_id = self.client.post(
+            f"/api/board/tasks/{task['id']}/session", json={},
+        ).json()["session_id"]
+
+        response = self.client.delete(f"/api/sessions/{session_id}")
+        self.assertEqual(response.status_code, 200)
+
+        stored = self._tasks()[0]
+        self.assertIsNone(stored["session_id"])
+        self.assertIsNone(stored["session"])
+
+
+class _BlockingTurn:
+    """A fake turn that blocks until the test releases a call."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self.started: list[threading.Event] = []
+        self.releases: list[threading.Event] = []
+
+    async def __call__(self, message, *args, **kwargs):
+        index = len(self.calls)
+        self.calls.append(message)
+        while len(self.started) <= index:
+            self.started.append(threading.Event())
+            self.releases.append(threading.Event())
+        self.started[index].set()
+        await asyncio.to_thread(self.releases[index].wait, 5.0)
+        return "done"
+
+    def release_all(self) -> None:
+        for event in self.releases:
+            event.set()
+
+    def wait_started(self, index: int, timeout: float = 2.0) -> bool:
+        return self.started[index].wait(timeout)
+
+
+class BoardServerExecutionTests(unittest.TestCase):
+    def _wait_started(self, turn: _BlockingTurn, index: int,
+                      timeout: float = 5.0) -> None:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if len(turn.started) > index and turn.wait_started(index, 0.01):
+                return
+            time.sleep(0.01)
+        self.fail(f"turn {index} did not start")
+
+    def _wait_status(self, client: TestClient, task_id: str,
+                     status: str, timeout: float = 3.0) -> dict:
+        deadline = time.time() + timeout
+        last = None
+        while time.time() < deadline:
+            tasks = client.get("/api/board").json()["tasks"]
+            last = next((task for task in tasks if task["id"] == task_id), None)
+            if last is not None and last["status"] == status:
+                return last
+            time.sleep(0.02)
+        self.fail(f"task {task_id} did not reach {status}: {last}")
+        return {}
+
+    def test_todo_task_runs_its_description_and_moves_to_review(self) -> None:
+        calls: list[str] = []
+
+        async def fake_run_turn(message, *args, **kwargs):
+            calls.append(message)
+            return "done"
+
+        with TemporaryDirectory() as root:
+            path = Path(root)
+            sessions = SessionStore(path / "sessions")
+            board = BoardStore(path)
+            with patch.object(server, "credentials_from_env",
+                              return_value=None), \
+                    patch.object(server, "run_turn", fake_run_turn):
+                app = server.create_app(sessions, board)
+                with TestClient(app) as client:
+                    response = client.post("/api/board/tasks", json={
+                        "title": "Auto run",
+                        "description": "do the thing",
+                        "status": "todo",
+                    })
+                    self.assertEqual(response.status_code, 201)
+                    task_id = response.json()["tasks"][0]["id"]
+
+                    deadline = time.time() + 3.0
+                    status = "todo"
+                    while time.time() < deadline:
+                        tasks = client.get("/api/board").json()["tasks"]
+                        status = tasks[0]["status"]
+                        if status == "review":
+                            break
+                        time.sleep(0.02)
+
+                    self.assertEqual(calls, ["do the thing"])
+                    self.assertEqual(status, "review")
+                    stored = client.get("/api/board").json()["tasks"][0]
+                    self.assertEqual(stored["id"], task_id)
+                    self.assertIsNotNone(stored["session_id"])
+                    self.assertIsNone(stored["last_error"])
+
+    def test_runtime_error_moves_task_to_review_without_retry(self) -> None:
+        calls: list[str] = []
+
+        async def fake_run_turn(message, *args, **kwargs):
+            calls.append(message)
+            kwargs["events"].emit("runtime.error", stage="test",
+                                  error="boom")
+            return "looks like an answer"
+
+        with TemporaryDirectory() as root:
+            path = Path(root)
+            sessions = SessionStore(path / "sessions")
+            board = BoardStore(path)
+            with patch.object(server, "credentials_from_env",
+                              return_value=None), \
+                    patch.object(server, "run_turn", fake_run_turn):
+                app = server.create_app(sessions, board)
+                with TestClient(app) as client:
+                    response = client.post("/api/board/tasks", json={
+                        "title": "Runtime error",
+                        "description": "fail this run",
+                        "status": "todo",
+                    })
+                    self.assertEqual(response.status_code, 201)
+                    task_id = response.json()["tasks"][0]["id"]
+
+                    stored = self._wait_status(client, task_id, "review")
+                    self.assertEqual(calls, ["fail this run"])
+                    self.assertEqual(stored["last_error"], "boom")
+                    time.sleep(0.1)
+                    self.assertEqual(len(calls), 1)
+
+    def test_running_task_moved_to_todo_is_cancelled_and_rerun(self) -> None:
+        turn = _BlockingTurn()
+        with TemporaryDirectory() as root:
+            path = Path(root)
+            sessions = SessionStore(path / "sessions")
+            board = BoardStore(path)
+            with patch.object(server, "credentials_from_env",
+                              return_value=None), \
+                    patch.object(server, "run_turn", turn):
+                app = server.create_app(sessions, board)
+                with TestClient(app) as client:
+                    try:
+                        response = client.post("/api/board/tasks", json={
+                            "title": "Rerun",
+                            "description": "run me twice",
+                            "status": "todo",
+                        })
+                        self.assertEqual(response.status_code, 201)
+                        task_id = response.json()["tasks"][0]["id"]
+                        self._wait_started(turn, 0)
+                        session_id = client.get(
+                            "/api/board").json()["tasks"][0]["session_id"]
+                        self.assertIsNotNone(session_id)
+
+                        response = client.patch(
+                            f"/api/board/tasks/{task_id}",
+                            json={"status": "todo"})
+                        self.assertEqual(response.status_code, 200)
+
+                        # The second turn must start while the first fake
+                        # turn is still blocked: that proves the first
+                        # run was cancelled rather than allowed to finish.
+                        self._wait_started(turn, 1)
+                        self.assertEqual(turn.calls,
+                                         ["run me twice", "run me twice"])
+                    finally:
+                        turn.release_all()
+
+                    stored = self._wait_status(client, task_id, "review")
+                    self.assertEqual(stored["session_id"], session_id)
+
+    def test_deleting_running_task_cancels_and_keeps_conversation(self) -> None:
+        turn = _BlockingTurn()
+        with TemporaryDirectory() as root:
+            path = Path(root)
+            sessions = SessionStore(path / "sessions")
+            board = BoardStore(path)
+            with patch.object(server, "credentials_from_env",
+                              return_value=None), \
+                    patch.object(server, "run_turn", turn):
+                app = server.create_app(sessions, board)
+                with TestClient(app) as client:
+                    try:
+                        response = client.post("/api/board/tasks", json={
+                            "title": "Delete running",
+                            "description": "keep the conversation",
+                            "status": "todo",
+                        })
+                        self.assertEqual(response.status_code, 201)
+                        task_id = response.json()["tasks"][0]["id"]
+                        self._wait_started(turn, 0)
+                        task = client.get(
+                            "/api/board").json()["tasks"][0]
+                        session_id = task["session_id"]
+                        self.assertIsNotNone(session_id)
+
+                        response = client.delete(
+                            f"/api/board/tasks/{task_id}")
+                        self.assertEqual(response.status_code, 200)
+                        self.assertEqual(
+                            client.get("/api/board").json()["tasks"], [])
+                        self.assertEqual(len(turn.calls), 1)
+                    finally:
+                        turn.release_all()
+
+                    time.sleep(0.1)
+                    self.assertIsNotNone(sessions.get(session_id))
+                    self.assertEqual(
+                        client.get("/api/board").json()["tasks"], [])
+
+    def test_deleting_running_session_cancels_and_unlinks_task(self) -> None:
+        turn = _BlockingTurn()
+        with TemporaryDirectory() as root:
+            path = Path(root)
+            sessions = SessionStore(path / "sessions")
+            board = BoardStore(path)
+            with patch.object(server, "credentials_from_env",
+                              return_value=None), \
+                    patch.object(server, "run_turn", turn):
+                app = server.create_app(sessions, board)
+                with TestClient(app) as client:
+                    try:
+                        response = client.post("/api/board/tasks", json={
+                            "title": "Delete session",
+                            "description": "cancel this turn",
+                            "status": "todo",
+                        })
+                        self.assertEqual(response.status_code, 201)
+                        task_id = response.json()["tasks"][0]["id"]
+                        self._wait_started(turn, 0)
+                        task = client.get(
+                            "/api/board").json()["tasks"][0]
+                        session_id = task["session_id"]
+                        self.assertIsNotNone(session_id)
+
+                        response = client.delete(
+                            f"/api/sessions/{session_id}")
+                        self.assertEqual(response.status_code, 200)
+                    finally:
+                        turn.release_all()
+
+                    self.assertIsNone(sessions.get(session_id))
+                    stored = self._wait_status(client, task_id, "review")
+                    self.assertIsNone(stored["session_id"])
+                    self.assertIsNone(stored["session"])
+
+    def test_busy_session_completion_wakes_the_executor(self) -> None:
+        turn = _BlockingTurn()
+        with TemporaryDirectory() as root:
+            path = Path(root)
+            sessions = SessionStore(path / "sessions")
+            board = BoardStore(path)
+            with patch.object(server, "credentials_from_env",
+                              return_value=None), \
+                    patch.object(server, "run_turn", turn):
+                app = server.create_app(sessions, board)
+                with TestClient(app) as client:
+                    try:
+                        response = client.post("/api/board/tasks", json={
+                            "title": "Wake me",
+                            "description": "board task description",
+                            "status": "backlog",
+                        })
+                        self.assertEqual(response.status_code, 201)
+                        task_id = response.json()["tasks"][0]["id"]
+                        linked = client.post(
+                            f"/api/board/tasks/{task_id}/session",
+                            json={})
+                        self.assertEqual(linked.status_code, 200)
+                        session_id = linked.json()["session_id"]
+
+                        response = client.post(
+                            f"/api/sessions/{session_id}/messages",
+                            json={"message": "manual turn"})
+                        self.assertEqual(response.status_code, 200)
+                        self._wait_started(turn, 0)
+
+                        response = client.patch(
+                            f"/api/board/tasks/{task_id}",
+                            json={"status": "todo"})
+                        self.assertEqual(response.status_code, 200)
+                        time.sleep(0.1)
+                        self.assertEqual(
+                            client.get("/api/board").json()["tasks"][0][
+                                "status"], "todo")
+
+                        # No explicit executor.wake(): the done callback
+                        # from send_message must wake it promptly, well
+                        # before the one-second fallback poll.
+                        turn.releases[0].set()
+                        self._wait_started(turn, 1, timeout=0.7)
+                        self.assertEqual(turn.calls, [
+                            "manual turn",
+                            "board task description",
+                        ])
+                    finally:
+                        turn.release_all()
+
+                    stored = self._wait_status(client, task_id, "review")
+                    self.assertEqual(stored["session_id"], session_id)
+
+    def test_startup_recovers_interrupted_task_but_not_legacy_todo(self) -> None:
+        calls: list[str] = []
+
+        async def fake_run_turn(message, *args, **kwargs):
+            calls.append(message)
+            return "done"
+
+        with TemporaryDirectory() as root:
+            path = Path(root)
+            (path / "board.json").write_text(json.dumps({
+                "version": 1,
+                "updated_at": 1.0,
+                "tasks": [
+                    {
+                        "id": "task-interrupted",
+                        "title": "Interrupted",
+                        "description": "resume me",
+                        "status": "doing",
+                        "priority": "normal",
+                        "tags": [],
+                        "position": 0,
+                        "run_id": "run-old",
+                        "created_at": 1.0,
+                        "updated_at": 1.0,
+                    },
+                    {
+                        "id": "task-legacy",
+                        "title": "Legacy",
+                        "description": "do not run",
+                        "status": "todo",
+                        "priority": "normal",
+                        "tags": [],
+                        "position": 0,
+                        "created_at": 1.0,
+                        "updated_at": 1.0,
+                    },
+                ],
+            }), encoding="utf-8")
+            sessions = SessionStore(path / "sessions")
+            board = BoardStore(path)
+            with patch.object(server, "credentials_from_env",
+                              return_value=None), \
+                    patch.object(server, "run_turn", fake_run_turn):
+                app = server.create_app(sessions, board)
+                with TestClient(app) as client:
+                    stored = self._wait_status(
+                        client, "task-interrupted", "review")
+                    self.assertEqual(calls, ["resume me"])
+                    self.assertEqual(stored["last_error"], None)
+
+                    legacy = next(
+                        task for task in
+                        client.get("/api/board").json()["tasks"]
+                        if task["id"] == "task-legacy")
+                    self.assertEqual(legacy["status"], "todo")
+                    time.sleep(0.1)
+                    self.assertEqual(calls, ["resume me"])
+
+
+if __name__ == "__main__":
+    unittest.main()

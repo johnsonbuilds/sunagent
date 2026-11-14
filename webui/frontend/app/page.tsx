@@ -2,15 +2,20 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import BoardView from "@/components/BoardView";
 import Composer from "@/components/Composer";
 import ConfirmDialog from "@/components/ConfirmDialog";
-import type { PanelId } from "@/components/IconRail";
+import type { AppView, NavId, PanelId } from "@/components/IconRail";
 import Sidebar from "@/components/Sidebar";
+import TaskEditor from "@/components/TaskEditor";
 import TitleBar, { type StatusState } from "@/components/TitleBar";
 import Transcript from "@/components/Transcript";
 import { api } from "@/lib/api";
+import { STATUS_ORDER } from "@/lib/board";
 import { useI18n } from "@/lib/i18n";
+import { useBoard } from "@/lib/useBoard";
 import type {
+  BoardTask,
   DeltaFrame,
   Frame,
   HarnessOption,
@@ -19,6 +24,8 @@ import type {
   Segment,
   SessionDetail,
   SessionSummary,
+  TaskInput,
+  TaskStatus,
   ToolFrame,
   ToolSegment,
 } from "@/lib/types";
@@ -29,6 +36,11 @@ function errorMessage(error: unknown): string {
 
 /** The server's placeholder title for a session that has no messages yet. */
 const NEW_SESSION_TITLE = "New conversation";
+
+type EditorState =
+  | { mode: "create"; status: TaskStatus }
+  | { mode: "edit"; taskId: string; status: TaskStatus }
+  | null;
 
 function upsertSegment(list: Segment[], segment: Segment): Segment[] {
   const index = list.findIndex((block) => block.id === segment.id);
@@ -78,6 +90,7 @@ function toolSegment(frame: ToolFrame): ToolSegment {
 
 export default function Home() {
   const { t } = useI18n();
+  const [view, setView] = useState<AppView>("chat");
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [blocks, setBlocks] = useState<Segment[]>([]);
@@ -97,6 +110,9 @@ export default function Home() {
   const [confirmRestartOpen, setConfirmRestartOpen] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [toast, setToast] = useState("");
+  const [editor, setEditor] = useState<EditorState>(null);
+  const [deleteTask, setDeleteTask] = useState<BoardTask | null>(null);
+  const [deletingTask, setDeletingTask] = useState(false);
 
   const messagesRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -119,6 +135,8 @@ export default function Home() {
       setToast("");
     }, 5000);
   }, []);
+
+  const board = useBoard({ enabled: view === "board", onError: showToast });
 
   const updateBusy = useCallback((value: boolean) => {
     setBusy(value);
@@ -176,6 +194,8 @@ export default function Home() {
 
   const selectSession = useCallback(
     async (sessionId: string) => {
+      setView("chat");
+      setActivePanel("sessions");
       disconnectStream();
       setActiveId(sessionId);
       lastSeqRef.current = 0;
@@ -303,6 +323,8 @@ export default function Home() {
       try {
         await api(`/api/sessions/${session.id}`, { method: "DELETE" });
         const list = await refreshSessions();
+        // The server unlinks a deleted conversation from its task.
+        if (board.snapshot) void board.refresh(true);
         if (session.id === activeId) {
           if (list.length) await selectSession(list[0].id);
           else await newSession();
@@ -311,7 +333,7 @@ export default function Home() {
         showToast(errorMessage(error));
       }
     },
-    [activeId, newSession, refreshSessions, selectSession, showToast, t],
+    [activeId, board, newSession, refreshSessions, selectSession, showToast, t],
   );
 
   const send = useCallback(
@@ -337,12 +359,15 @@ export default function Home() {
         updateBusy(true);
         // The first message fixes the harness for this conversation.
         setHarnessLocked(true);
+        // A linked card should switch to its "running" indicator now,
+        // not on the next poll.
+        if (board.snapshot) void board.refresh(true);
       } catch (error) {
         updateBusy(false);
         showToast(errorMessage(error));
       }
     },
-    [activeId, busy, draft, showToast, updateBusy],
+    [activeId, board, busy, draft, showToast, updateBusy],
   );
 
   const stop = useCallback(async () => {
@@ -415,10 +440,99 @@ export default function Home() {
     setConfirmRestartOpen(true);
   }, []);
 
-  const selectPanel = useCallback((id: PanelId) => {
-    setActivePanel(id);
+  const selectNav = useCallback((id: NavId) => {
+    if (id === "chat") {
+      setView("chat");
+      setActivePanel("sessions");
+    } else if (id === "board") {
+      setView("board");
+      setActivePanel("board");
+    } else {
+      setActivePanel("settings");
+    }
     setSidebarOpen(true);
   }, []);
+
+  const openCreateTask = useCallback((status: TaskStatus) => {
+    setEditor({ mode: "create", status });
+  }, []);
+
+  const openEditTask = useCallback((task: BoardTask) => {
+    setEditor({ mode: "edit", taskId: task.id, status: task.status });
+  }, []);
+
+  const requestDeleteTask = useCallback((task: BoardTask) => {
+    // The editor and the confirm dialog are both native modals, so
+    // only one can be open at a time.
+    setEditor(null);
+    setDeleteTask(task);
+  }, []);
+
+  const confirmDeleteTask = useCallback(async () => {
+    if (!deleteTask) return;
+    setDeletingTask(true);
+    try {
+      await board.deleteTask(deleteTask.id);
+      setDeleteTask(null);
+      if (editor?.mode === "edit" && editor.taskId === deleteTask.id) {
+        setEditor(null);
+      }
+    } catch {
+      // The board hook already showed the error.
+    } finally {
+      setDeletingTask(false);
+    }
+  }, [board, deleteTask, editor]);
+
+  const saveTask = useCallback(async (input: TaskInput) => {
+    if (!editor) return;
+    if (editor.mode === "create") {
+      await board.createTask(input);
+      setEditor(null);
+      return;
+    }
+
+    const existing = board.snapshot?.tasks.find(
+      (task) => task.id === editor.taskId,
+    );
+    const patch: Partial<TaskInput> = {};
+    if (!existing || input.title !== existing.title) patch.title = input.title;
+    if (!existing || input.description !== existing.description) {
+      patch.description = input.description;
+    }
+    if (input.status !== editor.status
+        && (!existing || input.status !== existing.status)) {
+      patch.status = input.status;
+    }
+    if (!existing || input.priority !== existing.priority) {
+      patch.priority = input.priority;
+    }
+    if (!existing || JSON.stringify(input.tags) !== JSON.stringify(existing.tags)) {
+      patch.tags = input.tags;
+    }
+    if (Object.keys(patch).length === 0) {
+      setEditor(null);
+      return;
+    }
+    await board.updateTask(editor.taskId, patch);
+    setEditor(null);
+  }, [board, editor]);
+
+  const openTaskConversation = useCallback(async (task: BoardTask) => {
+    try {
+      let sessionId = task.session_id;
+      if (!sessionId || !task.session) {
+        const result = await board.ensureSession(task.id);
+        sessionId = result.session_id;
+      }
+      if (!sessionId) return;
+      setEditor(null);
+      await refreshSessions();
+      await selectSession(sessionId);
+    } catch {
+      // The board hook already showed the error.
+    }
+  }, [board, refreshSessions, selectSession]);
 
   const handleFrame = (frame: Frame) => {
     if (typeof frame.seq === "number") {
@@ -445,12 +559,14 @@ export default function Home() {
       case "run.completed":
         updateBusy(false);
         void refreshSessions().catch(() => {});
+        if (board.snapshot) void board.refresh(true);
         break;
       case "run.error":
         updateBusy(false);
         setStatus({ label: "statusError", kind: "error" });
         showToast(frame.error || t("runFailed"));
         void refreshSessions().catch(() => {});
+        if (board.snapshot) void board.refresh(true);
         break;
       default:
         break;
@@ -519,12 +635,13 @@ export default function Home() {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        void newSession();
+        if (view === "board") openCreateTask("backlog");
+        else void newSession();
       }
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [newSession]);
+  }, [newSession, openCreateTask, view]);
 
   useEffect(() => {
     return () => {
@@ -538,75 +655,158 @@ export default function Home() {
     };
   }, [disconnectStream]);
 
+  useEffect(() => {
+    // A card can disappear because another tab deleted it, or because
+    // this tab deleted it while the editor was open.
+    if (!editor || editor.mode !== "edit" || !board.snapshot) return;
+    if (!board.snapshot.tasks.some((task) => task.id === editor.taskId)) {
+      setEditor(null);
+    }
+  }, [board.snapshot, editor]);
+
   const modelLabel =
     models.find((model) => model.id === activeModel)?.label ||
     activeModel;
   const displayTitle =
     title === NEW_SESSION_TITLE ? t("newConversation") : title;
+  const editingTask =
+    editor?.mode === "edit"
+      ? board.snapshot?.tasks.find((task) => task.id === editor.taskId) ?? null
+      : null;
+  const editorOpen =
+    editor !== null
+    && (editor.mode === "create" || editingTask !== null);
+  const editorInitialStatus =
+    editor?.mode === "create"
+      ? editor.status
+      : editingTask?.status ?? "backlog";
 
   return (
     <div className="app">
       <TitleBar
-        title={displayTitle}
-        status={status}
+        title={view === "board" ? t("boardTitle") : displayTitle}
+        status={view === "board" ? null : status}
+        newActionTitle={view === "board" ? "boardNewTask" : undefined}
+        newActionLabel={view === "board" ? "boardNewTask" : undefined}
         onToggleSidebar={() => setSidebarOpen((value) => !value)}
         onToggleTheme={toggleTheme}
-        onNewChat={() => void newSession()}
+        onNewChat={() => {
+          if (view === "board") openCreateTask("backlog");
+          else void newSession();
+        }}
       />
 
       <div className="layout">
         <Sidebar
+          view={view}
           sessions={sessions}
           activeId={activeId}
           filter={filter}
           activePanel={activePanel}
+          board={board.snapshot}
+          boardLoading={board.loading}
+          boardFilter={board.filter}
+          hideDone={board.hideDone}
           collapsed={!sidebarOpen}
           backdropVisible={narrow && sidebarOpen}
-          onSelectPanel={selectPanel}
+          onSelectNav={selectNav}
           onFilterChange={setFilter}
+          onBoardFilterChange={board.setFilter}
+          onHideDoneChange={board.setHideDone}
           onSelect={(id) => void selectSession(id)}
           onNewChat={() => void newSession()}
+          onNewTask={() => openCreateTask("backlog")}
           onDelete={(session) => void deleteSession(session)}
           onRename={(session) => void renameSession(session)}
           onRestart={requestRestart}
           onBackdropClick={() => setSidebarOpen(false)}
         />
 
-        <main className="main">
-          <Transcript
-            blocks={blocks}
-            messagesRef={messagesRef}
-            onSuggestion={(text) => void send(text)}
-            onScroll={() => {
-              const element = messagesRef.current;
-              if (!element) return;
-              const distance =
-                element.scrollHeight -
-                element.scrollTop -
-                element.clientHeight;
-              pinnedRef.current = distance < 120;
-            }}
-          />
+        <main className={`main${view === "board" ? " main-board" : ""}`}>
+          {view === "board" ? (
+            <BoardView
+              snapshot={board.snapshot}
+              loading={board.loading}
+              error={board.error}
+              filter={board.filter}
+              hideDone={board.hideDone}
+              paused={board.snapshot?.executor?.paused ?? false}
+              onTogglePaused={() => void board.setPaused(
+                !(board.snapshot?.executor?.paused ?? false),
+              )}
+              onRefresh={() => void board.refresh(true)}
+              onCreateTask={openCreateTask}
+              onEditTask={openEditTask}
+              onDeleteTask={requestDeleteTask}
+              onOpenTask={(task) => void openTaskConversation(task)}
+              onMoveTask={board.moveTask}
+            />
+          ) : (
+            <>
+              <Transcript
+                blocks={blocks}
+                messagesRef={messagesRef}
+                onSuggestion={(text) => void send(text)}
+                onScroll={() => {
+                  const element = messagesRef.current;
+                  if (!element) return;
+                  const distance =
+                    element.scrollHeight -
+                    element.scrollTop -
+                    element.clientHeight;
+                  pinnedRef.current = distance < 120;
+                }}
+              />
 
-          <Composer
-            value={draft}
-            busy={busy}
-            inputRef={inputRef}
-            modelId={activeModel}
-            modelLabel={modelLabel || "—"}
-            harnessId={activeHarness}
-            harnessLabel={activeHarness || "—"}
-            harnessLocked={harnessLocked}
-            models={models}
-            harnesses={harnesses}
-            onChange={setDraft}
-            onSend={() => void send()}
-            onStop={() => void stop()}
-            onModelChange={(id) => void changeModel(id)}
-            onHarnessChange={(id) => void changeHarness(id)}
-          />
+              <Composer
+                value={draft}
+                busy={busy}
+                inputRef={inputRef}
+                modelId={activeModel}
+                modelLabel={modelLabel || "—"}
+                harnessId={activeHarness}
+                harnessLabel={activeHarness || "—"}
+                harnessLocked={harnessLocked}
+                models={models}
+                harnesses={harnesses}
+                onChange={setDraft}
+                onSend={() => void send()}
+                onStop={() => void stop()}
+                onModelChange={(id) => void changeModel(id)}
+                onHarnessChange={(id) => void changeHarness(id)}
+              />
+            </>
+          )}
         </main>
       </div>
+
+      <TaskEditor
+        open={editorOpen}
+        task={editingTask}
+        initialStatus={editorInitialStatus}
+        statuses={board.snapshot?.statuses ?? STATUS_ORDER}
+        onClose={() => setEditor(null)}
+        onSave={saveTask}
+        onRequestDelete={requestDeleteTask}
+        onOpenConversation={(task) => void openTaskConversation(task)}
+      />
+
+      <ConfirmDialog
+        open={deleteTask !== null}
+        title={t("boardDeleteTask")}
+        message={t("boardDeleteTaskConfirm", {
+          title: deleteTask?.title ?? "",
+        })}
+        confirmText={t("boardDeleteTask")}
+        cancelText={t("defaultCancel")}
+        busyText={t("defaultBusy")}
+        tone="danger"
+        busy={deletingTask}
+        onConfirm={() => void confirmDeleteTask()}
+        onCancel={() => {
+          if (!deletingTask) setDeleteTask(null);
+        }}
+      />
 
       <ConfirmDialog
         open={confirmRestartOpen}

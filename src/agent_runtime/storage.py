@@ -13,6 +13,7 @@ under one root:
       sessions/   one JSON document per browser conversation
       traces/     one JSONL file per agent turn
       memory/     persistent cross-session memory (AGENT_RUNTIME_MEMORY)
+      board.json  the single web UI task board
 
 ``<home>`` is ``AGENT_RUNTIME_HOME`` when set, and ``workspace/`` next
 to the project root otherwise.
@@ -74,7 +75,12 @@ def trace_path(run_id: str) -> Path:
     return traces_dir() / f"{run_id}.jsonl"
 
 
+def board_path() -> Path:
+    """Where the web UI task board is stored."""
+    return runtime_home() / "board.json"
+
+
 __all__ = [
     "DEFAULT_HOME_DIRNAME", "runtime_home",
-    "sessions_dir", "trace_path", "traces_dir",
+    "board_path", "sessions_dir", "trace_path", "traces_dir",
 ]

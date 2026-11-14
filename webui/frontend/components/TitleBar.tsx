@@ -12,6 +12,8 @@ export interface StatusState {
 interface TitleBarProps {
   title: string;
   status: StatusState | null;
+  newActionTitle?: MessageKey;
+  newActionLabel?: MessageKey;
   onToggleSidebar: () => void;
   onToggleTheme: () => void;
   onNewChat: () => void;
@@ -20,6 +22,8 @@ interface TitleBarProps {
 export default function TitleBar({
   title,
   status,
+  newActionTitle,
+  newActionLabel,
   onToggleSidebar,
   onToggleTheme,
   onNewChat,
@@ -67,8 +71,8 @@ export default function TitleBar({
         <button
           className="icon-btn primary"
           id="btnNewChat"
-          title={t("newConversationShortcut")}
-          aria-label={t("newConversation")}
+          title={t(newActionTitle ?? "newConversationShortcut")}
+          aria-label={t(newActionLabel ?? "newConversation")}
           onClick={onNewChat}
         >
           <PlusIcon />

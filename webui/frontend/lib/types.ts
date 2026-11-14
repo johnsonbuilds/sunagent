@@ -41,6 +41,68 @@ export interface SessionDetail extends SessionSummary {
   segments?: Segment[];
 }
 
+export type TaskStatus = "backlog" | "todo" | "doing" | "review" | "done";
+
+export type TaskPriority = "low" | "normal" | "high" | "urgent";
+
+export interface BoardSessionSummary {
+  id: string;
+  title: string;
+  busy: boolean;
+  updated_at: number;
+}
+
+export interface BoardTask {
+  id: string;
+  title: string;
+  description: string;
+  status: TaskStatus;
+  priority: TaskPriority;
+  tags: string[];
+  position: number;
+  session_id: string | null;
+  queued_at: number | null;
+  run_id: string | null;
+  started_at: number | null;
+  finished_at: number | null;
+  last_error: string | null;
+  created_at: number;
+  updated_at: number;
+  session?: BoardSessionSummary | null;
+}
+
+export interface BoardExecutorState {
+  paused: boolean;
+  running_task_id: string | null;
+}
+
+export interface BoardSnapshot {
+  version: number;
+  statuses: TaskStatus[];
+  updated_at: number;
+  tasks: BoardTask[];
+  executor?: BoardExecutorState;
+}
+
+export interface TaskInput {
+  title: string;
+  description: string;
+  status: TaskStatus;
+  priority: TaskPriority;
+  tags: string[];
+}
+
+export interface DeleteTaskResult {
+  board: BoardSnapshot;
+  deleted_session: boolean;
+}
+
+export interface EnsureSessionResult {
+  board: BoardSnapshot;
+  session_id: string;
+  created: boolean;
+}
+
 export interface ModelOption {
   id: string;
   label: string;

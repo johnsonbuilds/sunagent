@@ -19,6 +19,11 @@ Endpoints:
     POST   /api/sessions/{id}/messages  send a message, start a turn
     POST   /api/sessions/{id}/cancel    stop the running turn
     GET    /api/sessions/{id}/events    SSE stream of frames
+    GET    /api/board                   the task board snapshot
+    POST   /api/board/tasks             create a task
+    PATCH  /api/board/tasks/{id}        edit or move a task
+    DELETE /api/board/tasks/{id}        delete a task
+    POST   /api/board/tasks/{id}/session  create or reuse its conversation
     POST   /api/system/restart          restart the server via ./run.sh restart
 
 Every route sits behind HTTP basic authentication when a user name and
@@ -65,6 +70,13 @@ from agent_runtime.model_catalog import (
 )
 
 from .auth import BasicAuthMiddleware, credentials_from_env
+from .board import (
+    BoardNotFoundError,
+    BoardStorageError,
+    BoardStore,
+    BoardValidationError,
+)
+from .executor import BoardExecutor, TurnOutcome
 from .sessions import STREAM_STOP, Session, SessionStore
 from .turn_context import TurnSnapshot, resolve_turn
 
@@ -124,6 +136,9 @@ def shutdown_active_sessions() -> None:
     here is what makes Ctrl+C return immediately.
     """
     for app in list(_APPS):
+        executor = getattr(app.state, "executor", None)
+        if executor is not None:
+            executor.request_stop()
         store = getattr(app.state, "sessions", None)
         if store is not None:
             store.shutdown()
@@ -170,6 +185,27 @@ class CreateSessionRequest(BaseModel):
     title: str = Field(default="", max_length=200)
     model: str | None = None
     harness: str | None = None
+
+
+class CreateTaskRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    description: str = Field(min_length=1, max_length=20_000)
+    status: str = "backlog"
+    priority: str = "normal"
+    tags: list[str] = Field(default_factory=list)
+
+
+class PatchTaskRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=200)
+    description: str | None = Field(default=None, max_length=20_000)
+    status: str | None = None
+    position: int | None = Field(default=None, ge=0)
+    priority: str | None = None
+    tags: list[str] | None = None
+
+
+class ExecutorStateRequest(BaseModel):
+    paused: bool
 
 
 class AgentRunner:
@@ -241,8 +277,15 @@ def _sse(frame: dict[str, Any]) -> str:
     return f"id: {frame.get('seq', 0)}\ndata: {payload}\n\n"
 
 
-def create_app(store: SessionStore | None = None) -> FastAPI:
-    """Build the web UI application."""
+def create_app(store: SessionStore | None = None,
+               board: BoardStore | None = None, *,
+               enable_executor: bool = True) -> FastAPI:
+    """Build the web UI application.
+
+    ``enable_executor`` is for tests: the API and board routes are fully
+    wired, but the serial worker is not started, so a test can inspect
+    Todo transitions without launching a real model turn.
+    """
     # The CLI loads .env in its entry point. The server loads it here so
     # every launch path -- the console script, `python -m webui`, and
     # `uvicorn webui.server:create_app --factory` -- sees the same
@@ -254,12 +297,64 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
     credentials = credentials_from_env()
     sessions = store if store is not None else SessionStore()
     sessions.load()
+    tasks = board if board is not None else BoardStore()
+    tasks.load()
+    try:
+        tasks.reconcile(sessions)
+    except BoardStorageError:
+        # A read-only board must not stop the chat UI from starting.
+        logger.warning("webui.board.reconcile_failed")
+    try:
+        tasks.recover_interrupted()
+    except BoardStorageError:
+        logger.warning("webui.board.recover_failed")
     runner = AgentRunner()
+
+    def ensure_board_session(task_id: str) -> str:
+        session_id, _ = tasks.ensure_session(
+            task_id, sessions,
+            model=runner.catalog.default,
+            harness=runner.harness.id,
+        )
+        return session_id
+
+    async def run_board_task(session: Session, message: str) -> TurnOutcome:
+        if session.busy:
+            return TurnOutcome("busy", error="Session is busy")
+        session.model = session.model or runner.catalog.default
+        session.harness = session.harness or runner.harness.id
+        try:
+            snapshot = _resolve_snapshot(session, runner)
+            trace, events, channel, _ = _prepare_turn(
+                session, message, snapshot, sessions)
+        except HTTPException as exc:
+            return TurnOutcome("error", error=str(exc.detail))
+        except Exception as exc:
+            logger.exception("webui.board.turn_prepare_failed session=%s",
+                             session.id)
+            return TurnOutcome("error",
+                               error=str(exc) or "could not start the run")
+        return await _execute_turn(session, message, snapshot, trace, events,
+                                   channel, sessions)
+
+    executor = BoardExecutor(
+        tasks, sessions,
+        ensure_session=ensure_board_session,
+        run_turn=run_board_task,
+    )
+
+    def board_snapshot() -> dict[str, Any]:
+        return {**tasks.snapshot(sessions), "executor": executor.status()}
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         _install_exit_handlers()
+        if enable_executor:
+            executor.start()
         yield
+        # Stop the worker before the session stores close: this cancels
+        # the current turn and puts an interrupted task back in Todo.
+        await executor.stop()
         # Backstop for the paths that do not run the entry point: the
         # streams are closed even if the server was stopped abruptly.
         shutdown_active_sessions()
@@ -267,6 +362,8 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
     app = FastAPI(title="SunAgent Web UI", docs_url="/api/docs",
                   redoc_url=None, lifespan=lifespan)
     app.state.sessions = sessions
+    app.state.board = tasks
+    app.state.executor = executor
     app.state.runner = runner
     _APPS.add(app)
 
@@ -291,7 +388,9 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
 
     @app.get("/api/health")
     async def health() -> dict[str, Any]:
-        return {"ok": True, "sessions": len(sessions.list())}
+        return {"ok": True, "sessions": len(sessions.list()),
+                "tasks": len(tasks.list_all()),
+                "executor": executor.status()}
 
     @app.get("/api/config")
     async def config() -> dict[str, Any]:
@@ -387,8 +486,19 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
 
     @app.delete("/api/sessions/{session_id}")
     async def delete_session(session_id: str) -> dict[str, Any]:
+        session = sessions.get(session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        executor.cancel_session(session_id)
+        await _cancel_session_turn(session)
         if not sessions.delete(session_id):
             raise HTTPException(status_code=404, detail="session not found")
+        try:
+            tasks.unlink_session(session_id)
+        except BoardStorageError:
+            # The conversation is already gone; a stale link is better
+            # than failing the delete the user asked for.
+            logger.warning("webui.board.unlink_failed session=%s", session_id)
         return {"ok": True}
 
     @app.post("/api/sessions/{session_id}/messages")
@@ -408,22 +518,16 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
         session.harness = session.harness or runner.harness.id
         snapshot = _resolve_snapshot(session, runner)
 
-        session.append_user_message(message)
-        sessions.save(session)
-
-        run_id = f"run-{uuid4().hex[:12]}"
-        trace = RunTrace(run_id=run_id,
-                         output_path=_trace_path(run_id),
-                         harness=snapshot.harness)
-        events = EventEmitter(run_id=trace.run_id)
-        channel = WebUIChannel(sink=_session_sink(session))
-        events.subscribe(channel)
-        session.busy = True
-
-        task = asyncio.create_task(_execute(session, message, snapshot, trace,
-                                             events, channel, sessions))
+        trace, events, channel, run_id = _prepare_turn(
+            session, message, snapshot, sessions)
+        task = asyncio.create_task(
+            _execute_turn(session, message, snapshot, trace, events,
+                          channel, sessions))
         session.task = task
-        return {"run_id": trace.run_id}
+        # A queued board task may be waiting for this conversation to
+        # become idle; let the executor re-check once the turn ends.
+        task.add_done_callback(lambda _: executor.wake())
+        return {"run_id": run_id}
 
     @app.post("/api/sessions/{session_id}/cancel")
     async def cancel_turn(session_id: str) -> dict[str, Any]:
@@ -465,6 +569,90 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
                                           "X-Accel-Buffering": "no",
                                           "Connection": "keep-alive"})
 
+    @app.get("/api/board")
+    async def get_board() -> dict[str, Any]:
+        return board_snapshot()
+
+    @app.patch("/api/board/executor")
+    async def set_executor(payload: ExecutorStateRequest) -> dict[str, Any]:
+        executor.set_paused(payload.paused)
+        return board_snapshot()
+
+    @app.post("/api/board/tasks", status_code=201)
+    async def create_task(payload: CreateTaskRequest) -> dict[str, Any]:
+        try:
+            tasks.create(payload.title, description=payload.description,
+                         status=payload.status, priority=payload.priority,
+                         tags=payload.tags)
+        except (BoardValidationError, BoardStorageError) as exc:
+            raise _board_http_error(exc) from exc
+        if payload.status == "todo":
+            executor.wake()
+        return board_snapshot()
+
+    @app.patch("/api/board/tasks/{task_id}")
+    async def patch_task(task_id: str,
+                         payload: PatchTaskRequest) -> dict[str, Any]:
+        before = tasks.get(task_id)
+        if before is None:
+            raise HTTPException(status_code=404, detail="task not found")
+        # ``exclude_unset`` keeps "field omitted" distinct from "field set
+        # to null"; null is dropped so it can never erase a real value.
+        patch = {key: value for key, value in
+                 payload.model_dump(exclude_unset=True).items()
+                 if value is not None}
+        try:
+            tasks.update(task_id, patch)
+        except (BoardNotFoundError, BoardValidationError,
+                BoardStorageError) as exc:
+            raise _board_http_error(exc) from exc
+
+        after = tasks.get(task_id)
+        assert after is not None
+        if before.status == "doing" and after.status != "doing":
+            # The human changed the card while the executor owned it:
+            # cancel the run; finish_run will not overwrite their status.
+            executor.cancel_task(task_id)
+        if after.status == "todo":
+            executor.wake()
+        return board_snapshot()
+
+    @app.delete("/api/board/tasks/{task_id}")
+    async def delete_task(task_id: str,
+                          delete_session: bool = False) -> dict[str, Any]:
+        task = tasks.get(task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="task not found")
+        if task.status == "doing":
+            executor.cancel_task(task_id)
+        deleted_session = False
+        if delete_session and task.session_id:
+            executor.cancel_session(task.session_id)
+            session = sessions.get(task.session_id)
+            if session is not None:
+                await _cancel_session_turn(session)
+            deleted_session = sessions.delete(task.session_id)
+        try:
+            tasks.delete(task_id)
+        except BoardStorageError as exc:
+            raise _board_http_error(exc) from exc
+        return {"board": board_snapshot(),
+                "deleted_session": deleted_session}
+
+    @app.post("/api/board/tasks/{task_id}/session")
+    async def create_task_session(task_id: str) -> dict[str, Any]:
+        try:
+            session_id, created = tasks.ensure_session(
+                task_id, sessions,
+                model=runner.catalog.default,
+                harness=runner.harness.id,
+            )
+        except (BoardNotFoundError, BoardValidationError,
+                BoardStorageError) as exc:
+            raise _board_http_error(exc) from exc
+        return {"board": board_snapshot(),
+                "session_id": session_id, "created": created}
+
     @app.get("/{path:path}", include_in_schema=False)
     async def frontend_file(path: str) -> FileResponse:
         """Serve remaining files from the static Next.js export.
@@ -486,21 +674,54 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
     return app
 
 
-async def _execute(session: Session, message: str, snapshot: TurnSnapshot,
-                   trace: RunTrace, events: EventEmitter,
-                   channel: WebUIChannel, store: SessionStore) -> None:
-    """Run one agent turn for a session and report the outcome.
+def _prepare_turn(session: Session, message: str, snapshot: TurnSnapshot,
+                  store: SessionStore
+                  ) -> tuple[RunTrace, EventEmitter, WebUIChannel, str]:
+    """Record the user message and build one turn's I/O objects."""
+    run_id = f"run-{uuid4().hex[:12]}"
+    trace = RunTrace(run_id=run_id,
+                     output_path=_trace_path(run_id),
+                     harness=snapshot.harness)
+    events = EventEmitter(run_id=trace.run_id)
+    channel = WebUIChannel(sink=_session_sink(session))
+    events.subscribe(channel)
+
+    session.busy = True
+    session.append_user_message(message)
+    store.save(session)
+    return trace, events, channel, trace.run_id
+
+
+async def _execute_turn(session: Session, message: str,
+                        snapshot: TurnSnapshot, trace: RunTrace,
+                        events: EventEmitter, channel: WebUIChannel,
+                        store: SessionStore) -> TurnOutcome:
+    """Run one agent turn and report whether it completed cleanly.
 
     ``snapshot`` is captured when the turn starts; nothing here reads the
     session's current model or harness, so a switch made while the turn
     is running cannot affect it.
+
+    ``AgentTurn`` serialises some runtime failures into the returned
+    text, so the event stream is watched for ``runtime.error`` as well as
+    the usual exception path.  Without that, a failed task would look
+    completed and move to Review.
     """
+    errors: list[str] = []
+
+    def collect_error(event: Any) -> None:
+        if event.event_type == "runtime.error":
+            errors.append(str(event.data.get("error") or "run failed"))
+
+    unsubscribe = events.subscribe(collect_error)
     try:
-        await run_turn(message, snapshot.llm, snapshot.tools,
-                       conversation=session.conversation,
-                       harness=snapshot.harness, stream=snapshot.stream,
-                       trace=trace, events=events, runtime=snapshot.runtime,
-                       summarizer_factory=snapshot.summarizer_factory)
+        answer = await run_turn(message, snapshot.llm, snapshot.tools,
+                                conversation=session.conversation,
+                                harness=snapshot.harness,
+                                stream=snapshot.stream,
+                                trace=trace, events=events,
+                                runtime=snapshot.runtime,
+                                summarizer_factory=snapshot.summarizer_factory)
     except asyncio.CancelledError:
         session.bus.publish({"type": "run.error", "stage": "cancelled",
                              "error": "run cancelled"})
@@ -509,7 +730,15 @@ async def _execute(session: Session, message: str, snapshot: TurnSnapshot,
         logger.exception("webui.run.failed session=%s", session.id)
         session.bus.publish({"type": "run.error", "stage": "runtime",
                              "error": str(exc)})
+        return TurnOutcome("error", trace.run_id,
+                           error=str(exc) or "run failed")
+    else:
+        if errors:
+            return TurnOutcome("error", trace.run_id, answer=answer,
+                               error=errors[-1])
+        return TurnOutcome("completed", trace.run_id, answer=answer)
     finally:
+        unsubscribe()
         channel.close()
         events.close()
         session.busy = False
@@ -518,8 +747,32 @@ async def _execute(session: Session, message: str, snapshot: TurnSnapshot,
         store.save(session)
 
 
+async def _cancel_session_turn(session: Session) -> None:
+    """Cancel and join a running turn before deleting its session."""
+    task = session.task
+    if task is None or task.done():
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    except Exception:  # pragma: no cover - the turn already logs failures
+        logger.exception("webui.session.cancel_failed session=%s", session.id)
+
+
 def _session_detail(session: Session) -> dict[str, Any]:
     return {**session.summary(), "segments": session.segments}
+
+
+def _board_http_error(exc: Exception) -> HTTPException:
+    """Map a board failure to the response the browser should see."""
+    if isinstance(exc, BoardNotFoundError):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, BoardValidationError):
+        return HTTPException(status_code=400, detail=str(exc))
+    logger.exception("webui.board.failed")
+    return HTTPException(status_code=500, detail="could not save the board")
 
 
 def _require_model(catalog: ModelCatalog, model_id: str) -> None:

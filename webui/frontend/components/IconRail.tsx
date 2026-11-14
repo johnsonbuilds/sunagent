@@ -4,25 +4,32 @@ import type { ReactElement } from "react";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
 
-import { ChatIcon, SettingsIcon } from "./Icons";
+import { BoardIcon, ChatIcon, SettingsIcon } from "./Icons";
 
-export type PanelId = "sessions" | "settings";
+export type AppView = "chat" | "board";
+
+/** Optional sidebar content. Settings can sit over either app view. */
+export type PanelId = "sessions" | "board" | "settings";
+
+/** Top-level destinations in the rail. */
+export type NavId = "chat" | "board" | "settings";
 
 interface NavItem {
-  id: PanelId;
+  id: NavId;
   labelKey: MessageKey;
   Icon: () => ReactElement;
 }
 
 /** Add new sidebar destinations here; the rail and panel switch follow. */
 export const NAV_ITEMS: NavItem[] = [
-  { id: "sessions", labelKey: "conversations", Icon: ChatIcon },
+  { id: "chat", labelKey: "navChat", Icon: ChatIcon },
+  { id: "board", labelKey: "navBoard", Icon: BoardIcon },
   { id: "settings", labelKey: "settings", Icon: SettingsIcon },
 ];
 
 interface IconRailProps {
-  active: PanelId;
-  onSelect: (id: PanelId) => void;
+  active: NavId;
+  onSelect: (id: NavId) => void;
 }
 
 export default function IconRail({ active, onSelect }: IconRailProps) {

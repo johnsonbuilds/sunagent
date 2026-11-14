@@ -1,5 +1,13 @@
 # SunAgent WebUI 任务看板 — 完整方案
 
+> **实现更新（串行自动执行）**：看板已增加服务端串行 executor。
+> 任务 description 为必填，进入 `todo` 即排队；worker 按
+> `urgent > high > normal > low` 取任务，改成 `doing`，把 description
+> 原文作为第一条 user 消息发给 agent；正常结束进入 `review`，失败也
+> 进入 `review` 并记录 `last_error`。旧 `todo` 任务没有 `queued_at`
+> 标记，不会在启动时自动执行。看板头部可暂停/恢复自动执行。详细
+> 行为见 [webui.md](webui.md) 的 Task Board 章节。
+
 ## 1. 目标与边界
 
 **目标**：在 WebUI 左侧导航增加一个一级“看板”视图，用独立的“任务卡片”管理要交给 agent 做的事；支持拖拽改状态、新建/编辑/删除任务，并能把任务关联到一个对话，直接进入聊天继续执行。
@@ -20,7 +28,7 @@
 - 截止时间、负责人、附件
 - agent 通过工具直接读写看板
 - 全局 SSE、运行统计图表
-- 自动状态流转（本期状态完全由人维护）
+- ~~自动状态流转~~（已更新：串行 executor 自动维护 `todo → doing → review`）
 
 ---
 
@@ -64,7 +72,7 @@
 |---|---|---|---|
 | `id` | string | `task-<hex12>` | 服务端生成，前端不可改 |
 | `title` | string | 1–200 字符，去首尾空白 | 必填 |
-| `description` | string | 0–20,000 字符 | 纯文本，后续可加 Markdown 预览 |
+| `description` | string | 1–20,000 字符，必填 | 纯文本；执行时原样作为第一条 user 消息 |
 | `status` | enum | 5 个固定值 | 列归属 |
 | `priority` | enum | `low / normal / high / urgent` | 默认 `normal` |
 | `tags` | string[] | 最多 20 个，每个 ≤32 字符 | 默认空数组 |
@@ -228,7 +236,7 @@ class BoardStore:
 }
 ```
 
-- 只有 `title` 必填
+- `title` 和 `description` 必填
 - `status` 默认 `backlog`；从某列“+”创建时前端传该列 id
 - 返回 `201` + 新快照
 
@@ -439,7 +447,7 @@ const board = useBoard({ enabled: view === "board" });
 复用现有 `Modal`：
 
 - 标题（必填，自动聚焦）
-- 描述（textarea）
+- 描述（textarea，必填；执行时原样作为 user 消息）
 - 状态（select）
 - 优先级（select 或分段按钮）
 - 标签（逗号分隔输入，保存时去重/trim）

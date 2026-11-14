@@ -30,8 +30,8 @@ origin (and one basic-auth challenge) with no Node server in the middle.
 | Piece | Location | Responsibility |
 |---|---|---|
 | `WebUIChannel` | `src/agent_runtime/channels/webui.py` | Translate `AgentEvent` into JSON frames. Knows nothing about HTTP. |
-| `webui/` | `webui/` (repo root) | FastAPI app, session store, and static-export hosting. Knows nothing about the event vocabulary. |
-| `webui/frontend/` | `webui/frontend/` | Next.js client: title bar, sidebar, transcript, composer. Knows nothing about the runtime. |
+| `webui/` | `webui/` (repo root) | FastAPI app, session and board stores, serial board executor, and static-export hosting. Knows nothing about the event vocabulary. |
+| `webui/frontend/` | `webui/frontend/` | Next.js client: title bar, sidebar, transcript, composer, and task board. Knows nothing about the runtime. |
 
 The split matters: the channel is reusable by any transport (SSE today,
 WebSocket or a Telegram bridge tomorrow), and the server can be rewritten
@@ -74,7 +74,8 @@ A session owns two things:
 Both are persisted as one JSON document per session under
 `workspace/sessions/` (override with `AGENT_RUNTIME_WEBUI_SESSIONS_DIR`).
 The runtime trace of each turn is written next to it, under
-`workspace/traces/<run_id>.jsonl`.
+`workspace/traces/<run_id>.jsonl`. The task board is a separate single
+document at `workspace/board.json` (see section 5).
 
 A session that never received a message is never written to disk and
 never listed: the browser keeps it in memory (there has to be
@@ -147,12 +148,104 @@ under `harnesses/archived/` never appear in the picker.
 | `POST` | `/api/sessions/{id}/messages` | send a message, start a turn |
 | `POST` | `/api/sessions/{id}/cancel` | stop the running turn |
 | `GET` | `/api/sessions/{id}/events` | SSE stream of frames |
+| `GET` | `/api/board` | the task board snapshot |
+| `POST` | `/api/board/tasks` | create a task |
+| `PATCH` | `/api/board/tasks/{id}` | edit a task, or move it within/across columns |
+| `DELETE` | `/api/board/tasks/{id}` | delete a task (optionally its conversation) |
+| `POST` | `/api/board/tasks/{id}/session` | create or reuse the task's conversation |
+| `PATCH` | `/api/board/executor` | pause or resume serial task execution |
 
 The event stream replays the recent frames of a session before switching to
 live delivery, and honours `Last-Event-ID`, so a browser that reconnects
 resumes where it left off instead of starting from a blank transcript.
 
-## 5. Running It
+## 5. Task Board
+
+The left rail has three destinations: **Chat**, **Board**, and **Settings**.
+Settings opens its panel over whichever view is active; opening Chat or
+Board switches the main area back to that view.
+
+A board card is an independent **task**, not a conversation. That lets a
+task exist before any agent work starts. Each task has:
+
+* a required title and description, plus free-form tags,
+* one of five fixed columns — `backlog`, `todo`, `doing`, `review`, `done`,
+* a priority — `low`, `normal`, `high`, `urgent`,
+* an optional linked conversation (`1 task ↔ 0 or 1 session`).
+
+The description is also the execution prompt: when the serial worker
+starts a task, it sends the description unchanged as the first user
+message of the task's conversation.
+
+### Serial auto-execution
+
+`todo` is the execution queue. Moving or creating a card in `todo` sets a
+`queued_at` marker, and a single server-side worker drains that queue one
+task at a time:
+
+```text
+backlog ──(human)──> todo ──(worker)──> doing ──(completed)──> review
+                         ^                 │
+                         └──(failed)───────┘  review + last_error
+```
+
+* Order is `urgent > high > normal > low`, then the card's position in
+  the Todo column. A running task is never preempted by a new urgent one.
+* Only tasks explicitly queued after this feature existed are run. Old
+  `todo` cards without `queued_at` stay untouched until moved or edited.
+* A successful turn moves the card to `review`; the agent never moves it
+  to `done`. A failed or cancelled run also lands in `review` with the
+  error shown on the card, and the worker continues with the next task.
+* Moving a `doing` card out of that column cancels its run; the human's
+  status wins. Deleting a task or its conversation also cancels the run.
+* The worker reuses the card's linked conversation, creating one lazily
+  with the task title if needed. Re-running a card from `review` reuses
+  the same conversation.
+* The board header has a pause/resume switch. Pausing stops new claims
+  but does not kill the current task.
+* Only board execution is serial. Manual chat turns remain independent;
+  because they share the same workspace, avoid editing the same files by
+  hand while a board task is running.
+* On startup any executor-owned `doing` card is returned to `todo` and
+  resumes. The board also records `run_id`, `started_at`, `finished_at`,
+  and `last_error` for diagnostics.
+
+The worker runs in-process (no Celery/Redis) and is started from the
+FastAPI lifespan. A task's run uses the same session/turn machinery as a
+manually sent message, so the conversation transcript, SSE stream and
+trace file are identical.
+
+### Editing and filtering
+
+Drag a card to reorder it within a column or move it to another one. The
+card's **move to** select does the same thing without a pointer, for touch
+screens and keyboard use. The sidebar filter hides cards by title,
+description, or tag, and **Hide done** removes finished cards from view.
+Actions that depend on a hidden card are appended rather than guessed, so
+filtering never corrupts the stored order.
+
+The Todo column keeps its manual order; a `#N` badge shows the actual
+execution queue position derived from priority.
+
+### Storage
+
+The board is one JSON document at `workspace/board.json` (under
+`AGENT_RUNTIME_HOME`). Mutations return the complete normalized snapshot —
+columns renumbered from zero — and the browser replaces its state with it.
+Writes go through a temporary file and `os.replace`, so a crash leaves
+either the old board or the new one. A corrupt file is copied to
+`board.json.corrupt-<timestamp>` and the board starts empty.
+
+Deleting a card keeps its conversation by default; `DELETE` accepts
+`?delete_session=true` when the caller really wants both gone. Deleting a
+conversation from the Chat sidebar unlinks it from every card. On startup
+the store also drops links whose conversation no longer exists.
+
+The board polls only while the Board view is visible (every five seconds,
+plus on window focus), and refreshes after a run finishes, after a message
+is sent, and after a conversation is deleted.
+
+## 6. Running It
 
 ```bash
 # build the Next.js front end (first run also installs dependencies)
@@ -193,7 +286,7 @@ front end, not a prerequisite. The two share the same `.env`
 | `AGENT_RUNTIME_WEBUI_PORT` | `8000` | port to bind |
 | `AGENT_RUNTIME_WEBUI_REASONING` | `1` | set to `0` to hide thinking blocks |
 | `AGENT_RUNTIME_WEBUI_SESSIONS_DIR` | `workspace/sessions` | where sessions are stored |
-| `AGENT_RUNTIME_HOME` | `workspace` | the root of all runtime state (sessions, traces, summaries) |
+| `AGENT_RUNTIME_HOME` | `workspace` | the root of all runtime state (sessions, traces, summaries, board) |
 | `AGENT_RUNTIME_WEBUI_AUTH_USER` | *(unset)* | the user name; setting it turns authentication on |
 | `AGENT_RUNTIME_WEBUI_AUTH_PASSWORD` | *(unset)* | the password that goes with the user name |
 
@@ -234,22 +327,27 @@ Server-sent events never end on their own, and uvicorn waits for open
 connections before it finishes shutting down, so the application closes
 every stream itself when the process is asked to stop — and then hands
 the signal on so the normal graceful shutdown still happens. Running
-turns are cancelled at the same time and their sessions are saved.
+turns are cancelled at the same time and their sessions are saved; a
+board task interrupted this way goes back to `todo` and resumes on the
+next start.
 
-## 6. The Frontend
+## 7. The Frontend
 
 `webui/frontend/` is a Next.js App Router project written in TypeScript.
-`app/page.tsx` owns the client state (sessions, frame upserts, composer,
-theme, settings), and the visual pieces live in `components/`
-(`TitleBar`, `Sidebar`, `Transcript`, `Composer`, `SettingsDialog`).
-`app/globals.css` carries the original design tokens and component styles
-unchanged; `lib/markdown.ts` is the same small Markdown renderer as
-before, ported to a module.
+`app/page.tsx` owns the client state (view, sessions, frame upserts,
+composer, board dialogs, theme, settings), and the visual pieces live in
+`components/` (`TitleBar`, `Sidebar`, `BoardView`, `TaskCard`,
+`TaskEditor`, `Transcript`, `Composer`, `SettingsPanel`). Board data and
+mutations live in `lib/useBoard.ts`; `lib/board.ts` holds the shared column
+and priority vocabulary. `app/globals.css` carries the design tokens and
+every component style; `lib/markdown.ts` is the same small Markdown
+renderer as before, ported to a module.
 
 The layout follows the same three-part frame as a desktop console app: a
-title bar, a conversation sidebar, and the transcript with a composer. Tool
-calls and thinking blocks are deliberately quiet — they are transcript
-metadata, not the main event — and expand on click.
+title bar, a sidebar with a view rail, and either the transcript with a
+composer (Chat) or the five-column board. Tool calls and thinking blocks
+are deliberately quiet — they are transcript metadata, not the main event
+— and expand on click.
 
 `npm run build` emits a static export to `webui/frontend/out/`. FastAPI
 mounts `/_next` from that directory and serves `index.html` at `/`; if the
