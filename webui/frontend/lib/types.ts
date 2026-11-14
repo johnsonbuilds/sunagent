@@ -49,6 +49,9 @@ export interface BoardSessionSummary {
   id: string;
   title: string;
   busy: boolean;
+  model: string | null;
+  harness: string | null;
+  harness_locked: boolean;
   updated_at: number;
 }
 
@@ -60,6 +63,8 @@ export interface BoardTask {
   priority: TaskPriority;
   tags: string[];
   position: number;
+  model: string | null;
+  harness: string | null;
   session_id: string | null;
   queued_at: number | null;
   run_id: string | null;
@@ -90,6 +95,9 @@ export interface TaskInput {
   status: TaskStatus;
   priority: TaskPriority;
   tags: string[];
+  /** Empty string means "use the service default". */
+  model: string;
+  harness: string;
 }
 
 export interface DeleteTaskResult {

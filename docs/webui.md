@@ -149,8 +149,8 @@ under `harnesses/archived/` never appear in the picker.
 | `POST` | `/api/sessions/{id}/cancel` | stop the running turn |
 | `GET` | `/api/sessions/{id}/events` | SSE stream of frames |
 | `GET` | `/api/board` | the task board snapshot |
-| `POST` | `/api/board/tasks` | create a task |
-| `PATCH` | `/api/board/tasks/{id}` | edit a task, or move it within/across columns |
+| `POST` | `/api/board/tasks` | create a task (optional `model` / `harness`) |
+| `PATCH` | `/api/board/tasks/{id}` | edit or move a task, or change its `model` / `harness` |
 | `DELETE` | `/api/board/tasks/{id}` | delete a task (optionally its conversation) |
 | `POST` | `/api/board/tasks/{id}/session` | create or reuse the task's conversation |
 | `PATCH` | `/api/board/executor` | pause or resume serial task execution |
@@ -171,11 +171,21 @@ task exist before any agent work starts. Each task has:
 * a required title and description, plus free-form tags,
 * one of five fixed columns — `backlog`, `todo`, `doing`, `review`, `done`,
 * a priority — `low`, `normal`, `high`, `urgent`,
+* an optional `model` and `harness` for the conversation it will run,
 * an optional linked conversation (`1 task ↔ 0 or 1 session`).
 
 The description is also the execution prompt: when the serial worker
 starts a task, it sends the description unchanged as the first user
 message of the task's conversation.
+
+The model and harness selects use the same catalog and harness list as the
+composer. Leaving either on **Service default** stores `null` and applies
+whatever `AGENT_RUNTIME_MODEL` / `AGENT_RUNTIME_HARNESS` resolve to. A task
+choice is applied when its conversation is first created, and editing the
+card updates an already linked conversation: the model always takes effect
+on the next turn, while the harness can only change before the conversation
+has any history. Editing the harness of a locked conversation is rejected
+with `409` and leaves both the card and the conversation as they were.
 
 ### Serial auto-execution
 

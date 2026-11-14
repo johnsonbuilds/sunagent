@@ -1594,6 +1594,12 @@ button {
   font-size: var(--meta-size);
 }
 
+.field-hint {
+  color: var(--muted);
+  font-size: var(--meta-size);
+  line-height: 1.45;
+}
+
 .modal-foot-spacer { flex: 1; }
 
 .btn.small {

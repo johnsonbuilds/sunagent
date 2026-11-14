@@ -8,7 +8,14 @@ import {
   STATUS_LABEL_KEYS,
 } from "@/lib/board";
 import { useI18n } from "@/lib/i18n";
-import type { BoardTask, TaskInput, TaskPriority, TaskStatus } from "@/lib/types";
+import type {
+  BoardTask,
+  HarnessOption,
+  ModelOption,
+  TaskInput,
+  TaskPriority,
+  TaskStatus,
+} from "@/lib/types";
 
 import Modal from "./Modal";
 
@@ -17,6 +24,8 @@ interface TaskEditorProps {
   task: BoardTask | null;
   initialStatus: TaskStatus;
   statuses: TaskStatus[];
+  models: ModelOption[];
+  harnesses: HarnessOption[];
   onClose: () => void;
   onSave: (input: TaskInput) => Promise<void>;
   onRequestDelete: (task: BoardTask) => void;
@@ -28,6 +37,8 @@ export default function TaskEditor({
   task,
   initialStatus,
   statuses,
+  models,
+  harnesses,
   onClose,
   onSave,
   onRequestDelete,
@@ -38,12 +49,16 @@ export default function TaskEditor({
   const descriptionFieldId = useId();
   const statusFieldId = useId();
   const priorityFieldId = useId();
+  const modelFieldId = useId();
+  const harnessFieldId = useId();
   const tagsFieldId = useId();
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [status, setStatus] = useState<TaskStatus>(initialStatus);
   const [priority, setPriority] = useState<TaskPriority>("normal");
+  const [model, setModel] = useState("");
+  const [harness, setHarness] = useState("");
   const [tagsText, setTagsText] = useState("");
   const [titleError, setTitleError] = useState("");
   const [descriptionError, setDescriptionError] = useState("");
@@ -67,11 +82,18 @@ export default function TaskEditor({
     setDescription(task?.description ?? "");
     setStatus(task?.status ?? initialStatus);
     setPriority(task?.priority ?? "normal");
+    setModel(task?.model ?? "");
+    setHarness(task?.harness ?? "");
     setTagsText((task?.tags ?? []).join(", "));
     setTitleError("");
     setDescriptionError("");
     setSaving(false);
   }, [open, resetKey, task, initialStatus]);
+
+  const harnessLocked = task?.session?.harness_locked ?? false;
+  const modelMissing = model !== "" && !models.some((item) => item.id === model);
+  const harnessMissing = harness !== ""
+    && !harnesses.some((item) => item.id === harness);
 
   const handleSave = async () => {
     const trimmedTitle = title.trim();
@@ -95,6 +117,8 @@ export default function TaskEditor({
         status,
         priority,
         tags,
+        model,
+        harness,
       });
     } catch {
       // The parent already reported the failure; keep the dialog open.
@@ -221,6 +245,60 @@ export default function TaskEditor({
               </option>
             ))}
           </select>
+        </div>
+      </div>
+
+      <div className="field-row">
+        <div className="field">
+          <label className="field-label" htmlFor={modelFieldId}>
+            {t("boardModel")}
+          </label>
+          <select
+            className="text-input"
+            id={modelFieldId}
+            value={model}
+            onChange={(event) => setModel(event.target.value)}
+          >
+            <option value="">{t("boardDefaultModel")}</option>
+            {modelMissing ? (
+              <option value={model}>{model}</option>
+            ) : null}
+            {models.map((item) => (
+              <option value={item.id} key={item.id}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+          {task?.session ? (
+            <span className="field-hint">{t("nextTurnHint")}</span>
+          ) : null}
+        </div>
+
+        <div className="field">
+          <label className="field-label" htmlFor={harnessFieldId}>
+            {t("boardHarness")}
+          </label>
+          <select
+            className="text-input"
+            id={harnessFieldId}
+            value={harness}
+            disabled={harnessLocked}
+            title={harnessLocked ? t("harnessLockedHint") : undefined}
+            onChange={(event) => setHarness(event.target.value)}
+          >
+            <option value="">{t("boardDefaultHarness")}</option>
+            {harnessMissing ? (
+              <option value={harness}>{harness}</option>
+            ) : null}
+            {harnesses.map((item) => (
+              <option value={item.id} key={item.id}>
+                {item.id}
+              </option>
+            ))}
+          </select>
+          {harnessLocked ? (
+            <span className="field-hint">{t("harnessLockedHint")}</span>
+          ) : null}
         </div>
       </div>
 

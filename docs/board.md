@@ -62,6 +62,8 @@
   "priority": "high",
   "tags": ["backend", "bug"],
   "position": 0,
+  "model": "deepseek-v4.1-flash-1017",
+  "harness": "coding-v1",
   "session_id": "sess-20261113-084621",
   "created_at": 1794556358.48,
   "updated_at": 1794556401.12
@@ -77,6 +79,8 @@
 | `priority` | enum | `low / normal / high / urgent` | 默认 `normal` |
 | `tags` | string[] | 最多 20 个，每个 ≤32 字符 | 默认空数组 |
 | `position` | int | 当前列内 0..n-1 | 服务端维护，不接受任意值 |
+| `model` | string \| null | 模型目录中的 id | 空表示用服务默认；创建会话时生效，编辑会同步到已有关联会话 |
+| `harness` | string \| null | `harnesses/` 中的 id | 空表示用服务默认；仅在会话尚无历史时可改 |
 | `session_id` | string \| null | 指向存在的 session | 懒创建 |
 | `created_at` | number | epoch 秒 | 与现有 session 一致 |
 | `updated_at` | number | epoch 秒 | 每次变更更新 |
@@ -105,6 +109,9 @@
     "id": "sess-...",
     "title": "修复登录接口的超时问题",
     "busy": true,
+    "model": "main",
+    "harness": "coding-v1",
+    "harness_locked": false,
     "updated_at": 1794556401.12
   }
 }
@@ -187,7 +194,8 @@ class BoardStore:
     def load(self) -> None
     def snapshot(self, sessions: SessionStore) -> dict
     def create(self, title, *, description="", status="backlog",
-               priority="normal", tags=None) -> dict
+               priority="normal", tags=None,
+               model=None, harness=None) -> dict
     def update(self, task_id, patch: dict) -> dict
     def delete(self, task_id) -> bool
     def move(self, task_id, status: str, position: int | None) -> dict
@@ -232,12 +240,15 @@ class BoardStore:
   "description": "",
   "status": "backlog",
   "priority": "normal",
-  "tags": ["backend"]
+  "tags": ["backend"],
+  "model": "main",
+  "harness": "coding-v1"
 }
 ```
 
 - `title` 和 `description` 必填
 - `status` 默认 `backlog`；从某列“+”创建时前端传该列 id
+- `model` / `harness` 可省略或传 `null`，表示用服务默认；非空值必须是模型目录或 harness 列表中的 id，否则 `400`
 - 返回 `201` + 新快照
 
 #### `PATCH /api/board/tasks/{id}`
@@ -251,9 +262,14 @@ class BoardStore:
   "status": "doing",
   "position": 2,
   "priority": "high",
-  "tags": ["bug"]
+  "tags": ["bug"],
+  "model": "glm-5.3-flash",
+  "harness": "general-v1"
 }
 ```
+
+`model` / `harness` 用空字符串清除，回到服务默认。若任务已有会话，
+改动会同步过去；harness 只在该会话尚无历史时可改，否则返回 `409`。
 
 移动规则：
 
@@ -282,7 +298,7 @@ class BoardStore:
 按需创建或复用会话：
 
 - 任务已有存活会话 → 直接返回
-- 任务无会话 → 用任务标题创建 session，默认 model/harness，写回 `session_id`
+- 任务无会话 → 用任务标题创建 session，优先用任务自己的 model/harness，未选则用服务默认，写回 `session_id`
 - 任务有 `session_id` 但会话已不存在 → 创建新会话并重新关联
 
 响应：
@@ -301,6 +317,7 @@ class BoardStore:
 |---|---|
 | 参数不合法 | `400` |
 | 任务不存在 | `404` |
+| harness 在已开始的会话上被修改 | `409` |
 | 写盘失败 | `500`，日志记录细节，响应不暴露路径 |
 | 删除会话时看板写失败 | 会话删除仍成功，记录 warning |
 
@@ -507,7 +524,7 @@ const board = useBoard({ enabled: view === "board" });
 2. 没有 → `POST /api/board/tasks/{id}/session`
 3. 服务端创建 session：
    - 标题 = 任务标题（截断到 200）
-   - model/harness 用服务默认值
+   - model/harness 优先用任务上的选择，未选则用服务默认值
    - 写回 `session_id`
 4. 前端 `refreshSessions()` + `selectSession()` + `setView("chat")`
 

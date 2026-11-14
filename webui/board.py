@@ -43,6 +43,7 @@ DESCRIPTION_MAX = 20_000
 TAG_MAX = 32
 TAGS_MAX = 20
 ERROR_MAX = 2_000
+CHOICE_MAX = 200
 
 _STATUS_INDEX = {status: index for index, status in enumerate(BOARD_STATUSES)}
 
@@ -117,6 +118,32 @@ def _clean_error(value: Any) -> str | None:
     return text[:ERROR_MAX] if text else None
 
 
+def _load_choice(value: Any) -> str | None:
+    """Read a model/harness id from disk, clamping it like other fields."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text[:CHOICE_MAX] if text else None
+
+
+def _clean_choice(value: Any, field: str) -> str | None:
+    """Validate a model/harness id supplied by a client.
+
+    ``None`` and the empty string both mean "use the service default".
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise BoardValidationError(f"{field} must be a string")
+    text = value.strip()
+    if not text:
+        return None
+    if len(text) > CHOICE_MAX:
+        raise BoardValidationError(
+            f"{field} must be at most {CHOICE_MAX} characters")
+    return text
+
+
 def _clean_status(value: Any) -> str:
     if value not in BOARD_STATUSES:
         raise BoardValidationError(
@@ -165,6 +192,8 @@ class BoardTask:
     priority: str = "normal"
     tags: list[str] = field(default_factory=list)
     position: int = 0
+    model: str | None = None
+    harness: str | None = None
     session_id: str | None = None
     queued_at: float | None = None
     run_id: str | None = None
@@ -183,6 +212,8 @@ class BoardTask:
             "priority": self.priority,
             "tags": list(self.tags),
             "position": self.position,
+            "model": self.model,
+            "harness": self.harness,
             "session_id": self.session_id,
             "queued_at": self.queued_at,
             "run_id": self.run_id,
@@ -238,7 +269,10 @@ class BoardTask:
         updated_at = _as_float(record.get("updated_at")) or created_at
         return cls(id=task_id.strip(), title=title, description=description,
                    status=status, priority=priority, tags=tags,
-                   position=position, session_id=session_id,
+                   position=position,
+                   model=_load_choice(record.get("model")),
+                   harness=_load_choice(record.get("harness")),
+                   session_id=session_id,
                    queued_at=_as_optional_float(record.get("queued_at")),
                    run_id=_as_optional_text(record.get("run_id")),
                    started_at=_as_optional_float(record.get("started_at")),
@@ -355,12 +389,16 @@ class BoardStore:
 
     def create(self, title: str, *, description: str,
                status: str = "backlog", priority: str = "normal",
-               tags: list[str] | None = None) -> dict[str, Any]:
+               tags: list[str] | None = None,
+               model: str | None = None,
+               harness: str | None = None) -> dict[str, Any]:
         title = _clean_title(title)
         description = _clean_description(description)
         status = _clean_status(status)
         priority = _clean_priority(priority)
         tags = _clean_tags(tags)
+        model = _clean_choice(model, "model")
+        harness = _clean_choice(harness, "harness")
         now = time.time()
         with self._lock:
             position = sum(1 for task in self._tasks
@@ -373,6 +411,8 @@ class BoardStore:
                 priority=priority,
                 tags=tags,
                 position=position,
+                model=model,
+                harness=harness,
                 queued_at=now if status == "todo" else None,
                 created_at=now,
                 updated_at=now,
@@ -404,6 +444,10 @@ class BoardStore:
                 target.priority = _clean_priority(patch["priority"])
             if "tags" in patch:
                 target.tags = _clean_tags(patch["tags"])
+            if "model" in patch:
+                target.model = _clean_choice(patch["model"], "model")
+            if "harness" in patch:
+                target.harness = _clean_choice(patch["harness"], "harness")
 
             new_status = target.status
             if "status" in patch:
@@ -614,8 +658,9 @@ class BoardStore:
                 if session is not None:
                     return session.id, False
 
-            session = sessions.create(title=task.title, model=model,
-                                      harness=harness)
+            session = sessions.create(title=task.title,
+                                      model=task.model or model,
+                                      harness=task.harness or harness)
             tasks = [_copy(current) for current in self._tasks]
             target = next(current for current in tasks
                           if current.id == task_id)
@@ -712,6 +757,9 @@ class BoardStore:
             "id": session.id,
             "title": session.title,
             "busy": bool(session.busy),
+            "model": session.model,
+            "harness": session.harness,
+            "harness_locked": session.harness_locked,
             "updated_at": session.updated_at,
         }
 

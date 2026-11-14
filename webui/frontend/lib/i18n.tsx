@@ -122,6 +122,10 @@ const en = {
   boardPauseAutoRun: "Pause auto-run",
   boardResumeAutoRun: "Resume auto-run",
   boardAutoRunPaused: "Auto-run paused",
+  boardModel: "Model",
+  boardHarness: "Harness",
+  boardDefaultModel: "Service default",
+  boardDefaultHarness: "Service default",
 } as const;
 
 export type MessageKey = keyof typeof en;
@@ -232,6 +236,10 @@ const zh: Record<MessageKey, string> = {
   boardPauseAutoRun: "暂停自动执行",
   boardResumeAutoRun: "恢复自动执行",
   boardAutoRunPaused: "自动执行已暂停",
+  boardModel: "模型",
+  boardHarness: "执行框架",
+  boardDefaultModel: "使用服务默认",
+  boardDefaultHarness: "使用服务默认",
 };
 
 const dictionaries: Record<Locale, Record<MessageKey, string>> = { en, zh };

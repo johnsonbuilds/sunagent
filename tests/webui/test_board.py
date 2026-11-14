@@ -221,6 +221,42 @@ class BoardStoreTests(unittest.TestCase):
             self.assertFalse(created_again)
             self.assertEqual(board.get(task["id"]).session_id, session_id)
 
+    def test_task_model_and_harness_round_trip(self) -> None:
+        with TemporaryDirectory() as root:
+            board = self._board(root)
+            created = self._create(
+                board, "Configured",
+                model="deepseek-v4.1-flash-1017",
+                harness="coding-v1",
+            )
+            self.assertEqual(created["model"], "deepseek-v4.1-flash-1017")
+            self.assertEqual(created["harness"], "coding-v1")
+
+            reloaded = self._board(root)
+            stored = reloaded.get(created["id"])
+            self.assertEqual(stored.model, "deepseek-v4.1-flash-1017")
+            self.assertEqual(stored.harness, "coding-v1")
+
+            cleared = reloaded.update(created["id"],
+                                      {"model": "", "harness": None})
+            self.assertIsNone(cleared["model"])
+            self.assertIsNone(cleared["harness"])
+
+    def test_ensure_session_prefers_task_choices_over_defaults(self) -> None:
+        with TemporaryDirectory() as root:
+            board = self._board(root)
+            sessions = self._sessions(root)
+            task = self._create(board, "Configured", model="task-model",
+                                harness="task-harness")
+
+            session_id, _ = board.ensure_session(
+                task["id"], sessions, model="default-model",
+                harness="default-harness")
+
+            session = sessions.get(session_id)
+            self.assertEqual(session.model, "task-model")
+            self.assertEqual(session.harness, "task-harness")
+
     def test_unlink_session(self) -> None:
         with TemporaryDirectory() as root:
             board = self._board(root)
@@ -573,6 +609,136 @@ class BoardApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["deleted_session"])
         self.assertIsNone(self.sessions.get(session_id))
+
+    def test_task_model_and_harness_are_validated_and_stored(self) -> None:
+        response = self.client.post("/api/board/tasks", json={
+            "title": "Configured",
+            "description": "Configured description",
+            "model": "main",
+            "harness": "coding-v1",
+        })
+        self.assertEqual(response.status_code, 201)
+        task = response.json()["tasks"][0]
+        self.assertEqual(task["model"], "main")
+        self.assertEqual(task["harness"], "coding-v1")
+
+        response = self.client.post("/api/board/tasks", json={
+            "title": "Unknown model",
+            "description": "Unknown model description",
+            "model": "no-such-model",
+        })
+        self.assertEqual(response.status_code, 400)
+        response = self.client.post("/api/board/tasks", json={
+            "title": "Unknown harness",
+            "description": "Unknown harness description",
+            "harness": "no-such-harness",
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(len(self._tasks()), 1)
+
+        response = self.client.patch(
+            f"/api/board/tasks/{task['id']}",
+            json={"model": "no-such-model"})
+        self.assertEqual(response.status_code, 400)
+        response = self.client.patch(
+            f"/api/board/tasks/{task['id']}",
+            json={"harness": "no-such-harness"})
+        self.assertEqual(response.status_code, 400)
+
+        # An empty string clears the choice back to the service default.
+        response = self.client.patch(
+            f"/api/board/tasks/{task['id']}",
+            json={"model": "", "harness": ""})
+        self.assertEqual(response.status_code, 200)
+        cleared = response.json()["tasks"][0]
+        self.assertIsNone(cleared["model"])
+        self.assertIsNone(cleared["harness"])
+
+    def test_task_conversation_uses_the_task_choices(self) -> None:
+        task = self.client.post("/api/board/tasks", json={
+            "title": "Configured",
+            "description": "Configured description",
+            "model": "main",
+            "harness": "coding-v1",
+        }).json()["tasks"][0]
+
+        payload = self.client.post(
+            f"/api/board/tasks/{task['id']}/session", json={}).json()
+        self.assertTrue(payload["created"])
+        session = self.sessions.get(payload["session_id"])
+        self.assertEqual(session.model, "main")
+        self.assertEqual(session.harness, "coding-v1")
+
+        linked = payload["board"]["tasks"][0]
+        self.assertEqual(linked["session"]["model"], "main")
+        self.assertEqual(linked["session"]["harness"], "coding-v1")
+        self.assertFalse(linked["session"]["harness_locked"])
+
+    def test_patch_syncs_a_linked_conversation(self) -> None:
+        task = self.client.post("/api/board/tasks", json={
+            "title": "Configured",
+            "description": "Configured description",
+            "model": "main",
+            "harness": "coding-v1",
+        }).json()["tasks"][0]
+        session_id = self.client.post(
+            f"/api/board/tasks/{task['id']}/session", json={},
+        ).json()["session_id"]
+
+        response = self.client.patch(
+            f"/api/board/tasks/{task['id']}",
+            json={"model": "glm-5.3-flash", "harness": "general-v1"})
+        self.assertEqual(response.status_code, 200)
+        session = self.sessions.get(session_id)
+        self.assertEqual(session.model, "glm-5.3-flash")
+        self.assertEqual(session.harness, "general-v1")
+
+        # Clearing the card also clears the linked conversation.
+        response = self.client.patch(
+            f"/api/board/tasks/{task['id']}",
+            json={"model": "", "harness": ""})
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(session.model)
+        self.assertIsNone(session.harness)
+
+    def test_locked_harness_rejects_sync_but_model_still_changes(self) -> None:
+        task = self.client.post("/api/board/tasks", json={
+            "title": "Active",
+            "description": "Active description",
+            "model": "main",
+            "harness": "coding-v1",
+        }).json()["tasks"][0]
+        session_id = self.client.post(
+            f"/api/board/tasks/{task['id']}/session", json={},
+        ).json()["session_id"]
+        # A transcript freezes the harness but not the model.
+        session = self.sessions.get(session_id)
+        session.append_segment({"id": "seg-1", "type": "user",
+                                "content": "hello"})
+        self.sessions.save(session)
+
+        response = self.client.patch(
+            f"/api/board/tasks/{task['id']}",
+            json={"harness": "general-v1"})
+        self.assertEqual(response.status_code, 409)
+        stored = self._tasks()[0]
+        self.assertEqual(stored["harness"], "coding-v1")
+        self.assertEqual(self.sessions.get(session_id).harness, "coding-v1")
+
+        # Clearing is a harness change too, so it is rejected as well.
+        response = self.client.patch(
+            f"/api/board/tasks/{task['id']}",
+            json={"harness": ""})
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(self._tasks()[0]["harness"], "coding-v1")
+        self.assertEqual(self.sessions.get(session_id).harness, "coding-v1")
+
+        response = self.client.patch(
+            f"/api/board/tasks/{task['id']}",
+            json={"model": "glm-5.3-flash"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self._tasks()[0]["model"], "glm-5.3-flash")
+        self.assertEqual(self.sessions.get(session_id).model, "glm-5.3-flash")
 
     def test_deleting_a_conversation_unlinks_its_task(self) -> None:
         task = self.client.post(

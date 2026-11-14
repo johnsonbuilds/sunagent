@@ -193,6 +193,8 @@ class CreateTaskRequest(BaseModel):
     status: str = "backlog"
     priority: str = "normal"
     tags: list[str] = Field(default_factory=list)
+    model: str | None = Field(default=None, max_length=200)
+    harness: str | None = Field(default=None, max_length=200)
 
 
 class PatchTaskRequest(BaseModel):
@@ -202,6 +204,8 @@ class PatchTaskRequest(BaseModel):
     position: int | None = Field(default=None, ge=0)
     priority: str | None = None
     tags: list[str] | None = None
+    model: str | None = Field(default=None, max_length=200)
+    harness: str | None = Field(default=None, max_length=200)
 
 
 class ExecutorStateRequest(BaseModel):
@@ -580,10 +584,15 @@ def create_app(store: SessionStore | None = None,
 
     @app.post("/api/board/tasks", status_code=201)
     async def create_task(payload: CreateTaskRequest) -> dict[str, Any]:
+        if payload.model:
+            _require_model(runner.catalog, payload.model)
+        if payload.harness:
+            _require_harness(payload.harness)
         try:
             tasks.create(payload.title, description=payload.description,
                          status=payload.status, priority=payload.priority,
-                         tags=payload.tags)
+                         tags=payload.tags,
+                         model=payload.model, harness=payload.harness)
         except (BoardValidationError, BoardStorageError) as exc:
             raise _board_http_error(exc) from exc
         if payload.status == "todo":
@@ -601,6 +610,19 @@ def create_app(store: SessionStore | None = None,
         patch = {key: value for key, value in
                  payload.model_dump(exclude_unset=True).items()
                  if value is not None}
+        if patch.get("model"):
+            _require_model(runner.catalog, patch["model"])
+        if patch.get("harness"):
+            _require_harness(patch["harness"])
+
+        linked = sessions.get(before.session_id) if before.session_id else None
+        harness_edit = ("harness" in patch
+                        and patch["harness"] != before.harness)
+        if linked is not None and harness_edit and linked.harness_locked:
+            raise HTTPException(
+                status_code=409,
+                detail="harness is locked for this task's conversation")
+
         try:
             tasks.update(task_id, patch)
         except (BoardNotFoundError, BoardValidationError,
@@ -609,6 +631,21 @@ def create_app(store: SessionStore | None = None,
 
         after = tasks.get(task_id)
         assert after is not None
+        if linked is not None:
+            # Keep the card and its conversation in agreement. The model
+            # may change at any time, including back to the default; the
+            # harness only while the conversation is still empty.
+            changed = False
+            if "model" in patch and linked.model != after.model:
+                linked.model = after.model
+                changed = True
+            if ("harness" in patch and not linked.harness_locked
+                    and linked.harness != after.harness):
+                linked.harness = after.harness
+                changed = True
+            if changed:
+                linked.updated_at = time.time()
+                sessions.save(linked)
         if before.status == "doing" and after.status != "doing":
             # The human changed the card while the executor owned it:
             # cancel the run; finish_run will not overwrite their status.

@@ -507,6 +507,10 @@ export default function Home() {
     if (!existing || input.priority !== existing.priority) {
       patch.priority = input.priority;
     }
+    if ((existing?.model ?? "") !== input.model) patch.model = input.model;
+    if ((existing?.harness ?? "") !== input.harness) {
+      patch.harness = input.harness;
+    }
     if (!existing || JSON.stringify(input.tags) !== JSON.stringify(existing.tags)) {
       patch.tags = input.tags;
     }
@@ -785,6 +789,8 @@ export default function Home() {
         task={editingTask}
         initialStatus={editorInitialStatus}
         statuses={board.snapshot?.statuses ?? STATUS_ORDER}
+        models={models}
+        harnesses={harnesses}
         onClose={() => setEditor(null)}
         onSave={saveTask}
         onRequestDelete={requestDeleteTask}
