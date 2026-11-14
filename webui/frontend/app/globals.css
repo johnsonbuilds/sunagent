@@ -608,35 +608,43 @@ button {
 
 /* ------------------------------------------------------------- markdown */
 
-.msg-body > *:first-child { margin-top: 0; }
-.msg-body > *:last-child { margin-bottom: 0; }
+.md-body {
+  font-family: var(--font-prose);
+  font-size: var(--body-size);
+  line-height: var(--line-height);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
 
-.msg-body p { margin: 0 0 10px; }
+:is(.msg-body, .md-body) > *:first-child { margin-top: 0; }
+:is(.msg-body, .md-body) > *:last-child { margin-bottom: 0; }
 
-.msg-body ul,
-.msg-body ol {
+:is(.msg-body, .md-body) p { margin: 0 0 10px; }
+
+:is(.msg-body, .md-body) ul,
+:is(.msg-body, .md-body) ol {
   margin: 6px 0 12px;
   padding-left: 22px;
 }
 
-.msg-body li { margin-bottom: 4px; }
+:is(.msg-body, .md-body) li { margin-bottom: 4px; }
 
-.msg-body h1,
-.msg-body h2,
-.msg-body h3,
-.msg-body h4 {
+:is(.msg-body, .md-body) h1,
+:is(.msg-body, .md-body) h2,
+:is(.msg-body, .md-body) h3,
+:is(.msg-body, .md-body) h4 {
   margin: 20px 0 8px;
   line-height: 1.3;
   font-weight: 700;
   letter-spacing: -0.01em;
 }
 
-.msg-body h1 { font-size: 21px; }
-.msg-body h2 { font-size: 18px; }
-.msg-body h3 { font-size: 16px; }
-.msg-body h4 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+:is(.msg-body, .md-body) h1 { font-size: 21px; }
+:is(.msg-body, .md-body) h2 { font-size: 18px; }
+:is(.msg-body, .md-body) h3 { font-size: 16px; }
+:is(.msg-body, .md-body) h4 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
 
-.msg-body code {
+:is(.msg-body, .md-body) code {
   font-family: var(--font-mono);
   font-size: 0.86em;
   background: var(--code-bg);
@@ -645,7 +653,7 @@ button {
   padding: 1px 4px;
 }
 
-.msg-body pre {
+:is(.msg-body, .md-body) pre {
   margin: 10px 0;
   padding: 12px 14px;
   border-radius: var(--radius-md);
@@ -654,7 +662,7 @@ button {
   overflow-x: auto;
 }
 
-.msg-body pre code {
+:is(.msg-body, .md-body) pre code {
   border: none;
   background: none;
   padding: 0;
@@ -662,22 +670,22 @@ button {
   line-height: 1.6;
 }
 
-.msg-body blockquote {
+:is(.msg-body, .md-body) blockquote {
   margin: 10px 0;
   padding: 2px 0 2px 12px;
   border-left: 2px solid var(--border-strong);
   color: var(--muted);
 }
 
-.msg-body hr {
+:is(.msg-body, .md-body) hr {
   margin: 18px 0;
   border: none;
   border-top: 1px solid var(--border);
 }
 
-.msg-body a { color: var(--accent-strong); text-decoration: underline; text-underline-offset: 2px; }
+:is(.msg-body, .md-body) a { color: var(--accent-strong); text-decoration: underline; text-underline-offset: 2px; }
 
-.msg-body table {
+:is(.msg-body, .md-body) table {
   width: 100%;
   border-collapse: collapse;
   margin: 10px 0;
@@ -685,8 +693,8 @@ button {
   font-size: 12px;
 }
 
-.msg-body th,
-.msg-body td {
+:is(.msg-body, .md-body) th,
+:is(.msg-body, .md-body) td {
   border: 1px solid var(--border);
   padding: 5px 8px;
   text-align: left;
@@ -1623,7 +1631,6 @@ button {
 .task-detail-description {
   margin: 0;
   color: var(--text);
-  white-space: pre-wrap;
   word-break: break-word;
 }
 
@@ -1690,7 +1697,6 @@ button {
 .activity-body,
 .activity-response {
   color: var(--text);
-  white-space: pre-wrap;
   word-break: break-word;
 }
 

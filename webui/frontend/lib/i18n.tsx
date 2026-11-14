@@ -127,7 +127,7 @@ const en = {
   boardDefaultModel: "Service default",
   boardDefaultHarness: "Service default",
   boardActivity: "Activity",
-  boardFinalResponse: "Final response",
+  boardFinalResponse: "Agent:",
   boardNoFinalResponse: "No final response",
   boardInitialRun: "Initial run",
   boardRerun: "Re-run",
@@ -140,7 +140,7 @@ const en = {
   boardCommentDuringRunHint:
     "The current run keeps going; this comment is sent when it finishes.",
   boardNoActivity: "No comments or runs yet.",
-  boardComments: "Comments",
+  boardComments: "User:",
   boardLoadingTask: "Loading activity…",
 } as const;
 
@@ -257,7 +257,7 @@ const zh: Record<MessageKey, string> = {
   boardDefaultModel: "使用服务默认",
   boardDefaultHarness: "使用服务默认",
   boardActivity: "活动",
-  boardFinalResponse: "最终回复",
+  boardFinalResponse: "Agent:",
   boardNoFinalResponse: "没有最终回复",
   boardInitialRun: "首次执行",
   boardRerun: "重新执行",
@@ -268,7 +268,7 @@ const zh: Record<MessageKey, string> = {
   boardCommentHint: "评论会作为下一条 user 消息，任务随后回到待办并再次执行。",
   boardCommentDuringRunHint: "当前执行不会中断，评论会在本次执行结束后发送。",
   boardNoActivity: "还没有评论或执行记录。",
-  boardComments: "评论",
+  boardComments: "User:",
   boardLoadingTask: "正在加载活动…",
 };
 

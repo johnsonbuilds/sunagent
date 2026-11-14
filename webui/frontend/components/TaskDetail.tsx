@@ -12,6 +12,7 @@ import type {
   TaskRun,
 } from "@/lib/types";
 
+import Markdown from "./Markdown";
 import Modal from "./Modal";
 
 interface TaskDetailProps {
@@ -109,7 +110,7 @@ export default function TaskDetail({
   const renderComment = (comment: TaskComment) => (
     <div className="activity-comment" key={comment.id}>
       <div className="activity-role">{t("boardComments")}</div>
-      <div className="activity-body">{comment.body}</div>
+      <Markdown className="activity-body" text={comment.body} />
       <div className="activity-meta">
         {relativeTime(comment.created_at, t)}
       </div>
@@ -128,9 +129,13 @@ export default function TaskDetail({
       )}
       <div className="activity-response-block">
         <div className="activity-role">{t("boardFinalResponse")}</div>
-        <div className="activity-response">
-          {run.response || t("boardNoFinalResponse")}
-        </div>
+        {run.response ? (
+          <Markdown className="activity-response" text={run.response} />
+        ) : (
+          <div className="activity-response">
+            {t("boardNoFinalResponse")}
+          </div>
+        )}
         <div className="activity-meta">
           {run.finished_at
             ? relativeTime(run.finished_at, t)
@@ -185,7 +190,12 @@ export default function TaskDetail({
           ) : null}
         </div>
 
-        <p className="task-detail-description">{task.description}</p>
+        {task.description ? (
+          <Markdown
+            className="task-detail-description"
+            text={task.description}
+          />
+        ) : null}
 
         <section className="activity">
           <h3 className="activity-heading">{t("boardActivity")}</h3>
