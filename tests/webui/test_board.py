@@ -314,7 +314,17 @@ class BoardStoreTests(unittest.TestCase):
             board = self._board(root)
             first = self._create(board, "First", status="todo")
             second = self._create(board, "Second", status="todo")
+            third = self._create(board, "Third", status="todo")
 
+            # Reorder so the column position disagrees with creation order;
+            # otherwise "position" and "age" would be indistinguishable.
+            board.move(third["id"], "todo", position=0)
+            self.assertEqual(board.get(third["id"]).position, 0)
+            self.assertEqual(board.get(first["id"]).position, 1)
+            self.assertEqual(board.get(second["id"]).position, 2)
+
+            claimed = board.claim_next_todo()
+            self.assertEqual(claimed.id, third["id"])
             claimed = board.claim_next_todo()
             self.assertEqual(claimed.id, first["id"])
             claimed = board.claim_next_todo()
