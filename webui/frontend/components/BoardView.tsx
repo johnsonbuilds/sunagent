@@ -6,7 +6,7 @@ import { STATUS_LABEL_KEYS, STATUS_ORDER, queueOrder } from "@/lib/board";
 import { useI18n } from "@/lib/i18n";
 import type { BoardSnapshot, BoardTask, TaskStatus } from "@/lib/types";
 
-import { PlusIcon, PauseIcon, RefreshIcon } from "./Icons";
+import { PlusIcon, PauseIcon, PlayIcon, RefreshIcon } from "./Icons";
 import TaskCard from "./TaskCard";
 
 interface BoardViewProps {
@@ -150,13 +150,13 @@ export default function BoardView({
         </div>
         <div className="board-head-actions">
           <button
-            className="icon-btn small"
+            className="icon-btn small board-toggle-btn"
             type="button"
             title={paused ? t("boardResumeAutoRun") : t("boardPauseAutoRun")}
             aria-label={paused ? t("boardResumeAutoRun") : t("boardPauseAutoRun")}
             onClick={onTogglePaused}
           >
-            <PauseIcon />
+            {paused ? <PlayIcon /> : <PauseIcon />}
           </button>
           <button
             className="icon-btn"

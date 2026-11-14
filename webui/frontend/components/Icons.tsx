@@ -178,6 +178,21 @@ export function PauseIcon() {
   );
 }
 
+export function PlayIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <polygon points="5 3 19 12 5 21" />
+    </svg>
+  );
+}
+
 export function CloseIcon({ size = 17 }: { size?: number }) {
   return (
     <svg
