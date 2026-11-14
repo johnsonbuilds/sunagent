@@ -6,7 +6,7 @@ import { STATUS_LABEL_KEYS, STATUS_ORDER, queueOrder } from "@/lib/board";
 import { useI18n } from "@/lib/i18n";
 import type { BoardSnapshot, BoardTask, TaskStatus } from "@/lib/types";
 
-import { PlusIcon, RefreshIcon } from "./Icons";
+import { PlusIcon, PauseIcon, RefreshIcon } from "./Icons";
 import TaskCard from "./TaskCard";
 
 interface BoardViewProps {
@@ -139,7 +139,6 @@ export default function BoardView({
     <div className="board">
       <header className="board-head">
         <div className="board-head-left">
-          <h1 className="board-heading">{t("boardTitle")}</h1>
           <span className="board-subtitle">
             {t("boardTaskCount", { count: visibleCount })}
           </span>
@@ -151,11 +150,13 @@ export default function BoardView({
         </div>
         <div className="board-head-actions">
           <button
-            className="btn small"
+            className="icon-btn small"
             type="button"
+            title={paused ? t("boardResumeAutoRun") : t("boardPauseAutoRun")}
+            aria-label={paused ? t("boardResumeAutoRun") : t("boardPauseAutoRun")}
             onClick={onTogglePaused}
           >
-            {paused ? t("boardResumeAutoRun") : t("boardPauseAutoRun")}
+            <PauseIcon />
           </button>
           <button
             className="icon-btn"
@@ -165,14 +166,6 @@ export default function BoardView({
             onClick={onRefresh}
           >
             <RefreshIcon />
-          </button>
-          <button
-            className="btn primary board-new-btn"
-            type="button"
-            onClick={() => onCreateTask("backlog")}
-          >
-            <PlusIcon />
-            {t("boardNewTask")}
           </button>
         </div>
       </header>
