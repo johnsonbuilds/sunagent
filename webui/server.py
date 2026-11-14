@@ -21,9 +21,11 @@ Endpoints:
     GET    /api/sessions/{id}/events    SSE stream of frames
     GET    /api/board                   the task board snapshot
     POST   /api/board/tasks             create a task
+    GET    /api/board/tasks/{id}        one task with its comment/run history
     PATCH  /api/board/tasks/{id}        edit or move a task
     DELETE /api/board/tasks/{id}        delete a task
     POST   /api/board/tasks/{id}/session  create or reuse its conversation
+    POST   /api/board/tasks/{id}/comments  leave feedback and re-queue
     POST   /api/system/restart          restart the server via ./run.sh restart
 
 Every route sits behind HTTP basic authentication when a user name and
@@ -173,6 +175,10 @@ def _install_exit_handlers() -> None:
 
 class MessageRequest(BaseModel):
     message: str = Field(default="", max_length=100_000)
+
+
+class CommentRequest(BaseModel):
+    body: str = Field(default="", max_length=10_000)
 
 
 class PatchSessionRequest(BaseModel):
@@ -689,6 +695,26 @@ def create_app(store: SessionStore | None = None,
             raise _board_http_error(exc) from exc
         return {"board": board_snapshot(),
                 "session_id": session_id, "created": created}
+
+    @app.get("/api/board/tasks/{task_id}")
+    async def get_task(task_id: str) -> dict[str, Any]:
+        try:
+            return tasks.detail(task_id, sessions)
+        except (BoardNotFoundError, BoardStorageError) as exc:
+            raise _board_http_error(exc) from exc
+
+    @app.post("/api/board/tasks/{task_id}/comments", status_code=201)
+    async def add_task_comment(task_id: str,
+                               payload: CommentRequest) -> dict[str, Any]:
+        try:
+            _, deferred = tasks.add_comment(task_id, payload.body)
+            detail = tasks.detail(task_id, sessions)
+        except (BoardNotFoundError, BoardValidationError,
+                BoardStorageError) as exc:
+            raise _board_http_error(exc) from exc
+        executor.wake()
+        return {"board": board_snapshot(), "detail": detail,
+                "deferred": deferred}
 
     @app.get("/{path:path}", include_in_schema=False)
     async def frontend_file(path: str) -> FileResponse:

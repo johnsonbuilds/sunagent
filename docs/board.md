@@ -64,6 +64,24 @@
   "position": 0,
   "model": "deepseek-v4.1-flash-1017",
   "harness": "coding-v1",
+  "comments": [
+    {
+      "id": "comment-1a2b3c4d5e6f",
+      "body": "复现步骤、相关日志、验收标准……",
+      "created_at": 1794556399.12,
+      "run_id": null
+    }
+  ],
+  "runs": [
+    {
+      "run_id": "run-7a8b9c0d1e2f",
+      "started_at": 1794556358.48,
+      "finished_at": 1794556375.21,
+      "status": "completed",
+      "response": "已修复并补了回归测试。",
+      "error": null
+    }
+  ],
   "session_id": "sess-20261113-084621",
   "created_at": 1794556358.48,
   "updated_at": 1794556401.12
@@ -81,6 +99,8 @@
 | `position` | int | 当前列内 0..n-1 | 服务端维护，不接受任意值 |
 | `model` | string \| null | 模型目录中的 id | 空表示用服务默认；创建会话时生效，编辑会同步到已有关联会话 |
 | `harness` | string \| null | `harnesses/` 中的 id | 空表示用服务默认；仅在会话尚无历史时可改 |
+| `comments` | object[] | 最多单条 10,000 字符 | 用户评论；`run_id` 为空表示待发送 |
+| `runs` | object[] | final response ≤100,000 字符 | 每次执行的结果；只存最终答复 |
 | `session_id` | string \| null | 指向存在的 session | 懒创建 |
 | `created_at` | number | epoch 秒 | 与现有 session 一致 |
 | `updated_at` | number | epoch 秒 | 每次变更更新 |
@@ -119,6 +139,16 @@
 
 - 会话不存在或已被删除 → `session: null`
 - 不返回 `segments` / `messages`，避免看板接口变重
+
+### 3.4 评论与执行历史
+
+`comments` 和 `runs` 是卡片级的持久化历史，不是会话 transcript：
+
+- 每条评论保存用户输入；被某次 run 消费后写入 `run_id`。
+- 每次 run 保存 `run_id`、开始/结束时间、`status`（`completed` / `error` / `cancelled`）、**final response** 和错误。
+- 不保存 thinking、tool 调用、delta 等中间过程。
+- 看板轮询只返回 `comment_count` / `run_count`；完整历史通过任务详情接口按需加载。
+- 会话被删除后，卡片上的历史仍然保留。
 
 ---
 
@@ -197,6 +227,8 @@ class BoardStore:
                priority="normal", tags=None,
                model=None, harness=None) -> dict
     def update(self, task_id, patch: dict) -> dict
+    def add_comment(self, task_id, body) -> tuple[dict, bool]
+    def detail(self, task_id, sessions) -> dict
     def delete(self, task_id) -> bool
     def move(self, task_id, status: str, position: int | None) -> dict
     def ensure_session(self, task_id, sessions, *, model, harness) -> tuple[str, bool]
@@ -277,6 +309,48 @@ class BoardStore:
 - 只传 `position`：在当前列内移动
 - 同时传：插入目标列的指定位置
 - 服务端对受影响列重新编号，返回完整快照
+
+#### `GET /api/board/tasks/{id}`
+
+返回任务完整详情，包含 `comments` 和 `runs`：
+
+```json
+{
+  "id": "task-...",
+  "title": "...",
+  "comments": [ ... ],
+  "runs": [ ... ],
+  "session": { ... }
+}
+```
+
+看板快照不包含这两个列表，只带 `comment_count` / `run_count`，避免 5 秒轮询传输大量 final response。
+
+#### `POST /api/board/tasks/{id}/comments`
+
+请求：
+
+```json
+{ "body": "登录接口还是超时，请检查连接池配置" }
+```
+
+行为：
+
+- 评论入库；卡片不在执行中 → 立即回到 `todo` 并排队。
+- 卡片正在执行 → 当前 run 不打断，评论标记为待发送；run 结束后卡片自动回到 `todo`。
+- 首次 run 仍只发送 description；后续 run 把所有待发送评论合并成一条 user 消息。
+- 每次 run 结束把 final response 写入 `runs`。
+- 返回 `201`：
+
+```json
+{
+  "board": { ... },
+  "detail": { ... },
+  "deferred": false
+}
+```
+
+`deferred=true` 表示评论要等当前 run 结束。
 
 #### `DELETE /api/board/tasks/{id}?delete_session=false`
 
@@ -403,6 +477,7 @@ const board = useBoard({ enabled: view === "board" });
 |---|---|
 | `components/BoardView.tsx` | 看板头部、列、拖拽容器、空状态 |
 | `components/TaskCard.tsx` | 单张任务卡、运行指示、快捷操作 |
+| `components/TaskDetail.tsx` | 任务详情：描述、评论时间线、每次 run 的 final response、评论输入 |
 | `components/TaskEditor.tsx` | 新建/编辑弹窗，复用 `Modal` |
 | `components/BoardPanel.tsx` | 侧栏：搜索、隐藏已完成、新建任务、列计数 |
 | `lib/useBoard.ts` | 数据获取、轮询、乐观更新、CRUD |
@@ -439,7 +514,8 @@ const board = useBoard({ enabled: view === "board" });
   - 已关联且空闲：对话图标 + 相对时间
   - 已关联且 `busy`：旋转指示 + “运行中”
 - 悬停操作：编辑、打开对话、删除
-- 点击卡片主体：打开 `TaskEditor` 详情/编辑弹窗
+- 点击卡片主体：打开 `TaskDetail` 详情弹窗
+- 详情里的铅笔：打开 `TaskEditor` 编辑弹窗
 - 卡片上的“打开对话”按钮：直接进入聊天
 
 ### 6.6 拖拽方案
@@ -517,6 +593,13 @@ const board = useBoard({ enabled: view === "board" });
 - 发送消息后也主动刷新一次，让卡片尽快显示“运行中”
 
 ### 6.10 与聊天/会话的集成
+
+**查看卡片详情**
+
+1. 点击卡片正文打开 `TaskDetail` 弹窗（铅笔仍进入编辑）。
+2. 弹窗按需 `GET /api/board/tasks/{id}`，展示描述、评论、每次 run 的 final response。
+3. 底部输入评论 → `POST /api/board/tasks/{id}/comments`，返回新快照和详情。
+4. 正在执行时评论不打断当前 run，弹窗提示“执行结束后发送”。
 
 **打开任务对话**
 

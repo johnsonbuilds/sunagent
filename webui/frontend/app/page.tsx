@@ -7,6 +7,7 @@ import Composer from "@/components/Composer";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import type { AppView, NavId, PanelId } from "@/components/IconRail";
 import Sidebar from "@/components/Sidebar";
+import TaskDetail from "@/components/TaskDetail";
 import TaskEditor from "@/components/TaskEditor";
 import TitleBar, { type StatusState } from "@/components/TitleBar";
 import Transcript from "@/components/Transcript";
@@ -111,6 +112,7 @@ export default function Home() {
   const [restarting, setRestarting] = useState(false);
   const [toast, setToast] = useState("");
   const [editor, setEditor] = useState<EditorState>(null);
+  const [detailTaskId, setDetailTaskId] = useState<string | null>(null);
   const [deleteTask, setDeleteTask] = useState<BoardTask | null>(null);
   const [deletingTask, setDeletingTask] = useState(false);
 
@@ -458,13 +460,20 @@ export default function Home() {
   }, []);
 
   const openEditTask = useCallback((task: BoardTask) => {
+    setDetailTaskId(null);
     setEditor({ mode: "edit", taskId: task.id, status: task.status });
+  }, []);
+
+  const openTaskDetail = useCallback((task: BoardTask) => {
+    setEditor(null);
+    setDetailTaskId(task.id);
   }, []);
 
   const requestDeleteTask = useCallback((task: BoardTask) => {
     // The editor and the confirm dialog are both native modals, so
     // only one can be open at a time.
     setEditor(null);
+    setDetailTaskId(null);
     setDeleteTask(task);
   }, []);
 
@@ -477,12 +486,13 @@ export default function Home() {
       if (editor?.mode === "edit" && editor.taskId === deleteTask.id) {
         setEditor(null);
       }
+      if (detailTaskId === deleteTask.id) setDetailTaskId(null);
     } catch {
       // The board hook already showed the error.
     } finally {
       setDeletingTask(false);
     }
-  }, [board, deleteTask, editor]);
+  }, [board, deleteTask, editor, detailTaskId]);
 
   const saveTask = useCallback(async (input: TaskInput) => {
     if (!editor) return;
@@ -531,6 +541,7 @@ export default function Home() {
       }
       if (!sessionId) return;
       setEditor(null);
+      setDetailTaskId(null);
       await refreshSessions();
       await selectSession(sessionId);
     } catch {
@@ -661,12 +672,16 @@ export default function Home() {
 
   useEffect(() => {
     // A card can disappear because another tab deleted it, or because
-    // this tab deleted it while the editor was open.
-    if (!editor || editor.mode !== "edit" || !board.snapshot) return;
-    if (!board.snapshot.tasks.some((task) => task.id === editor.taskId)) {
+    // this tab deleted it while a dialog was open.
+    if (!board.snapshot) return;
+    const ids = new Set(board.snapshot.tasks.map((task) => task.id));
+    if (editor?.mode === "edit" && !ids.has(editor.taskId)) {
       setEditor(null);
     }
-  }, [board.snapshot, editor]);
+    if (detailTaskId && !ids.has(detailTaskId)) {
+      setDetailTaskId(null);
+    }
+  }, [board.snapshot, editor, detailTaskId]);
 
   const modelLabel =
     models.find((model) => model.id === activeModel)?.label ||
@@ -684,6 +699,10 @@ export default function Home() {
     editor?.mode === "create"
       ? editor.status
       : editingTask?.status ?? "backlog";
+  const detailTask =
+    detailTaskId
+      ? board.snapshot?.tasks.find((task) => task.id === detailTaskId) ?? null
+      : null;
 
   return (
     <div className="app">
@@ -741,6 +760,7 @@ export default function Home() {
               onRefresh={() => void board.refresh(true)}
               onCreateTask={openCreateTask}
               onEditTask={openEditTask}
+              onViewTask={openTaskDetail}
               onDeleteTask={requestDeleteTask}
               onOpenTask={(task) => void openTaskConversation(task)}
               onMoveTask={board.moveTask}
@@ -795,6 +815,16 @@ export default function Home() {
         onSave={saveTask}
         onRequestDelete={requestDeleteTask}
         onOpenConversation={(task) => void openTaskConversation(task)}
+      />
+
+      <TaskDetail
+        open={detailTask !== null}
+        task={detailTask}
+        onClose={() => setDetailTaskId(null)}
+        onEdit={openEditTask}
+        onOpenConversation={(task) => void openTaskConversation(task)}
+        onFetch={board.taskDetail}
+        onComment={board.addComment}
       />
 
       <ConfirmDialog

@@ -150,8 +150,10 @@ under `harnesses/archived/` never appear in the picker.
 | `GET` | `/api/sessions/{id}/events` | SSE stream of frames |
 | `GET` | `/api/board` | the task board snapshot |
 | `POST` | `/api/board/tasks` | create a task (optional `model` / `harness`) |
+| `GET` | `/api/board/tasks/{id}` | one task with its comment and run history |
 | `PATCH` | `/api/board/tasks/{id}` | edit or move a task, or change its `model` / `harness` |
 | `DELETE` | `/api/board/tasks/{id}` | delete a task (optionally its conversation) |
+| `POST` | `/api/board/tasks/{id}/comments` | leave feedback and re-queue the task |
 | `POST` | `/api/board/tasks/{id}/session` | create or reuse the task's conversation |
 | `PATCH` | `/api/board/executor` | pause or resume serial task execution |
 
@@ -172,6 +174,7 @@ task exist before any agent work starts. Each task has:
 * one of five fixed columns — `backlog`, `todo`, `doing`, `review`, `done`,
 * a priority — `low`, `normal`, `high`, `urgent`,
 * an optional `model` and `harness` for the conversation it will run,
+* a history of comments and per-run final responses,
 * an optional linked conversation (`1 task ↔ 0 or 1 session`).
 
 The description is also the execution prompt: when the serial worker
@@ -201,11 +204,19 @@ backlog ──(human)──> todo ──(worker)──> doing ──(completed)�
 
 * Order is `urgent > high > normal > low`, then the card's position in
   the Todo column. A running task is never preempted by a new urgent one.
+* The first run always sends the card description verbatim. Comments left
+  on a later card become the next run's user message; several waiting
+  comments are sent together as one message.
+* Leaving a comment returns the card to `todo`. If it is already running,
+  the current turn is not interrupted: the comment waits and the card
+  returns to `todo` when that run finishes.
 * Only tasks explicitly queued after this feature existed are run. Old
   `todo` cards without `queued_at` stay untouched until moved or edited.
 * A successful turn moves the card to `review`; the agent never moves it
   to `done`. A failed or cancelled run also lands in `review` with the
   error shown on the card, and the worker continues with the next task.
+  Each finished run records its final answer in the card history; tool
+  calls and intermediate reasoning are never copied.
 * Moving a `doing` card out of that column cancels its run; the human's
   status wins. Deleting a task or its conversation also cancels the run.
 * The worker reuses the card's linked conversation, creating one lazily
@@ -227,6 +238,18 @@ trace file are identical.
 
 ### Editing and filtering
 
+Clicking a card opens its **task details**: the description, the comment
+and run timeline, and a comment box. Each comment is shown as the user
+message that queued it, followed by the final response of the run it
+triggered. Only final responses are stored, so the card never shows
+thinking blocks or tool activity. The pencil button opens the edit form.
+
+Sending a comment stores it and re-queues the card. It is delivered as
+the next user message when the worker claims the card, not immediately,
+so the same text cannot be executed twice. If the card is currently
+running, the comment waits for that run to finish and is sent by the
+follow-up run.
+
 Drag a card to reorder it within a column or move it to another one. The
 card's **move to** select does the same thing without a pointer, for touch
 screens and keyboard use. The sidebar filter hides cards by title,
@@ -242,6 +265,8 @@ execution queue position derived from priority.
 The board is one JSON document at `workspace/board.json` (under
 `AGENT_RUNTIME_HOME`). Mutations return the complete normalized snapshot —
 columns renumbered from zero — and the browser replaces its state with it.
+The polled snapshot carries only `comment_count` and `run_count`; the full
+comment and run history is loaded on demand from the task detail endpoint.
 Writes go through a temporary file and `os.replace`, so a crash leaves
 either the old board or the new one. A corrupt file is copied to
 `board.json.corrupt-<timestamp>` and the board starts empty.

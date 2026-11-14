@@ -44,6 +44,9 @@ TAG_MAX = 32
 TAGS_MAX = 20
 ERROR_MAX = 2_000
 CHOICE_MAX = 200
+COMMENT_MAX = 10_000
+RESPONSE_MAX = 100_000
+RUN_STATUSES = ("completed", "error", "cancelled")
 
 _STATUS_INDEX = {status: index for index, status in enumerate(BOARD_STATUSES)}
 
@@ -144,6 +147,74 @@ def _clean_choice(value: Any, field: str) -> str | None:
     return text
 
 
+def _clean_comment(value: Any) -> str:
+    """Validate one user comment before it enters the board."""
+    if not isinstance(value, str):
+        raise BoardValidationError("comment must be a string")
+    body = value.strip()
+    if not body:
+        raise BoardValidationError("comment must not be empty")
+    if len(body) > COMMENT_MAX:
+        raise BoardValidationError(
+            f"comment must be at most {COMMENT_MAX} characters")
+    return body
+
+
+def _clean_response(value: Any) -> str:
+    """Keep the agent's final answer as-is, bounded for the board file."""
+    if not isinstance(value, str):
+        return ""
+    return value[:RESPONSE_MAX]
+
+
+def _load_comments(value: Any) -> list[dict[str, Any]]:
+    """Read persisted comments, skipping entries we cannot trust."""
+    if not isinstance(value, list):
+        return []
+    comments: list[dict[str, Any]] = []
+    for raw in value:
+        if not isinstance(raw, dict):
+            continue
+        body = raw.get("body")
+        if not isinstance(body, str) or not body.strip():
+            continue
+        comment_id = raw.get("id")
+        if not isinstance(comment_id, str) or not comment_id.strip():
+            comment_id = f"comment-{uuid4().hex[:12]}"
+        comments.append({
+            "id": comment_id.strip(),
+            "body": body.strip()[:COMMENT_MAX],
+            "created_at": _as_float(raw.get("created_at")),
+            "run_id": _load_choice(raw.get("run_id")),
+        })
+    return comments
+
+
+def _load_runs(value: Any) -> list[dict[str, Any]]:
+    """Read persisted run history, skipping entries we cannot trust."""
+    if not isinstance(value, list):
+        return []
+    runs: list[dict[str, Any]] = []
+    for raw in value:
+        if not isinstance(raw, dict):
+            continue
+        run_id = raw.get("run_id")
+        if not isinstance(run_id, str) or not run_id.strip():
+            continue
+        status = raw.get("status")
+        if status not in RUN_STATUSES:
+            status = "error"
+        runs.append({
+            "run_id": run_id.strip(),
+            "started_at": _as_optional_float(raw.get("started_at")),
+            "finished_at": _as_float(raw.get("finished_at")),
+            "status": status,
+            "response": _clean_response(raw.get("response")),
+            "error": _clean_error(raw.get("error")),
+        })
+    return runs
+
+
 def _clean_status(value: Any) -> str:
     if value not in BOARD_STATUSES:
         raise BoardValidationError(
@@ -191,6 +262,8 @@ class BoardTask:
     status: str = "backlog"
     priority: str = "normal"
     tags: list[str] = field(default_factory=list)
+    comments: list[dict[str, Any]] = field(default_factory=list)
+    runs: list[dict[str, Any]] = field(default_factory=list)
     position: int = 0
     model: str | None = None
     harness: str | None = None
@@ -211,6 +284,8 @@ class BoardTask:
             "status": self.status,
             "priority": self.priority,
             "tags": list(self.tags),
+            "comments": [dict(comment) for comment in self.comments],
+            "runs": [dict(run) for run in self.runs],
             "position": self.position,
             "model": self.model,
             "harness": self.harness,
@@ -269,6 +344,8 @@ class BoardTask:
         updated_at = _as_float(record.get("updated_at")) or created_at
         return cls(id=task_id.strip(), title=title, description=description,
                    status=status, priority=priority, tags=tags,
+                   comments=_load_comments(record.get("comments")),
+                   runs=_load_runs(record.get("runs")),
                    position=position,
                    model=_load_choice(record.get("model")),
                    harness=_load_choice(record.get("harness")),
@@ -282,7 +359,24 @@ class BoardTask:
 
 
 def _copy(task: BoardTask) -> BoardTask:
-    return replace(task, tags=list(task.tags))
+    return replace(
+        task,
+        tags=list(task.tags),
+        comments=[dict(comment) for comment in task.comments],
+        runs=[dict(run) for run in task.runs],
+    )
+
+
+def _release_comments(task: BoardTask, run_id: str) -> None:
+    """Make the comments consumed by ``run_id`` pending again.
+
+    Used when a run is interrupted or the human moves its card out of
+    Doing: the feedback never got a final answer, so the next run should
+    send it instead of losing it.
+    """
+    for comment in task.comments:
+        if comment.get("run_id") == run_id:
+            comment["run_id"] = None
 
 
 def _queue_key(task: BoardTask) -> tuple[int, int, float, str]:
@@ -368,6 +462,10 @@ class BoardStore:
             rendered: list[dict[str, Any]] = []
             for task in tasks:
                 record = task.to_record()
+                # The polled snapshot stays small: activity is fetched
+                # on demand from the task detail endpoint.
+                record["comment_count"] = len(record.pop("comments"))
+                record["run_count"] = len(record.pop("runs"))
                 record["session"] = self._session_view(task.session_id,
                                                        sessions)
                 rendered.append(record)
@@ -478,6 +576,13 @@ class BoardStore:
                 target.queued_at = now
                 target.last_error = None
 
+            if (current.status == "doing" and new_status != "doing"
+                    and current.run_id):
+                # The human moved the card while the executor owned it.
+                # The run is cancelled, so any comments it consumed are
+                # still waiting for an answer.
+                _release_comments(target, current.run_id)
+
             # Mirrors the HTTP contract: a supplied status means "move",
             # even when it names the current column, so an explicit move
             # to the bottom is distinguishable from an edit that leaves
@@ -519,6 +624,62 @@ class BoardStore:
             patch["position"] = position
         return self.update(task_id, patch)
 
+    def add_comment(self, task_id: str,
+                    body: str) -> tuple[dict[str, Any], bool]:
+        """Append a comment and queue the task for its next run.
+
+        Returns the updated task and whether the comment has to wait for
+        the current run to finish.  A comment never interrupts a turn:
+        the executor-owned card stays in Doing, ``finish_run`` sees the
+        pending comment and sends the card back to Todo instead of
+        Review.
+        """
+        text = _clean_comment(body)
+        now = time.time()
+        with self._lock:
+            if self._find(task_id) is None:
+                raise BoardNotFoundError("task not found")
+            tasks = [_copy(task) for task in self._tasks]
+            target = next(task for task in tasks if task.id == task_id)
+            target.comments.append({
+                "id": f"comment-{uuid4().hex[:12]}",
+                "body": text,
+                "created_at": now,
+                "run_id": None,
+            })
+            deferred = target.status == "doing" and bool(target.run_id)
+            if not deferred:
+                todo_count = sum(1 for task in tasks
+                                 if task.id != task_id
+                                 and task.status == "todo")
+                target.status = "todo"
+                target.queued_at = now
+                target.run_id = None
+                target.started_at = None
+                target.finished_at = None
+                target.last_error = None
+                target.position = todo_count
+            target.updated_at = now
+            self._commit(tasks, now)
+            updated = self._find(task_id)
+            assert updated is not None
+            logger.debug("webui.board.comment_added id=%s deferred=%s",
+                         task_id, deferred)
+            return updated.to_record(), deferred
+
+    def detail(self, task_id: str,
+               sessions: "SessionStore") -> dict[str, Any]:
+        """One task with its full comment and run history."""
+        with self._lock:
+            task = self._find(task_id)
+            if task is None:
+                raise BoardNotFoundError("task not found")
+            record = task.to_record()
+            record["comment_count"] = len(record["comments"])
+            record["run_count"] = len(record["runs"])
+            record["session"] = self._session_view(task.session_id, sessions)
+            return record
+
     def delete(self, task_id: str) -> bool:
         now = time.time()
         with self._lock:
@@ -557,6 +718,13 @@ class BoardStore:
             target.started_at = now
             target.finished_at = None
             target.last_error = None
+            if target.runs:
+                # The first run always sends the description verbatim.
+                # Later runs carry the feedback that queued this card;
+                # mark it as consumed by this run before it starts.
+                for comment in target.comments:
+                    if comment.get("run_id") is None:
+                        comment["run_id"] = target.run_id
             target.position = doing_count
             target.updated_at = now
             self._commit(tasks, now)
@@ -568,9 +736,20 @@ class BoardStore:
 
     def finish_run(self, task_id: str, run_id: str, *,
                    status: str = "review",
-                   error: str | None = None) -> bool:
-        """Finish one executor run, but only if it still owns the card."""
+                   error: str | None = None,
+                   response: str = "",
+                   result: str = "completed") -> bool:
+        """Finish one executor run, but only if it still owns the card.
+
+        The run's final answer is appended to the task history.  If new
+        comments arrived while it was running (or were already waiting
+        before the first description run), the card returns to Todo
+        instead of Review so the executor sends the feedback next.
+        """
         now = time.time()
+        if result not in RUN_STATUSES:
+            raise BoardValidationError(
+                "run result must be one of " + ", ".join(RUN_STATUSES))
         with self._lock:
             task = self._find(task_id)
             if task is None or task.status != "doing" or task.run_id != run_id:
@@ -579,18 +758,41 @@ class BoardStore:
             tasks = [_copy(current) for current in self._tasks]
             target = next(current for current in tasks
                           if current.id == task_id)
-            column_count = sum(1 for current in tasks
-                               if current.id != task_id
-                               and current.status == status)
-            target.status = status
-            target.queued_at = None
-            target.finished_at = now
-            target.last_error = _clean_error(error)
-            target.position = column_count
+            target.runs.append({
+                "run_id": run_id,
+                "started_at": target.started_at,
+                "finished_at": now,
+                "status": result,
+                "response": _clean_response(response),
+                "error": _clean_error(error),
+            })
+            pending = any(comment.get("run_id") is None
+                          for comment in target.comments)
+            if pending:
+                todo_count = sum(1 for current in tasks
+                                 if current.id != task_id
+                                 and current.status == "todo")
+                target.status = "todo"
+                target.queued_at = now
+                target.run_id = None
+                target.started_at = None
+                target.finished_at = now
+                target.last_error = _clean_error(error)
+                target.position = todo_count
+            else:
+                column_count = sum(1 for current in tasks
+                                   if current.id != task_id
+                                   and current.status == status)
+                target.status = status
+                target.queued_at = None
+                target.finished_at = now
+                target.last_error = _clean_error(error)
+                target.position = column_count
             target.updated_at = now
             self._commit(tasks, now)
-            logger.debug("webui.board.task_finished id=%s status=%s error=%s",
-                         task_id, status, bool(error))
+            logger.debug("webui.board.task_finished id=%s status=%s "
+                         "result=%s pending_comments=%s error=%s",
+                         task_id, target.status, result, pending, bool(error))
             return True
 
     def requeue_run(self, task_id: str, run_id: str, *,
@@ -615,6 +817,7 @@ class BoardStore:
             target.last_error = _clean_error(error)
             target.position = column_count
             target.updated_at = now
+            _release_comments(target, run_id)
             self._commit(tasks, now)
             logger.debug("webui.board.task_requeued id=%s", task_id)
             return True
@@ -630,6 +833,7 @@ class BoardStore:
                 if task.status == "doing" and task.run_id:
                     task.status = "todo"
                     task.queued_at = now
+                    _release_comments(task, task.run_id)
                     task.run_id = None
                     task.started_at = None
                     task.finished_at = None

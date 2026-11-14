@@ -20,6 +20,7 @@ interface BoardViewProps {
   onRefresh: () => void;
   onCreateTask: (status: TaskStatus) => void;
   onEditTask: (task: BoardTask) => void;
+  onViewTask: (task: BoardTask) => void;
   onDeleteTask: (task: BoardTask) => void;
   onOpenTask: (task: BoardTask) => void;
   onMoveTask: (taskId: string, status: TaskStatus,
@@ -42,6 +43,7 @@ export default function BoardView({
   onRefresh,
   onCreateTask,
   onEditTask,
+  onViewTask,
   onDeleteTask,
   onOpenTask,
   onMoveTask,
@@ -235,6 +237,7 @@ export default function BoardView({
                         onDragStart={handleDragStart}
                         onDragEnd={clearDrag}
                         onEdit={onEditTask}
+                        onView={onViewTask}
                         onDelete={onDeleteTask}
                         onOpen={onOpenTask}
                         onMove={onMoveTask}

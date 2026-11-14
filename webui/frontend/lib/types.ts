@@ -73,7 +73,38 @@ export interface BoardTask {
   last_error: string | null;
   created_at: number;
   updated_at: number;
+  comment_count: number;
+  run_count: number;
   session?: BoardSessionSummary | null;
+}
+
+export interface TaskComment {
+  id: string;
+  body: string;
+  created_at: number;
+  run_id: string | null;
+}
+
+export type TaskRunStatus = "completed" | "error" | "cancelled";
+
+export interface TaskRun {
+  run_id: string;
+  started_at: number | null;
+  finished_at: number;
+  status: TaskRunStatus;
+  response: string;
+  error: string | null;
+}
+
+export interface TaskDetail extends BoardTask {
+  comments: TaskComment[];
+  runs: TaskRun[];
+}
+
+export interface CommentResult {
+  board: BoardSnapshot;
+  detail: TaskDetail;
+  deferred: boolean;
 }
 
 export interface BoardExecutorState {

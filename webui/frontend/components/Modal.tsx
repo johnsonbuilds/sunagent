@@ -13,6 +13,7 @@ interface ModalProps {
   onClose: () => void;
   children: ReactNode;
   footer?: ReactNode;
+  wide?: boolean;
 }
 
 /**
@@ -26,6 +27,7 @@ export default function Modal({
   onClose,
   children,
   footer,
+  wide = false,
 }: ModalProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const titleId = useId();
@@ -45,7 +47,7 @@ export default function Modal({
   return (
     <dialog
       ref={dialogRef}
-      className="modal"
+      className={`modal${wide ? " modal-wide" : ""}`}
       aria-labelledby={titleId}
       onCancel={(event) => {
         event.preventDefault();

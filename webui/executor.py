@@ -49,6 +49,24 @@ class _CurrentRun:
     session_id: str | None = None
 
 
+def _task_prompt(task: BoardTask) -> str:
+    """The user message for this run.
+
+    The first run always sends the description verbatim.  Later runs send
+    the feedback that queued the card; a manual re-run with no new
+    comment falls back to the description.
+    """
+    if not task.runs:
+        return task.description
+    feedback = [
+        str(comment.get("body") or "")
+        for comment in task.comments
+        if task.run_id and comment.get("run_id") == task.run_id
+    ]
+    feedback = [body for body in feedback if body]
+    return "\n\n".join(feedback) if feedback else task.description
+
+
 class BoardExecutor:
     """One worker that drains the Todo column in priority order."""
 
@@ -182,6 +200,12 @@ class BoardExecutor:
             if session is None:
                 self._finish(task, "review", "Session not found")
                 return
+            latest = self.board.get(task.id)
+            if (latest is None or latest.status != "doing"
+                    or latest.run_id != task.run_id):
+                # The human moved the card (or another path requeued it)
+                # while the session was being prepared.
+                return
             if session.busy:
                 self.board.requeue_run(task.id, task.run_id)
                 return
@@ -192,7 +216,7 @@ class BoardExecutor:
                 return
 
             self._turn_task = asyncio.create_task(
-                self._run_turn(session, task.description),
+                self._run_turn(session, _task_prompt(task)),
                 name=f"board-task-{task.id}",
             )
             session.task = self._turn_task
@@ -209,13 +233,14 @@ class BoardExecutor:
                     # because finish_run only touches a still-Doing card.
                     self.board.finish_run(
                         task.id, task.run_id, status="review",
-                        error="Run cancelled")
+                        error="Run cancelled", result="cancelled")
                 return
             except Exception as exc:
                 logger.exception("webui.board.executor.run_failed task=%s",
                                  task.id)
                 self._finish(task, "review",
-                             str(exc) or "Run failed")
+                             str(exc) or "Run failed",
+                             response="", result="error")
                 return
             finally:
                 if session.task is turn_task:
@@ -223,15 +248,19 @@ class BoardExecutor:
 
             if outcome.status == "completed":
                 self.board.finish_run(task.id, task.run_id,
-                                      status="review")
+                                      status="review",
+                                      response=outcome.answer)
             elif outcome.status == "busy":
                 self.board.requeue_run(task.id, task.run_id)
             elif outcome.status == "error":
                 self.board.finish_run(task.id, task.run_id, status="review",
-                                      error=outcome.error or "Run failed")
+                                      error=outcome.error or "Run failed",
+                                      response=outcome.answer, result="error")
             else:
                 self.board.finish_run(task.id, task.run_id, status="review",
-                                      error=outcome.error or "Run cancelled")
+                                      error=outcome.error or "Run cancelled",
+                                      response=outcome.answer,
+                                      result="cancelled")
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -242,11 +271,13 @@ class BoardExecutor:
             self._current = None
 
     def _finish(self, task: BoardTask, status: str,
-                error: str | None) -> None:
+                error: str | None, *, response: str = "",
+                result: str = "error") -> None:
         assert task.run_id is not None
         try:
             self.board.finish_run(task.id, task.run_id,
-                                  status=status, error=error)
+                                  status=status, error=error,
+                                  response=response, result=result)
         except Exception:  # pragma: no cover - board write failure
             logger.exception("webui.board.executor.finish_failed task=%s",
                              task.id)

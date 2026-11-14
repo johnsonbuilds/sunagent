@@ -20,6 +20,7 @@ interface TaskCardProps {
   onDragStart: (event: DragEvent<HTMLElement>, taskId: string) => void;
   onDragEnd: () => void;
   onEdit: (task: BoardTask) => void;
+  onView: (task: BoardTask) => void;
   onDelete: (task: BoardTask) => void;
   onOpen: (task: BoardTask) => void;
   onMove: (taskId: string, status: TaskStatus, position: number) => void;
@@ -33,6 +34,7 @@ export default function TaskCard({
   onDragStart,
   onDragEnd,
   onEdit,
+  onView,
   onDelete,
   onOpen,
   onMove,
@@ -48,11 +50,11 @@ export default function TaskCard({
       draggable
       role="button"
       tabIndex={0}
-      onClick={() => onEdit(task)}
+      onClick={() => onView(task)}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          onEdit(task);
+          onView(task);
         }
       }}
       onDragStart={(event) => onDragStart(event, task.id)}

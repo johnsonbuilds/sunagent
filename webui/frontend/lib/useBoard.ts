@@ -5,8 +5,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import type {
   BoardSnapshot,
+  CommentResult,
   DeleteTaskResult,
   EnsureSessionResult,
+  TaskDetail,
   TaskInput,
   TaskStatus,
 } from "@/lib/types";
@@ -220,6 +222,29 @@ export function useBoard({ enabled, onError }: UseBoardOptions) {
     }
   }, [apply, mutate, report]);
 
+  const taskDetail = useCallback(
+    async (taskId: string) =>
+      api<TaskDetail>(`/api/board/tasks/${taskId}`),
+    [],
+  );
+
+  const addComment = useCallback(
+    async (taskId: string, body: string) => {
+      try {
+        const result = await mutate<CommentResult>(
+          `/api/board/tasks/${taskId}/comments`,
+          { method: "POST", body: JSON.stringify({ body }) },
+        );
+        apply(result.board);
+        return result;
+      } catch (failure) {
+        report(failure);
+        throw failure;
+      }
+    },
+    [apply, mutate, report],
+  );
+
   useEffect(() => {
     if (!enabled) return;
     void refresh();
@@ -253,5 +278,7 @@ export function useBoard({ enabled, onError }: UseBoardOptions) {
     moveTask,
     ensureSession,
     setPaused,
+    taskDetail,
+    addComment,
   };
 }
