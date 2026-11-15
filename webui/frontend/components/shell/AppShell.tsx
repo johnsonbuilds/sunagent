@@ -220,7 +220,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
           />
 
           <main
-            className={`main${route?.id === "board" ? " main-board" : ""}`}
+            className={`main${route?.id === "board" ? " main-board" : ""}${
+              route?.id === "files" ? " main-files" : ""
+            }`}
           >
             {children}
           </main>

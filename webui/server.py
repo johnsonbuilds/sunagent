@@ -26,6 +26,10 @@ Endpoints:
     DELETE /api/board/tasks/{id}        delete a task
     POST   /api/board/tasks/{id}/session  create or reuse its conversation
     POST   /api/board/tasks/{id}/comments  leave feedback and re-queue
+    GET    /api/workspace/tree          one directory level, lazily
+    GET    /api/workspace/file          read a text file for preview
+    GET    /api/workspace/changes       uncommitted changes (git status)
+    GET    /api/workspace/diff          one file's diff versus HEAD
     POST   /api/system/restart          restart the server via ./run.sh restart
 
 Every route sits behind HTTP basic authentication when a user name and
@@ -81,6 +85,7 @@ from .board import (
 from .executor import BoardExecutor, TurnOutcome
 from .sessions import STREAM_STOP, Session, SessionStore
 from .turn_context import TurnSnapshot, resolve_turn
+from .workspace import WorkspaceBrowser, WorkspaceError
 
 
 logger = logging.getLogger(__name__)
@@ -289,12 +294,17 @@ def _sse(frame: dict[str, Any]) -> str:
 
 def create_app(store: SessionStore | None = None,
                board: BoardStore | None = None, *,
+               workspace: WorkspaceBrowser | None = None,
                enable_executor: bool = True) -> FastAPI:
     """Build the web UI application.
 
     ``enable_executor`` is for tests: the API and board routes are fully
     wired, but the serial worker is not started, so a test can inspect
     Todo transitions without launching a real model turn.
+
+    ``workspace`` pins the read-only browser to a directory.  Tests pass
+    a temporary repository; production resolves the root from the
+    environment on every request.
     """
     # The CLI loads .env in its entry point. The server loads it here so
     # every launch path -- the console script, `python -m webui`, and
@@ -309,6 +319,7 @@ def create_app(store: SessionStore | None = None,
     sessions.load()
     tasks = board if board is not None else BoardStore()
     tasks.load()
+    browser = workspace if workspace is not None else WorkspaceBrowser()
     try:
         tasks.reconcile(sessions)
     except BoardStorageError:
@@ -375,6 +386,7 @@ def create_app(store: SessionStore | None = None,
     app.state.board = tasks
     app.state.executor = executor
     app.state.runner = runner
+    app.state.workspace = browser
     _APPS.add(app)
 
     if credentials is not None:
@@ -716,6 +728,36 @@ def create_app(store: SessionStore | None = None,
         return {"board": board_snapshot(), "detail": detail,
                 "deferred": deferred}
 
+    @app.get("/api/workspace/tree")
+    async def workspace_tree(path: str = "",
+                             ignored: bool = False) -> dict[str, Any]:
+        try:
+            return await asyncio.to_thread(browser.list_dir, path, ignored)
+        except WorkspaceError as exc:
+            raise _workspace_http_error(exc) from exc
+
+    @app.get("/api/workspace/file")
+    async def workspace_file(path: str) -> dict[str, Any]:
+        try:
+            return await asyncio.to_thread(browser.read_file, path)
+        except WorkspaceError as exc:
+            raise _workspace_http_error(exc) from exc
+
+    @app.get("/api/workspace/changes")
+    async def workspace_changes() -> dict[str, Any]:
+        try:
+            return await asyncio.to_thread(browser.changes)
+        except WorkspaceError as exc:
+            raise _workspace_http_error(exc) from exc
+
+    @app.get("/api/workspace/diff")
+    async def workspace_diff(path: str,
+                             old_path: str | None = None) -> dict[str, Any]:
+        try:
+            return await asyncio.to_thread(browser.diff, path, old_path)
+        except WorkspaceError as exc:
+            raise _workspace_http_error(exc) from exc
+
     @app.api_route("/{path:path}", methods=["GET", "HEAD"],
                    include_in_schema=False)
     async def frontend_file(path: str) -> FileResponse:
@@ -843,6 +885,11 @@ async def _cancel_session_turn(session: Session) -> None:
 
 def _session_detail(session: Session) -> dict[str, Any]:
     return {**session.summary(), "segments": session.segments}
+
+
+def _workspace_http_error(exc: WorkspaceError) -> HTTPException:
+    """Map a workspace-browser failure to its response."""
+    return HTTPException(status_code=exc.status, detail=exc.message)
 
 
 def _board_http_error(exc: Exception) -> HTTPException:

@@ -156,10 +156,46 @@ under `harnesses/archived/` never appear in the picker.
 | `POST` | `/api/board/tasks/{id}/comments` | leave feedback and re-queue the task |
 | `POST` | `/api/board/tasks/{id}/session` | create or reuse the task's conversation |
 | `PATCH` | `/api/board/executor` | pause or resume serial task execution |
+| `GET` | `/api/workspace/tree` | one directory level of the workspace (`path`, `ignored`) |
+| `GET` | `/api/workspace/file` | text preview of one file (`path`) |
+| `GET` | `/api/workspace/changes` | uncommitted changes from `git status` |
+| `GET` | `/api/workspace/diff` | one file's diff against `HEAD` (`path`, optional `old_path`) |
 
 The event stream replays the recent frames of a session before switching to
 live delivery, and honours `Last-Event-ID`, so a browser that reconnects
 resumes where it left off instead of starting from a blank transcript.
+
+### Workspace browsing
+
+`/files` is read-only. Its API browses the same root the agent uses
+(`AGENT_RUNTIME_WORKSPACE`, otherwise the server's working directory):
+
+* **Tree** requests are one level at a time; the browser never scans
+  recursively. Entries report `type`, `size`, `mtime`, `ignored` and
+  `protected`.
+* **Ignored** entries come from `git check-ignore`, plus a fixed list of
+  runtime/output directories (`workspace/`, `jobs/`, `.outputs/`, …) that
+  stays hidden even when tracked. `.git`, `.venv`, `node_modules`,
+  `__pycache__` and `.next` are never listed. `?ignored=true` reveals the
+  rest, greyed out.
+* **Protected** names (`.env*`, `model.json`, `*.pem`, `*.key`, `*.p12`,
+  `id_rsa*`, `.netrc`, `credentials*`) appear in the tree with a lock but
+  return `403` from both `file` and `diff`.
+* **Limits**: 1000 entries per directory, 5000 preview lines, 512 KiB of an
+  oversized preview, 2 MiB of diff text, 4000 diff lines, 5000 change
+  entries. Truncation is a flag in the response, never an error.
+* **Paths** are POSIX paths relative to the root; escapes, absolute paths,
+  hard-skipped directories and symlinks are rejected.
+* **Changes** use `git status --porcelain=v2 --branch -z
+  --untracked-files=all`; a workspace that is a subdirectory of a
+  repository is handled with repository-relative git calls and local
+  paths in the response.
+* **Refresh** is explicit: on page entry, on switching to the Changes tab,
+  and on the refresh button. There is no polling, watcher or SSE.
+
+The client keeps one directory listing per expanded path, so collapsing
+and re-expanding a directory does not fetch it again. The full design is
+in [`docs/files-page.md`](files-page.md).
 
 ## 5. Task Board
 

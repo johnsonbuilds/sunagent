@@ -164,6 +164,115 @@ export interface RuntimeConfig {
   error?: string | null;
 }
 
+/* ------------------------------------------------ workspace (/files) */
+
+export type WorkspaceEntryType = "dir" | "file" | "symlink";
+
+export interface WorkspaceEntry {
+  name: string;
+  path: string;
+  type: WorkspaceEntryType;
+  size: number | null;
+  mtime: number;
+  ignored: boolean;
+  protected: boolean;
+}
+
+export interface WorkspaceTree {
+  root: string;
+  repo_root: string | null;
+  is_git: boolean;
+  path: string;
+  entries: WorkspaceEntry[];
+  hidden_ignored: number;
+  truncated: boolean;
+}
+
+export interface WorkspaceFile {
+  path: string;
+  size: number;
+  mtime: number;
+  binary: boolean;
+  truncated: boolean;
+  lines: number | null;
+  encoding: string | null;
+  content: string | null;
+}
+
+export type ChangeStatus =
+  | "modified"
+  | "added"
+  | "deleted"
+  | "renamed"
+  | "copied"
+  | "typechange"
+  | "untracked"
+  | "conflicted";
+
+export interface ChangeEntry {
+  path: string;
+  old_path: string | null;
+  status: ChangeStatus;
+  staged: boolean;
+  unstaged: boolean;
+  additions: number | null;
+  deletions: number | null;
+  binary: boolean;
+  protected: boolean;
+}
+
+export interface ChangesCounts {
+  total: number;
+  modified: number;
+  added: number;
+  deleted: number;
+  renamed: number;
+  untracked: number;
+  conflicted: number;
+}
+
+export interface WorkspaceChanges {
+  root: string;
+  repo_root: string | null;
+  is_git: boolean;
+  git_error: string | null;
+  branch: string | null;
+  head: string | null;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  entries: ChangeEntry[];
+  counts: ChangesCounts;
+  truncated: boolean;
+}
+
+export type DiffLineKind = "ctx" | "add" | "del" | "note";
+
+export interface DiffLine {
+  kind: DiffLineKind;
+  old: number | null;
+  new: number | null;
+  text: string;
+}
+
+export interface DiffHunk {
+  header: string;
+  old_start: number;
+  old_count: number;
+  new_start: number;
+  new_count: number;
+  lines: DiffLine[];
+}
+
+export interface WorkspaceDiff {
+  path: string;
+  old_path: string | null;
+  status: ChangeStatus;
+  binary: boolean;
+  truncated: boolean;
+  hunks: DiffHunk[];
+}
+
 export interface DeltaFrame {
   type: "delta";
   id: string;
