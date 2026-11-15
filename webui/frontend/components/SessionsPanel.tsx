@@ -2,18 +2,10 @@
 
 import type { SessionSummary } from "@/lib/types";
 import { useI18n, type TFunction } from "@/lib/i18n";
-import { CloseIcon, PlusIcon, SearchIcon } from "./Icons";
+import { useSessions } from "@/lib/stores/sessions";
 
-interface SessionsPanelProps {
-  sessions: SessionSummary[];
-  activeId: string | null;
-  filter: string;
-  onFilterChange: (value: string) => void;
-  onSelect: (id: string) => void;
-  onNewChat: () => void;
-  onDelete: (session: SessionSummary) => void;
-  onRename: (session: SessionSummary) => void;
-}
+import { useShell } from "./shell/AppShell";
+import { CloseIcon, PlusIcon, SearchIcon } from "./Icons";
 
 function relativeTime(epochSeconds: number, t: TFunction): string {
   const delta = Date.now() / 1000 - epochSeconds;
@@ -27,22 +19,43 @@ function relativeTime(epochSeconds: number, t: TFunction): string {
   return t("timeDays", { count: Math.floor(delta / 86400) });
 }
 
-export default function SessionsPanel({
-  sessions,
-  activeId,
-  filter,
-  onFilterChange,
-  onSelect,
-  onNewChat,
-  onDelete,
-  onRename,
-}: SessionsPanelProps) {
+export default function SessionsPanel() {
   const { t } = useI18n();
+  const shell = useShell();
+  const {
+    sessions,
+    activeId,
+    filter,
+    setFilter,
+    selectSession,
+    newSession,
+    deleteSession,
+    renameSession,
+  } = useSessions();
+
   const needle = filter.trim().toLowerCase();
   const visible = sessions.filter(
     (session) =>
       !needle || (session.title || "").toLowerCase().indexOf(needle) !== -1,
   );
+
+  const choose = (id: string) => {
+    void selectSession(id);
+    if (shell.narrow) shell.closeSidebar();
+  };
+
+  const create = () => {
+    void newSession();
+    if (shell.narrow) shell.closeSidebar();
+  };
+
+  const remove = (session: SessionSummary) => {
+    void deleteSession(session);
+  };
+
+  const rename = (session: SessionSummary) => {
+    void renameSession(session);
+  };
 
   return (
     <div className="panel">
@@ -53,7 +66,7 @@ export default function SessionsPanel({
           id="btnNewChatSide"
           title={t("newConversation")}
           aria-label={t("newConversation")}
-          onClick={onNewChat}
+          onClick={create}
         >
           <PlusIcon />
         </button>
@@ -67,7 +80,7 @@ export default function SessionsPanel({
           autoComplete="off"
           spellCheck={false}
           value={filter}
-          onChange={(event) => onFilterChange(event.target.value)}
+          onChange={(event) => setFilter(event.target.value)}
         />
       </div>
       <div className="session-list" id="sessionList">
@@ -78,13 +91,13 @@ export default function SessionsPanel({
               session.id === activeId ? " active" : ""
             }`}
             title={session.title}
-            onClick={() => onSelect(session.id)}
+            onClick={() => choose(session.id)}
           >
             <span
               className="session-title"
               onDoubleClick={(event) => {
                 event.stopPropagation();
-                onRename(session);
+                rename(session);
               }}
             >
               {session.title || t("untitled")}
@@ -98,7 +111,7 @@ export default function SessionsPanel({
               title={t("deleteConversation")}
               onClick={(event) => {
                 event.stopPropagation();
-                onDelete(session);
+                remove(session);
               }}
             >
               <CloseIcon size={13} />

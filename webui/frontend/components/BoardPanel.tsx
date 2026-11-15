@@ -2,30 +2,22 @@
 
 import { STATUS_LABEL_KEYS, STATUS_ORDER } from "@/lib/board";
 import { useI18n } from "@/lib/i18n";
-import type { BoardSnapshot } from "@/lib/types";
+import { useBoardStore } from "@/lib/stores/board";
 
 import { PlusIcon, SearchIcon } from "./Icons";
 
-interface BoardPanelProps {
-  snapshot: BoardSnapshot | null;
-  loading: boolean;
-  filter: string;
-  hideDone: boolean;
-  onFilterChange: (value: string) => void;
-  onHideDoneChange: (value: boolean) => void;
-  onNewTask: () => void;
-}
-
-export default function BoardPanel({
-  snapshot,
-  loading,
-  filter,
-  hideDone,
-  onFilterChange,
-  onHideDoneChange,
-  onNewTask,
-}: BoardPanelProps) {
+export default function BoardPanel() {
   const { t } = useI18n();
+  const {
+    snapshot,
+    loading,
+    filter,
+    setFilter,
+    hideDone,
+    setHideDone,
+    openCreateTask,
+  } = useBoardStore();
+
   const statuses = snapshot?.statuses ?? STATUS_ORDER;
   const counts = new Map<string, number>();
   for (const task of snapshot?.tasks ?? []) {
@@ -41,7 +33,7 @@ export default function BoardPanel({
           type="button"
           title={t("boardNewTask")}
           aria-label={t("boardNewTask")}
-          onClick={onNewTask}
+          onClick={() => openCreateTask("backlog")}
         >
           <PlusIcon />
         </button>
@@ -55,7 +47,7 @@ export default function BoardPanel({
           autoComplete="off"
           spellCheck={false}
           value={filter}
-          onChange={(event) => onFilterChange(event.target.value)}
+          onChange={(event) => setFilter(event.target.value)}
         />
       </div>
 
@@ -63,7 +55,7 @@ export default function BoardPanel({
         <input
           type="checkbox"
           checked={hideDone}
-          onChange={(event) => onHideDoneChange(event.target.checked)}
+          onChange={(event) => setHideDone(event.target.checked)}
         />
         <span>{t("boardHideDone")}</span>
       </label>

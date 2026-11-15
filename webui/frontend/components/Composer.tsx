@@ -1,52 +1,53 @@
 "use client";
 
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
-import type { HarnessOption, ModelOption } from "@/lib/types";
+import { useRuntimeConfig } from "@/lib/stores/runtime-config";
+import { useDraft, useSessions } from "@/lib/stores/sessions";
 
 import { SendIcon, StopIcon } from "./Icons";
 
 type PickerKind = "model" | "harness";
 
-interface ComposerProps {
-  value: string;
-  busy: boolean;
-  inputRef: RefObject<HTMLTextAreaElement | null>;
-  modelId: string;
-  modelLabel: string;
-  harnessId: string;
-  harnessLabel: string;
-  harnessLocked: boolean;
-  models: ModelOption[];
-  harnesses: HarnessOption[];
-  onChange: (value: string) => void;
-  onSend: () => void;
-  onStop: () => void;
-  onModelChange: (id: string) => void;
-  onHarnessChange: (id: string) => void;
-}
-
-export default function Composer({
-  value,
-  busy,
-  inputRef,
-  modelId,
-  modelLabel,
-  harnessId,
-  harnessLabel,
-  harnessLocked,
-  models,
-  harnesses,
-  onChange,
-  onSend,
-  onStop,
-  onModelChange,
-  onHarnessChange,
-}: ComposerProps) {
+export default function Composer() {
   const { t } = useI18n();
+  const { models, harnesses } = useRuntimeConfig();
+  const {
+    activeId,
+    busy,
+    activeModel,
+    activeHarness,
+    harnessLocked,
+    focusSeq,
+    send,
+    stop,
+    changeModel,
+    changeHarness,
+  } = useSessions();
+  const { draft, setDraft } = useDraft();
+
   const [open, setOpen] = useState<PickerKind | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const pickersRef = useRef<HTMLDivElement>(null);
+
+  const modelLabel =
+    models.find((model) => model.id === activeModel)?.label
+    || activeModel
+    || "—";
+  const harnessLabel = activeHarness || "—";
+
+  useEffect(() => {
+    if (!focusSeq) return;
+    inputRef.current?.focus();
+  }, [focusSeq]);
+
+  useEffect(() => {
+    const element = inputRef.current;
+    if (!element) return;
+    element.style.height = "auto";
+    element.style.height = `${Math.min(element.scrollHeight, 220)}px`;
+  }, [draft]);
 
   // Close on outside click / Escape. The menu floats over the transcript,
   // so it must not depend on the button keeping focus.
@@ -70,6 +71,13 @@ export default function Composer({
     setOpen((current) => (current === kind ? null : kind));
   };
 
+  const submit = () => {
+    const text = draft.trim();
+    if (!text || busy || !activeId) return;
+    setDraft("");
+    void send(text);
+  };
+
   return (
     <div className="composer-wrap">
       <div className="composer-box" id="composerBox">
@@ -79,12 +87,12 @@ export default function Composer({
           rows={1}
           placeholder={t("composerPlaceholder")}
           spellCheck={false}
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
-              onSend();
+              submit();
             }
           }}
         />
@@ -110,14 +118,16 @@ export default function Composer({
                       <button
                         type="button"
                         className={`picker-item${
-                          model.id === modelId ? " active" : ""
+                          model.id === activeModel ? " active" : ""
                         }`}
                         role="option"
-                        aria-selected={model.id === modelId}
+                        aria-selected={model.id === activeModel}
                         title={model.model_id}
                         onClick={() => {
                           setOpen(null);
-                          if (model.id !== modelId) onModelChange(model.id);
+                          if (model.id !== activeModel) {
+                            void changeModel(model.id);
+                          }
                         }}
                       >
                         <span className="picker-item-label">
@@ -162,14 +172,14 @@ export default function Composer({
                       <button
                         type="button"
                         className={`picker-item${
-                          harness.id === harnessId ? " active" : ""
+                          harness.id === activeHarness ? " active" : ""
                         }`}
                         role="option"
-                        aria-selected={harness.id === harnessId}
+                        aria-selected={harness.id === activeHarness}
                         onClick={() => {
                           setOpen(null);
-                          if (harness.id !== harnessId) {
-                            onHarnessChange(harness.id);
+                          if (harness.id !== activeHarness) {
+                            void changeHarness(harness.id);
                           }
                         }}
                       >
@@ -193,7 +203,7 @@ export default function Composer({
               id="btnSend"
               title={busy ? t("stop") : t("send")}
               aria-label={busy ? t("stop") : t("send")}
-              onClick={busy ? onStop : onSend}
+              onClick={busy ? () => void stop() : submit}
             >
               {busy ? <StopIcon /> : <SendIcon />}
             </button>

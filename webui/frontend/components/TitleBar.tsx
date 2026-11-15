@@ -1,13 +1,11 @@
 "use client";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
+import type { StatusState } from "@/lib/ui";
 
 import { MenuIcon, PlusIcon, ThemeIcon } from "./Icons";
 
-export interface StatusState {
-  label: MessageKey;
-  kind?: "error";
-}
+export type { StatusState } from "@/lib/ui";
 
 interface TitleBarProps {
   title: string;
@@ -16,7 +14,7 @@ interface TitleBarProps {
   newActionLabel?: MessageKey;
   onToggleSidebar: () => void;
   onToggleTheme: () => void;
-  onNewChat: () => void;
+  onNewChat?: () => void;
 }
 
 export default function TitleBar({
@@ -68,15 +66,17 @@ export default function TitleBar({
         >
           <ThemeIcon />
         </button>
-        <button
-          className="icon-btn primary"
-          id="btnNewChat"
-          title={t(newActionTitle ?? "newConversationShortcut")}
-          aria-label={t(newActionLabel ?? "newConversation")}
-          onClick={onNewChat}
-        >
-          <PlusIcon />
-        </button>
+        {onNewChat ? (
+          <button
+            className="icon-btn primary"
+            id="btnNewChat"
+            title={t(newActionTitle ?? "newConversationShortcut")}
+            aria-label={t(newActionLabel ?? "newConversation")}
+            onClick={onNewChat}
+          >
+            <PlusIcon />
+          </button>
+        ) : null}
       </div>
     </header>
   );

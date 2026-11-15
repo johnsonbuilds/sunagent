@@ -1,6 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { api } from "@/lib/api";
 import type {
@@ -13,11 +19,13 @@ import type {
   TaskStatus,
 } from "@/lib/types";
 
-const POLL_MS = 5000;
+/** The board polls faster while it is on screen, but never stops. */
+const POLL_FAST_MS = 5000;
+const POLL_SLOW_MS = 25000;
 
 interface UseBoardOptions {
-  enabled: boolean;
   onError?: (message: string) => void;
+  fastPoll?: boolean;
 }
 
 function errorMessage(error: unknown): string {
@@ -60,7 +68,7 @@ function moveOptimistic(
   return { ...snapshot, tasks };
 }
 
-export function useBoard({ enabled, onError }: UseBoardOptions) {
+export function useBoard({ onError, fastPoll = false }: UseBoardOptions) {
   const [snapshot, setSnapshot] = useState<BoardSnapshot | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -246,11 +254,11 @@ export function useBoard({ enabled, onError }: UseBoardOptions) {
   );
 
   useEffect(() => {
-    if (!enabled) return;
+    const interval = fastPoll ? POLL_FAST_MS : POLL_SLOW_MS;
     void refresh();
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible") void refresh();
-    }, POLL_MS);
+    }, interval);
     const onVisible = () => {
       if (document.visibilityState === "visible") void refresh();
     };
@@ -261,24 +269,42 @@ export function useBoard({ enabled, onError }: UseBoardOptions) {
       window.removeEventListener("focus", onVisible);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [enabled, refresh]);
+  }, [fastPoll, refresh]);
 
-  return {
-    snapshot,
-    loading,
-    error,
-    filter,
-    setFilter,
-    hideDone,
-    setHideDone,
-    refresh,
-    createTask,
-    updateTask,
-    deleteTask,
-    moveTask,
-    ensureSession,
-    setPaused,
-    taskDetail,
-    addComment,
-  };
+  return useMemo(
+    () => ({
+      snapshot,
+      loading,
+      error,
+      filter,
+      setFilter,
+      hideDone,
+      setHideDone,
+      refresh,
+      createTask,
+      updateTask,
+      deleteTask,
+      moveTask,
+      ensureSession,
+      setPaused,
+      taskDetail,
+      addComment,
+    }),
+    [
+      snapshot,
+      loading,
+      error,
+      filter,
+      hideDone,
+      refresh,
+      createTask,
+      updateTask,
+      deleteTask,
+      moveTask,
+      ensureSession,
+      setPaused,
+      taskDetail,
+      addComment,
+    ],
+  );
 }

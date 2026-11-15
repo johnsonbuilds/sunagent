@@ -427,49 +427,46 @@ runner = AgentRunner()
 
 ### 6.1 导航模型
 
-当前 `PanelId` 只控制侧栏内容。新增：
+看板现在是一个真实路由 `/board`，不再用内存里的 `view` 状态切换。
+`lib/routes.ts` 的路由表同时决定主区域、侧栏面板、标题和主操作：
 
-```ts
-export type AppView = "chat" | "board";
-export type NavId = "chat" | "board" | "settings";
-```
+| 路由 | 侧栏 | 主操作 |
+|---|---|---|
+| `/` | `sessions` | 新建对话 |
+| `/board` | `board` 筛选面板 | 新建任务 |
+| `/settings` | 无（只保留图标栏） | 无 |
 
-`IconRail` 的导航项改为：
-
-| 导航 | 行为 |
-|---|---|
-| Chat | `view="chat"`，侧栏显示 `sessions` |
-| Board | `view="board"`，侧栏显示 `board` 筛选面板 |
-| Settings | 只切换侧栏到 `settings`，不改变主区域 |
-
-这样可以保持“左侧导航一级视图”，同时不破坏现有 Settings 的行为。
+`IconRail` / `Sidebar` 都从 `usePathname()` 匹配路由表，导航使用
+`next/link`，因此前进后退、新标签页和深链都由浏览器处理。
 
 ### 6.2 页面结构
 
-`page.tsx` 保持组合根角色：
+常驻的 Provider 和 Shell 放在 `app/(console)/layout.tsx`：
 
 ```tsx
-const [view, setView] = useState<AppView>("chat");
-const board = useBoard({ enabled: view === "board" });
+<ThemeProvider>
+  <ToastProvider>
+    <RuntimeConfigProvider>
+      <SessionsProvider>
+        <BoardProvider fastPoll={pathname === "/board"}>
+          <AppShell>{children}</AppShell>
+        </BoardProvider>
+      </SessionsProvider>
+    </RuntimeConfigProvider>
+  </ToastProvider>
+</ThemeProvider>
 ```
 
-主区域条件渲染：
+看板页面本身是 `views/BoardPage.tsx`；标题栏、`Ctrl+K` 和弹窗状态由
+`BoardProvider` 提供，所以页面切换后看板快照仍然在。
 
-```tsx
-{view === "chat" ? (
-  <>
-    <Transcript ... />
-    <Composer ... />
-  </>
-) : (
-  <BoardView ... />
-)}
-```
+- 切换页面时 **不卸载 SSE 连接**，聊天状态和草稿保留
+- 看板轮询常驻：`/board` 上 5 秒，其他页面 25 秒，标签页隐藏时暂停
+- 从看板打开对话时：`router.push("/?session=<id>")`，
+  由 URL 同步机制完成会话切换
 
-- 切换视图时 **不卸载 SSE 连接**，聊天状态和草稿保留
-- `TitleBar` 标题：聊天显示会话标题，看板显示“任务看板”
-- `TitleBar` 的新建按钮：聊天 → 新建对话；看板 → 新建任务
-- 从看板打开对话时：`setView("chat")` + `selectSession(sessionId)`
+完整的路由、状态分层和新增页面流程见
+[`docs/webui-frontend.md`](./webui-frontend.md)。
 
 ### 6.3 新增组件
 
@@ -481,6 +478,7 @@ const board = useBoard({ enabled: view === "board" });
 | `components/TaskEditor.tsx` | 新建/编辑弹窗，复用 `Modal` |
 | `components/BoardPanel.tsx` | 侧栏：搜索、隐藏已完成、新建任务、列计数 |
 | `lib/useBoard.ts` | 数据获取、轮询、乐观更新、CRUD |
+| `lib/stores/board.tsx` | 看板快照、弹窗状态、跨页面常驻 |
 | `components/Icons.tsx` | 增加 `BoardIcon` 等 |
 
 ### 6.4 看板布局

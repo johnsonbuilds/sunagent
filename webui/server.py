@@ -389,7 +389,7 @@ def create_app(store: SessionStore | None = None,
         app.mount("/_next", StaticFiles(directory=str(FRONTEND_ROOT / "_next")),
                   name="next-assets")
 
-    @app.get("/", include_in_schema=False)
+    @app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
     async def index() -> Any:
         page = FRONTEND_ROOT / "index.html"
         if page.is_file():
@@ -716,22 +716,39 @@ def create_app(store: SessionStore | None = None,
         return {"board": board_snapshot(), "detail": detail,
                 "deferred": deferred}
 
-    @app.get("/{path:path}", include_in_schema=False)
+    @app.api_route("/{path:path}", methods=["GET", "HEAD"],
+                   include_in_schema=False)
     async def frontend_file(path: str) -> FileResponse:
         """Serve remaining files from the static Next.js export.
 
         The export is a directory of plain files (``index.txt``,
         ``404.html``, icons and so on). Only paths that stay inside the
-        export root are served.
+        export root are served. A path without an extension also tries
+        the page forms Next writes (``board.html``, ``board/index.html``),
+        so deep links and refreshes work without an SPA fallback.
         """
         root = FRONTEND_ROOT.resolve()
-        candidate = (root / path).resolve()
-        try:
-            candidate.relative_to(root)
-        except ValueError:
-            raise HTTPException(status_code=404, detail="not found") from None
-        if candidate.is_file():
-            return FileResponse(candidate)
+
+        def resolve_inside(relative: str) -> Path | None:
+            candidate = (root / relative).resolve()
+            try:
+                candidate.relative_to(root)
+            except ValueError:
+                return None
+            return candidate
+
+        for relative in (
+            path,
+            f"{path.rstrip('/')}.html",
+            f"{path.rstrip('/')}/index.html",
+        ):
+            candidate = resolve_inside(relative)
+            if candidate is not None and candidate.is_file():
+                return FileResponse(candidate)
+
+        not_found = root / "404.html"
+        if not_found.is_file():
+            return FileResponse(not_found, status_code=404)
         raise HTTPException(status_code=404, detail="not found")
 
     return app

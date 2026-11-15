@@ -1,58 +1,67 @@
 "use client";
 
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 import type { ReactElement } from "react";
 
-import { useI18n, type MessageKey } from "@/lib/i18n";
+import { useI18n } from "@/lib/i18n";
+import { matchRoute, navHref, ROUTES, type NavIconId } from "@/lib/routes";
+import { useSessions } from "@/lib/stores/sessions";
 
-import { BoardIcon, ChatIcon, SettingsIcon } from "./Icons";
+import {
+  BoardIcon,
+  ChatIcon,
+  FilesIcon,
+  ObservabilityIcon,
+  SchedulesIcon,
+  SettingsIcon,
+} from "./Icons";
 
-export type AppView = "chat" | "board";
+const NAV_ICONS: Record<NavIconId, () => ReactElement> = {
+  chat: ChatIcon,
+  board: BoardIcon,
+  files: FilesIcon,
+  observability: ObservabilityIcon,
+  schedules: SchedulesIcon,
+  settings: SettingsIcon,
+};
 
-/** Optional sidebar content. Settings can sit over either app view. */
-export type PanelId = "sessions" | "board" | "settings";
-
-/** Top-level destinations in the rail. */
-export type NavId = "chat" | "board" | "settings";
-
-interface NavItem {
-  id: NavId;
-  labelKey: MessageKey;
-  Icon: () => ReactElement;
-}
-
-/** Add new sidebar destinations here; the rail and panel switch follow. */
-export const NAV_ITEMS: NavItem[] = [
-  { id: "chat", labelKey: "navChat", Icon: ChatIcon },
-  { id: "board", labelKey: "navBoard", Icon: BoardIcon },
-  { id: "settings", labelKey: "settings", Icon: SettingsIcon },
-];
+const NAV_ROUTES = ROUTES.filter((route) => route.nav);
 
 interface IconRailProps {
-  active: NavId;
-  onSelect: (id: NavId) => void;
+  onNavigate: () => void;
 }
 
-export default function IconRail({ active, onSelect }: IconRailProps) {
+/**
+ * Top-level destinations. Links are real URLs, so middle-click, new tabs
+ * and the back button all work; the active item comes from the path.
+ */
+export default function IconRail({ onNavigate }: IconRailProps) {
   const { t } = useI18n();
+  const pathname = usePathname();
+  const { activeId } = useSessions();
+  const activeRoute = matchRoute(pathname);
 
   return (
     <nav className="rail" aria-label={t("navSidebarLabel")}>
       <div className="rail-group">
-        {NAV_ITEMS.map(({ id, labelKey, Icon }) => {
-          const label = t(labelKey);
-          const isActive = id === active;
+        {NAV_ROUTES.map((route) => {
+          if (!route.nav) return null;
+          const label = t(route.nav.labelKey);
+          const isActive = route.id === activeRoute?.id;
+          const Icon = NAV_ICONS[route.nav.icon];
           return (
-            <button
-              key={id}
-              type="button"
+            <Link
+              key={route.id}
               className={`rail-btn${isActive ? " active" : ""}`}
+              href={navHref(route, activeId)}
               title={label}
               aria-label={label}
               aria-current={isActive ? "page" : undefined}
-              onClick={() => onSelect(id)}
+              onClick={onNavigate}
             >
               <Icon />
-            </button>
+            </Link>
           );
         })}
       </div>

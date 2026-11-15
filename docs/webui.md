@@ -369,23 +369,39 @@ next start.
 ## 7. The Frontend
 
 `webui/frontend/` is a Next.js App Router project written in TypeScript.
-`app/page.tsx` owns the client state (view, sessions, frame upserts,
-composer, board dialogs, theme, settings), and the visual pieces live in
-`components/` (`TitleBar`, `Sidebar`, `BoardView`, `TaskCard`,
-`TaskEditor`, `Transcript`, `Composer`, `SettingsPanel`). Board data and
-mutations live in `lib/useBoard.ts`; `lib/board.ts` holds the shared column
-and priority vocabulary. `app/globals.css` carries the design tokens and
-every component style; `lib/markdown.ts` is the same small Markdown
-renderer as before, ported to a module.
+The route table in `lib/routes.ts` is the single source of truth for
+destinations (`/`, `/board`, `/files`, `/observability`, `/schedules`,
+`/settings`); `app/(console)/[...slug]/page.tsx` statically generates every
+non-root path and `lib/views.tsx` maps each route id to its view. Adding a
+page means adding one route row, one view, and one entry in the registry.
+
+The console frame lives in `components/shell/AppShell.tsx` and is rendered
+by `app/(console)/layout.tsx`, so page switches do not rebuild the shell.
+Client state is layered in providers under `lib/stores/`: theme, toast,
+runtime config, sessions/SSE, and the board snapshot plus its dialogs.
+Sessions and board data stay alive while the user visits another page;
+board polling runs at 5s on `/board` and backs off to 25s elsewhere.
+
+Chat selection is URL state (`/?session=<id>`) rewritten with
+`router.replace`, so refresh and deep links open the same conversation.
+Chat state lives in `components/Transcript.tsx` and `Composer.tsx`; board
+components are `BoardView`, `TaskCard`, `TaskDetail` and `TaskEditor`, with
+data and mutations in `lib/useBoard.ts` and `lib/board.ts`. Settings is a
+full page under `views/SettingsPage.tsx`. `app/globals.css` carries the
+design tokens and every component style; `lib/markdown.ts` is the same
+small Markdown renderer as before.
 
 The layout follows the same three-part frame as a desktop console app: a
-title bar, a sidebar with a view rail, and either the transcript with a
-composer (Chat) or the five-column board. Tool calls and thinking blocks
-are deliberately quiet — they are transcript metadata, not the main event
-— and expand on click.
+title bar, a sidebar with a view rail, and the selected view. Tool calls
+and thinking blocks are deliberately quiet — they are transcript
+metadata, not the main event — and expand on click.
 
 `npm run build` emits a static export to `webui/frontend/out/`. FastAPI
-mounts `/_next` from that directory and serves `index.html` at `/`; if the
-export is missing, the page says how to build it. `npm run dev` instead
-runs the regular Next.js server and rewrites `/api` to
-`http://127.0.0.1:8000`.
+mounts `/_next` from that directory, serves the generated `.html` file for
+each path (with a `404.html` fallback), and keeps `/api` and `/_next`
+ahead of the catch-all. If the export is missing, the page says how to
+build it. `npm run dev` instead runs the regular Next.js server and
+rewrites `/api` to `http://127.0.0.1:8000`.
+
+See `docs/webui-frontend.md` for the architecture, state layering, and the
+checklist to follow when adding a page.
