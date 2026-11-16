@@ -39,6 +39,11 @@ PREVIEW_BYTES = 512 * 1024
 MAX_PREVIEW_LINES = 5000
 MAX_DIFF_BYTES = 2 * 1024 * 1024
 MAX_DIFF_LINES = 4000
+# A request may ask for any context in this range; "expand full file" uses
+# the parser's line budget as its context, so the whole previewable file
+# (up to 4000 lines) is included without generating an unbounded patch.
+MAX_DIFF_CONTEXT = 2000
+FULL_DIFF_CONTEXT = MAX_DIFF_LINES
 MAX_CHANGES = 5000
 MAX_UNTRACKED_BYTES = 2 * 1024 * 1024
 
@@ -662,7 +667,13 @@ class WorkspaceBrowser:
 
     # -- diff ------------------------------------------------------------
 
-    def diff(self, path: str, old_path: str | None = None) -> dict[str, Any]:
+    def diff(self, path: str, old_path: str | None = None,
+             context: int = 3, full: bool = False) -> dict[str, Any]:
+        if not isinstance(context, int) or isinstance(context, bool) or \
+                context < 0 or context > MAX_DIFF_CONTEXT:
+            raise InvalidPath(
+                f"context must be between 0 and {MAX_DIFF_CONTEXT}")
+        effective_context = FULL_DIFF_CONTEXT if full else context
         root = self.root
         try:
             target = self._resolve(path, want="file")
@@ -689,10 +700,10 @@ class WorkspaceBrowser:
         if not tracked or not self._has_head():
             if not target.is_file():
                 raise WorkspaceNotFound(f"path does not exist: {rel}")
-            return self._untracked_diff(rel, target)
+            return self._untracked_diff(rel, target, effective_context)
 
         args = ["diff", "HEAD", "--no-color", "--no-ext-diff", "-M20%",
-                "-U3", "--", repo_rel]
+                f"-U{effective_context}", "--", repo_rel]
         if old_rel:
             args.append(self._repo_path(old_rel, prefix))
         completed = self._git(args, timeout=GIT_DIFF_TIMEOUT, root=repo)
@@ -700,22 +711,24 @@ class WorkspaceBrowser:
             raise GitError(f"git diff failed: {_tail(completed.stderr)}")
         raw = completed.stdout
         if not raw:
-            return _diff_payload(rel, old_rel, "modified", False, False, [])
+            return _diff_payload(rel, old_rel, "modified", False, False, [],
+                                 effective_context)
 
         truncated = len(raw) > MAX_DIFF_BYTES
         if truncated:
             raw = raw[:MAX_DIFF_BYTES]
         text = raw.decode("utf-8", errors="replace")
-        if "GIT binary patch" in text or "Binary files" in text:
+        if _patch_is_binary(text):
             return _diff_payload(rel, old_rel, _status_from_patch(text),
-                                 True, truncated, [])
+                                 True, truncated, [], effective_context)
         hunks, binary, truncated = _parse_diff(
             text, truncated=truncated, max_lines=MAX_DIFF_LINES)
         if binary:
             return _diff_payload(rel, old_rel, _status_from_patch(text),
-                                 True, truncated, [])
+                                 True, truncated, [], effective_context)
         status = _status_from_patch(text)
-        return _diff_payload(rel, old_rel, status, False, truncated, hunks)
+        return _diff_payload(rel, old_rel, status, False, truncated, hunks,
+                             effective_context)
 
     def _is_tracked(self, repo_rel: str, repo: Path) -> bool:
         completed = self._git(
@@ -725,7 +738,8 @@ class WorkspaceBrowser:
         )
         return completed.returncode == 0
 
-    def _untracked_diff(self, rel: str, target: Path) -> dict[str, Any]:
+    def _untracked_diff(self, rel: str, target: Path,
+                        context: int = 3) -> dict[str, Any]:
         try:
             size = target.stat().st_size
             with target.open("rb") as handle:
@@ -735,7 +749,8 @@ class WorkspaceBrowser:
         truncated = size > MAX_UNTRACKED_BYTES
         text = _decode_text(raw, allow_incomplete_tail=truncated)
         if _has_nul(raw) or text is None:
-            return _diff_payload(rel, None, "added", True, truncated, [])
+            return _diff_payload(rel, None, "added", True, truncated, [],
+                                 context)
 
         lines = text.split("\n")
         if lines and lines[-1] == "":
@@ -761,7 +776,7 @@ class WorkspaceBrowser:
             "lines": rendered,
         }
         return _diff_payload(rel, None, "added", False, truncated,
-                             [hunk] if lines else [])
+                             [hunk] if lines else [], context)
 
 
 # -- parsing helpers -----------------------------------------------------
@@ -866,15 +881,31 @@ def _change_entry(path: str, xy: str, old_path: str | None) -> dict[str, Any]:
     }
 
 
+def _patch_is_binary(text: str) -> bool:
+    """Whether a patch carries git's binary marker.
+
+    Only header lines count: a changed source file may itself contain
+    the words "Binary files" or "GIT binary patch".
+    """
+    for line in text.split("\n"):
+        if line == "GIT binary patch":
+            return True
+        if line.startswith("Binary files ") and line.endswith(" differ"):
+            return True
+    return False
+
+
 def _status_from_patch(text: str) -> str:
-    if "new file mode" in text:
-        return "added"
-    if "deleted file mode" in text:
-        return "deleted"
-    if "rename from " in text or "rename to " in text:
-        return "renamed"
-    if "old mode " in text or "new mode " in text:
-        return "typechange"
+    """Read status from header lines, never from added file content."""
+    for line in text.split("\n"):
+        if line.startswith("new file mode "):
+            return "added"
+        if line.startswith("deleted file mode "):
+            return "deleted"
+        if line.startswith("rename from ") or line.startswith("rename to "):
+            return "renamed"
+        if line.startswith("old mode ") or line.startswith("new mode "):
+            return "typechange"
     return "modified"
 
 
@@ -947,13 +978,15 @@ def _parse_diff(text: str, *, truncated: bool = False,
 
 def _diff_payload(path: str, old_path: str | None, status: str,
                   binary: bool, truncated: bool,
-                  hunks: list[dict[str, Any]]) -> dict[str, Any]:
+                  hunks: list[dict[str, Any]],
+                  context: int = 3) -> dict[str, Any]:
     return {
         "path": path,
         "old_path": old_path,
         "status": status,
         "binary": binary,
         "truncated": truncated,
+        "context": context,
         "hunks": hunks,
     }
 

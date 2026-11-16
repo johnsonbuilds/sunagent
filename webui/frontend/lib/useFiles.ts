@@ -311,23 +311,43 @@ export function useFilePreview(
 }
 
 export interface FileDiffState {
+  /** The compact diff, or the expanded one while `expanded` is true. */
   data: WorkspaceDiff | null;
   loading: boolean;
   error: string | null;
+  expanded: boolean;
+  expanding: boolean;
+  expandError: string | null;
+  expand: () => void;
+  collapse: () => void;
 }
 
+/**
+ * A compact diff loads with the selection.  Expanding fetches a second,
+ * full-context diff once and keeps it until the file or refresh changes;
+ * collapsing returns to the cached compact diff without a request.
+ */
 export function useFileDiff(
   path: string | null,
   oldPath: string | null,
   version: number,
 ): FileDiffState {
-  const [data, setData] = useState<WorkspaceDiff | null>(null);
+  const [compact, setCompact] = useState<WorkspaceDiff | null>(null);
+  const [full, setFull] = useState<WorkspaceDiff | null>(null);
+  const [expanded, setExpanded] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [expanding, setExpanding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [expandError, setExpandError] = useState<string | null>(null);
+  const fullRequest = useRef<AbortController | null>(null);
 
   useEffect(() => {
+    fullRequest.current?.abort();
+    setFull(null);
+    setExpanded(false);
+    setExpandError(null);
     if (!path) {
-      setData(null);
+      setCompact(null);
       setError(null);
       setLoading(false);
       return;
@@ -337,13 +357,13 @@ export function useFileDiff(
     if (oldPath) query.set("old_path", oldPath);
     setLoading(true);
     setError(null);
-    setData((current) => (current && current.path === path ? current : null));
+    setCompact((current) => (current && current.path === path ? current : null));
 
     api<WorkspaceDiff>(`/api/workspace/diff?${query.toString()}`, {
       signal: controller.signal,
     })
       .then((next) => {
-        setData(next);
+        setCompact(next);
         setLoading(false);
       })
       .catch((caught) => {
@@ -355,6 +375,46 @@ export function useFileDiff(
     return () => controller.abort();
   }, [path, oldPath, version]);
 
-  return { data, loading, error };
+  const expand = useCallback(() => {
+    if (!path || expanded) return;
+    if (full) {
+      setExpanded(true);
+      return;
+    }
+    fullRequest.current?.abort();
+    const controller = new AbortController();
+    fullRequest.current = controller;
+    const query = new URLSearchParams({ path, full: "true" });
+    if (oldPath) query.set("old_path", oldPath);
+    setExpanding(true);
+    setExpandError(null);
+
+    api<WorkspaceDiff>(`/api/workspace/diff?${query.toString()}`, {
+      signal: controller.signal,
+    })
+      .then((next) => {
+        setFull(next);
+        setExpanded(true);
+        setExpanding(false);
+      })
+      .catch((caught) => {
+        if (controller.signal.aborted) return;
+        setExpandError(errorMessage(caught));
+        setExpanding(false);
+      });
+  }, [path, oldPath, expanded, full]);
+
+  const collapse = useCallback(() => setExpanded(false), []);
+
+  return {
+    data: expanded && full ? full : compact,
+    loading,
+    error,
+    expanded,
+    expanding,
+    expandError,
+    expand,
+    collapse,
+  };
 }
 

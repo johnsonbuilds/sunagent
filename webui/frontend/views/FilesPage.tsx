@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { BranchIcon } from "@/components/Icons";
 import ChangesTree from "@/components/files/ChangesTree";
-import DiffView from "@/components/files/DiffView";
+import DiffView, { type DiffStyle } from "@/components/files/DiffView";
 import FilesTabs, { type FilesTabId } from "@/components/files/FilesTabs";
 import FilesToolbar from "@/components/files/FilesToolbar";
 import FileTree from "@/components/files/FileTree";
@@ -16,6 +16,7 @@ import {
   buildChangeTree,
   changeTreeDirs,
   dirname,
+  indexChanges,
 } from "@/lib/files";
 import { useI18n } from "@/lib/i18n";
 import {
@@ -57,6 +58,7 @@ export default function FilesPage() {
   const [changeExpanded, setChangeExpanded] = useState<string[]>([]);
   const [previewVersion, setPreviewVersion] = useState(0);
   const [diffVersion, setDiffVersion] = useState(0);
+  const [diffStyle, setDiffStyleState] = useState<DiffStyle>("unified");
 
   const tree = useFileTree(includeIgnored);
   const changes = useChanges();
@@ -77,6 +79,10 @@ export default function FilesPage() {
 
   const changeNodes = useMemo(
     () => buildChangeTree(changes.data?.entries ?? []),
+    [changes.data],
+  );
+  const changeIndex = useMemo(
+    () => indexChanges(changes.data?.entries ?? []),
     [changes.data],
   );
 
@@ -112,6 +118,17 @@ export default function FilesPage() {
     },
     [tree],
   );
+
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem("sunagent.diffStyle");
+      if (stored === "split" || stored === "unified") {
+        setDiffStyleState(stored);
+      }
+    } catch {
+      /* private mode */
+    }
+  }, []);
 
   // Apply the URL once, then keep the browser history in step by hand
   // (the static export has no searchParams hook available during export).
@@ -189,6 +206,15 @@ export default function FilesPage() {
       setPreviewVersion((value) => value + 1);
     }
     write("replace", "files", entry.path);
+  };
+
+  const setDiffStyle = (next: DiffStyle) => {
+    setDiffStyleState(next);
+    try {
+      window.localStorage.setItem("sunagent.diffStyle", next);
+    } catch {
+      /* private mode */
+    }
   };
 
   const selectChange = (entry: ChangeEntry) => {
@@ -278,6 +304,7 @@ export default function FilesPage() {
               dirs={tree.dirs}
               expanded={tree.expanded}
               selected={selectedFile || protectedPath || null}
+              changes={changeIndex}
               onToggle={toggleDirectory}
               onSelect={selectFile}
               onRetry={(path) => void tree.loadDir(path, true)}
@@ -377,9 +404,16 @@ export default function FilesPage() {
               path={changesPath || null}
               data={diff.data}
               entry={changeEntry}
+              style={diffStyle}
               loading={diff.loading}
               error={diff.error}
               protectedPath={diffProtected || null}
+              expanded={diff.expanded}
+              expanding={diff.expanding}
+              expandError={diff.expandError}
+              onStyleChange={setDiffStyle}
+              onExpand={() => diff.expand()}
+              onCollapse={() => diff.collapse()}
               onRetry={() => setDiffVersion((value) => value + 1)}
               onBack={back}
               onOpenInFiles={openInFiles}

@@ -1,5 +1,5 @@
 import type { MessageKey } from "@/lib/i18n";
-import type { ChangeEntry, ChangeStatus } from "@/lib/types";
+import type { ChangeEntry, ChangeStatus, DiffLine } from "@/lib/types";
 
 /** Path helpers for POSIX-style workspace paths (never native separators). */
 
@@ -150,6 +150,105 @@ export function buildChangeTree(entries: ChangeEntry[]): ChangeNode[] {
   };
   sort(root);
   return root.children;
+}
+
+export interface SplitRow {
+  kind: "ctx" | "add" | "del" | "note";
+  /** The deletion side of the row; null when this side is empty. */
+  left: DiffLine | null;
+  /** The addition side of the row. */
+  right: DiffLine | null;
+  /** Set for note rows, which span both sides. */
+  note?: string;
+}
+
+/**
+ * Pair a unified hunk's deletions and additions into side-by-side rows.
+ *
+ * Git emits deletions before additions, so the i-th deletion pairs with
+ * the i-th addition; the longer side keeps its extra rows with an empty
+ * cell on the other side. Context and note lines flush the pair buffer.
+ */
+export function toSplitRows(lines: DiffLine[]): SplitRow[] {
+  const rows: SplitRow[] = [];
+  let deletions: DiffLine[] = [];
+  let additions: DiffLine[] = [];
+
+  const flush = () => {
+    const count = Math.max(deletions.length, additions.length);
+    for (let index = 0; index < count; index += 1) {
+      const left = deletions[index] ?? null;
+      const right = additions[index] ?? null;
+      rows.push({
+        kind: left ? "del" : "add",
+        left,
+        right,
+      });
+    }
+    deletions = [];
+    additions = [];
+  };
+
+  for (const line of lines) {
+    if (line.kind === "del") {
+      deletions.push(line);
+      continue;
+    }
+    if (line.kind === "add") {
+      additions.push(line);
+      continue;
+    }
+    flush();
+    if (line.kind === "note") {
+      rows.push({ kind: "note", left: null, right: null, note: line.text });
+    } else {
+      rows.push({ kind: "ctx", left: line, right: line });
+    }
+  }
+  flush();
+  return rows;
+}
+
+const CHANGE_RANK: Record<ChangeStatus, number> = {
+  conflicted: 0,
+  deleted: 1,
+  modified: 2,
+  typechange: 3,
+  added: 4,
+  renamed: 5,
+  copied: 6,
+  untracked: 7,
+};
+
+export interface ChangeIndex {
+  byPath: Map<string, ChangeEntry>;
+  /** Changed files below each directory, including nested ones. */
+  dirCount: Map<string, number>;
+  /** The most urgent status below each directory. */
+  dirStatus: Map<string, ChangeStatus>;
+}
+
+/** Index a flat change list for the file tree's colours and counts. */
+export function indexChanges(entries: ChangeEntry[]): ChangeIndex {
+  const byPath = new Map<string, ChangeEntry>();
+  const dirCount = new Map<string, number>();
+  const dirStatus = new Map<string, ChangeStatus>();
+  for (const entry of entries) {
+    byPath.set(entry.path, entry);
+    let dir = dirname(entry.path);
+    while (dir) {
+      dirCount.set(dir, (dirCount.get(dir) ?? 0) + 1);
+      const previous = dirStatus.get(dir);
+      if (
+        previous === undefined ||
+        CHANGE_RANK[entry.status] < CHANGE_RANK[previous]
+      ) {
+        dirStatus.set(dir, entry.status);
+      }
+      dir = dirname(dir);
+    }
+  }
+  return { byPath, dirCount, dirStatus };
 }
 
 /** Every directory path in a change tree, for "expand all". */

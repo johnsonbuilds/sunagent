@@ -417,6 +417,39 @@ class WorkspaceDiffTests(unittest.TestCase):
             self.assertEqual((added["old"], added["new"], added["text"]),
                              (None, 2, "TWO"))
 
+    def test_context_and_full_change_the_hunk_window(self) -> None:
+        original = "\n".join(f"line {index}" for index in range(1, 31)) + "\n"
+        changed = original.replace("line 15\n", "line fifteen\n")
+        with repo({"long.txt": original.encode()}) as base:
+            (base / "long.txt").write_text(changed)
+            browser = WorkspaceBrowser(base)
+
+            compact = browser.diff("long.txt", context=1)
+            self.assertEqual(compact["context"], 1)
+            self.assertEqual(compact["hunks"][0]["old_start"], 14)
+            self.assertEqual(len(compact["hunks"][0]["lines"]), 4)
+
+            full = browser.diff("long.txt", full=True)
+            self.assertEqual(full["context"], 4000)
+            texts = [line["text"] for line in full["hunks"][0]["lines"]]
+            self.assertIn("line 1", texts)
+            self.assertIn("line 30", texts)
+            self.assertTrue(len(texts) >= 31)
+
+            no_context = browser.diff("long.txt", context=0)
+            self.assertEqual(no_context["hunks"][0]["old_start"], 15)
+            self.assertEqual(
+                [line["kind"] for line in no_context["hunks"][0]["lines"]],
+                ["del", "add"],
+            )
+
+    def test_invalid_context_is_rejected(self) -> None:
+        with repo({"a.txt": b"a\n"}) as base:
+            with self.assertRaises(InvalidPath):
+                WorkspaceBrowser(base).diff("a.txt", context=-1)
+            with self.assertRaises(InvalidPath):
+                WorkspaceBrowser(base).diff("a.txt", context=2001)
+
     def test_untracked_file_is_all_additions(self) -> None:
         with repo({"keep.txt": b"keep\n"}) as base:
             (base / "new.txt").write_text("one\ntwo")
@@ -446,6 +479,19 @@ class WorkspaceDiffTests(unittest.TestCase):
 
             self.assertEqual(data["status"], "renamed")
             self.assertEqual(data["old_path"], "old.txt")
+            self.assertTrue(data["hunks"])
+
+    def test_content_that_looks_like_patch_metadata_is_not_binary(self) -> None:
+        content = (
+            b"# Binary files a and b differ\n"
+            b"# GIT binary patch\n"
+            b"# new file mode 100644\n"
+        )
+        with repo({"notes.py": content}) as base:
+            (base / "notes.py").write_text(content.decode() + "# more\n")
+            data = WorkspaceBrowser(base).diff("notes.py")
+            self.assertFalse(data["binary"])
+            self.assertEqual(data["status"], "modified")
             self.assertTrue(data["hunks"])
 
     def test_binary_file_has_no_hunks(self) -> None:
@@ -607,6 +653,18 @@ class WorkspaceApiTests(unittest.TestCase):
                                 params={"path": "README.md"})
         self.assertEqual(diff.status_code, 200)
         self.assertTrue(diff.json()["hunks"])
+        self.assertEqual(diff.json()["context"], 3)
+
+        full = self.client.get("/api/workspace/diff",
+                               params={"path": "README.md",
+                                       "full": "true"})
+        self.assertEqual(full.status_code, 200)
+        self.assertEqual(full.json()["context"], 4000)
+
+        invalid = self.client.get("/api/workspace/diff",
+                                  params={"path": "README.md",
+                                          "context": 5000})
+        self.assertEqual(invalid.status_code, 400)
 
     def test_error_statuses(self) -> None:
         self.assertEqual(

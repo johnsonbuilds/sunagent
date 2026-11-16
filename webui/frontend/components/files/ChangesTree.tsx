@@ -2,6 +2,7 @@
 
 import { Fragment } from "react";
 
+import LanguageIcon from "@/components/files/LanguageIcon";
 import StatusBadge from "@/components/files/StatusBadge";
 import TreeRow from "@/components/files/TreeRow";
 import { useI18n } from "@/lib/i18n";
@@ -65,8 +66,9 @@ export default function ChangesTree({
           depth={depth}
           selected={selected === entry.path}
           protectedFile={entry.protected}
+          icon={<LanguageIcon name={node.name} />}
           title={entry.path}
-          tone={entry.status}
+          tone={entry.protected ? undefined : entry.status}
           badge={<StatusBadge status={entry.status} />}
           meta={stats(entry)}
           onClick={() => onSelect(entry)}

@@ -159,7 +159,7 @@ under `harnesses/archived/` never appear in the picker.
 | `GET` | `/api/workspace/tree` | one directory level of the workspace (`path`, `ignored`) |
 | `GET` | `/api/workspace/file` | text preview of one file (`path`) |
 | `GET` | `/api/workspace/changes` | uncommitted changes from `git status` |
-| `GET` | `/api/workspace/diff` | one file's diff against `HEAD` (`path`, optional `old_path`) |
+| `GET` | `/api/workspace/diff` | one file's diff against `HEAD` (`path`, optional `old_path`, `context`, `full`) |
 
 The event stream replays the recent frames of a session before switching to
 live delivery, and honours `Last-Event-ID`, so a browser that reconnects
@@ -184,6 +184,11 @@ resumes where it left off instead of starting from a blank transcript.
 * **Limits**: 1000 entries per directory, 5000 preview lines, 512 KiB of an
   oversized preview, 2 MiB of diff text, 4000 diff lines, 5000 change
   entries. Truncation is a flag in the response, never an error.
+* **Diff context**: `context` accepts 0–2000 lines (default 3); `full=true`
+  asks for the whole previewable file and uses the 4000-line budget.
+  The preview highlights known languages with lazily loaded
+  `highlight.js` grammars and can switch between unified and split
+  layouts (the choice is stored locally).
 * **Paths** are POSIX paths relative to the root; escapes, absolute paths,
   hard-skipped directories and symlinks are rejected.
 * **Changes** use `git status --porcelain=v2 --branch -z

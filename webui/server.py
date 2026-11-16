@@ -752,9 +752,12 @@ def create_app(store: SessionStore | None = None,
 
     @app.get("/api/workspace/diff")
     async def workspace_diff(path: str,
-                             old_path: str | None = None) -> dict[str, Any]:
+                             old_path: str | None = None,
+                             context: int = 3,
+                             full: bool = False) -> dict[str, Any]:
         try:
-            return await asyncio.to_thread(browser.diff, path, old_path)
+            return await asyncio.to_thread(
+                browser.diff, path, old_path, context, full)
         except WorkspaceError as exc:
             raise _workspace_http_error(exc) from exc
 

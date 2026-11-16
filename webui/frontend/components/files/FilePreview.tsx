@@ -1,9 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { BackIcon, CopyIcon, LockIcon } from "@/components/Icons";
+import LanguageIcon from "@/components/files/LanguageIcon";
 import { formatSize } from "@/lib/files";
+import { highlightLanguage } from "@/lib/fileIcons";
+import {
+  MAX_HIGHLIGHT_BYTES,
+  MAX_HIGHLIGHT_LINES,
+  highlightCode,
+} from "@/lib/highlight";
 import { useI18n } from "@/lib/i18n";
 import type { WorkspaceFile } from "@/lib/types";
 
@@ -28,6 +35,35 @@ export default function FilePreview({
 }) {
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
+  const [highlighted, setHighlighted] = useState<string | null>(null);
+
+  const content = data?.content ?? "";
+  const lines = content
+    .split("\n")
+    .map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line));
+  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+
+  const language = path ? highlightLanguage(path) : null;
+  const canHighlight =
+    !data?.binary &&
+    content.length > 0 &&
+    content.length <= MAX_HIGHLIGHT_BYTES &&
+    lines.length <= MAX_HIGHLIGHT_LINES &&
+    language !== null;
+
+  useEffect(() => {
+    let cancelled = false;
+    setHighlighted(null);
+    if (!data || !canHighlight || !language) return;
+
+    const key = `${data.path}:${data.mtime}`;
+    void highlightCode(data.content ?? "", language, key).then((html) => {
+      if (!cancelled) setHighlighted(html);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [data, canHighlight, language]);
 
   if (!path) {
     return (
@@ -48,10 +84,8 @@ export default function FilePreview({
     }
   };
 
-  const lines = (data?.content ?? "")
-    .split("\n")
-    .map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line));
-  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  const gutterLines =
+    lines.length + (content.endsWith("\n") && lines.length > 0 ? 1 : 0);
 
   return (
     <div className="files-preview">
@@ -65,10 +99,17 @@ export default function FilePreview({
           <BackIcon />
         </button>
         <div className="files-preview-title">
-          <span className="files-path">{path}</span>
+          <span className="files-path-line">
+            <span className="files-path-icon">
+              <LanguageIcon name={path} />
+            </span>
+            <span className="files-path">{path}</span>
+          </span>
           <span className="files-preview-meta">
             {data ? formatSize(data.size) : ""}
-            {data && data.lines !== null ? ` · ${t("filesLineCount", { count: data.lines })}` : ""}
+            {data && data.lines !== null
+              ? ` · ${t("filesLineCount", { count: data.lines })}`
+              : ""}
           </span>
         </div>
         <button
@@ -111,6 +152,19 @@ export default function FilePreview({
           </div>
         ) : lines.length === 0 ? (
           <div className="files-pane-message">{t("filesEmptyFile")}</div>
+        ) : highlighted ? (
+          <div className="files-code files-code-highlight">
+            <div className="files-code-gutter" aria-hidden="true">
+              {Array.from({ length: gutterLines }, (_, index) => (
+                <span key={index}>{index + 1}</span>
+              ))}
+            </div>
+            <pre
+              className="files-code-hl hljs"
+              // highlight.js escapes the source before adding its spans.
+              dangerouslySetInnerHTML={{ __html: highlighted }}
+            />
+          </div>
         ) : (
           <div className="files-code" role="presentation">
             {lines.map((line, index) => (
