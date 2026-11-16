@@ -596,8 +596,9 @@ runner = AgentRunner()
 
 1. 点击卡片正文打开 `TaskDetail` 弹窗（铅笔仍进入编辑）。
 2. 弹窗按需 `GET /api/board/tasks/{id}`，展示描述、评论、每次 run 的 final response。
-3. 底部输入评论 → `POST /api/board/tasks/{id}/comments`，返回新快照和详情。
-4. 正在执行时评论不打断当前 run，弹窗提示“执行结束后发送”。
+3. 详情区（`.task-detail`，最高 65vh）在首次拿到详情后自动滚到底部，直接显示最新活动；每次打开只跳一次，后台刷新不会把已经向上阅读的用户拉回去。
+4. 底部输入评论 → `POST /api/board/tasks/{id}/comments`，返回新快照和详情；提交成功后自动关闭弹窗。
+5. 正在执行时评论不打断当前 run，弹窗提示“执行结束后发送”。
 
 **打开任务对话**
 

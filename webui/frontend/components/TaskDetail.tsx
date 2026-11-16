@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { PRIORITY_LABEL_KEYS, STATUS_LABEL_KEYS, relativeTime } from "@/lib/board";
 import { useI18n, type TFunction } from "@/lib/i18n";
@@ -51,6 +51,8 @@ export default function TaskDetail({
   const [body, setBody] = useState("");
   const [sending, setSending] = useState(false);
   const requestRef = useRef(0);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const jumpedRef = useRef(false);
 
   useEffect(() => {
     if (!open || !task) {
@@ -77,6 +79,20 @@ export default function TaskDetail({
       });
   }, [open, task?.id, task?.updated_at, onFetch]);
 
+  // Opening a card lands on the newest activity. Wait for the first detail
+  // payload so the jump covers the real content, and jump only once per
+  // opening so a background refresh never yanks the reader away.
+  useLayoutEffect(() => {
+    if (!open) {
+      jumpedRef.current = false;
+      return;
+    }
+    const box = scrollRef.current;
+    if (!box || !detail || jumpedRef.current) return;
+    jumpedRef.current = true;
+    box.scrollTop = box.scrollHeight;
+  }, [open, detail]);
+
   if (!task) return null;
 
   const comments = detail?.comments ?? [];
@@ -96,10 +112,12 @@ export default function TaskDetail({
     if (!text || sending) return;
     setSending(true);
     try {
-      const result = await onComment(task.id, text);
-      setDetail(result.detail);
+      await onComment(task.id, text);
       setFailure("");
       setBody("");
+      // The store already applied the refreshed board snapshot, so the
+      // dialog has nothing left to show: close it on success.
+      onClose();
     } catch (error) {
       setFailure(errorMessage(error));
     } finally {
@@ -179,7 +197,7 @@ export default function TaskDetail({
         </>
       }
     >
-      <div className="task-detail">
+      <div className="task-detail" ref={scrollRef}>
         <div className="task-detail-meta">
           <span className={`task-priority task-priority-${task.priority}`}>
             {t(PRIORITY_LABEL_KEYS[task.priority])}

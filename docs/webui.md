@@ -284,12 +284,15 @@ and run timeline, and a comment box. Each comment is shown as the user
 message that queued it, followed by the final response of the run it
 triggered. Only final responses are stored, so the card never shows
 thinking blocks or tool activity. The pencil button opens the edit form.
+The detail area is a 65vh scroll box that jumps to the bottom once per
+opening, so the newest activity is visible without scrolling; later
+background refreshes leave the reader's scroll position alone.
 
-Sending a comment stores it and re-queues the card. It is delivered as
-the next user message when the worker claims the card, not immediately,
-so the same text cannot be executed twice. If the card is currently
-running, the comment waits for that run to finish and is sent by the
-follow-up run.
+Sending a comment stores it and re-queues the card, then closes the
+dialog. It is delivered as the next user message when the worker claims
+the card, not immediately, so the same text cannot be executed twice. If
+the card is currently running, the comment waits for that run to finish
+and is sent by the follow-up run.
 
 Drag a card to reorder it within a column or move it to another one. The
 card's **move to** select does the same thing without a pointer, for touch
