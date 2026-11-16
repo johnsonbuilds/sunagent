@@ -401,11 +401,16 @@ def create_app(store=None, board=None, *, workspace: WorkspaceBrowser | None = N
 | `/files?tab=changes&path=src/a.py` | 变更 tab，打开该文件的 diff |
 
 - 不传 `tab` 默认 `files`。
-- 切 tab 用 `router.push`（后退可回上一个 tab）。
-- 选中/打开文件用 `router.replace`（避免后退键在几十个文件里倒退，和聊天 `?session=` 策略一致）。
+- 切 tab 用 `history.pushState`（后退可回上一个 tab）。
+- 选中/打开文件或目录用 `history.replaceState`（避免后退键在几十个文件里倒退，和聊天 `?session=` 策略一致）。
 - **不使用 `useSearchParams`**：静态导出 + prerender 有 Suspense 限制。
-  照聊天页的做法读 `window.location.search` 并监听 `popstate`；写入用
-  `router.replace` / `router.push`。
+  照聊天页的做法读 `window.location.search` 并监听 `popstate`。
+- **不使用 `router.replace` / `router.push` 写页内状态**：静态导出下 Next
+  会先请求新 URL 的 RSC payload（`/files.txt?_rsc=…`）再重渲染；一旦该请求
+  失败（旧页面 build id 不匹配、静态托管不提供 `.txt`、移动浏览器中断），
+  Next 会退化成整页导航 —— 组件重挂、文件树从空开始重新拉根目录，表现为
+  点击目录时整棵树闪成只有「Loading…」。直接写 history 不触发任何导航，
+  页面本身已经按 `popstate` 恢复状态。
 
 ### 6.3 刷新契约（无轮询）
 
@@ -428,7 +433,7 @@ def create_app(store=None, board=None, *, workspace: WorkspaceBrowser | None = N
 
 - 首次：`GET tree?path=""`，只渲染根目录。
 - 点目录：首次点击拉取 `tree?path=<dir>`，写入缓存并展开；再次点击折叠（不重复请求）。
-- 点文件：选中 → 右侧拉 `file`；同时 `router.replace` 更新 `?path=`。
+- 点文件：选中 → 右侧拉 `file`；同时 `history.replaceState` 更新 `?path=`。
 - 目录行：chevron + folder 图标；文件行：file 图标 + 人类可读大小。
 - `protected` 文件显示锁图标；点击只显示提示，不发内容请求。
 - 空目录显示「空目录」；加载中显示骨架行；失败显示行内「重试」。

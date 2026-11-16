@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { BranchIcon } from "@/components/Icons";
@@ -43,10 +42,34 @@ function filesUrl(tab: FilesTabId, path: string): string {
   return query ? `/files?${query}` : "/files";
 }
 
+/**
+ * Update the address bar without asking Next to navigate.
+ *
+ * `router.replace` on a static export fetches the RSC payload for the new
+ * URL and only then re-renders the same page.  When that fetch cannot be
+ * completed (a stale tab whose build id no longer matches, a static host
+ * that does not publish `.txt` payloads, a mobile browser that aborts it),
+ * the router falls back to a plain browser navigation: the document
+ * reloads, the file tree starts empty and re-fetches the root, and the
+ * user sees a bare "Loading…" flash.  This page already reads the URL on
+ * mount and on `popstate`, so writing history directly keeps the address
+ * bar in step with no navigation at all.
+ */
+function writeHistory(
+  mode: "push" | "replace",
+  nextTab: FilesTabId,
+  path: string,
+): void {
+  const url = filesUrl(nextTab, path);
+  const current = `${window.location.pathname}${window.location.search}`;
+  if (current === url) return;
+  if (mode === "push") window.history.pushState(null, "", url);
+  else window.history.replaceState(null, "", url);
+}
+
 export default function FilesPage() {
   const { t } = useI18n();
   const shell = useShell();
-  const router = useRouter();
 
   const [tab, setTab] = useState<FilesTabId>("files");
   const [includeIgnored, setIncludeIgnored] = useState(false);
@@ -84,13 +107,6 @@ export default function FilesPage() {
   const changeIndex = useMemo(
     () => indexChanges(changes.data?.entries ?? []),
     [changes.data],
-  );
-
-  const write = useCallback(
-    (mode: "push" | "replace", nextTab: FilesTabId, path: string) => {
-      router[mode](filesUrl(nextTab, path), { scroll: false });
-    },
-    [router],
   );
 
   const openFilesPath = useCallback(
@@ -180,7 +196,7 @@ export default function FilesPage() {
   const switchTab = (next: FilesTabId) => {
     if (next === tab) return;
     setTab(next);
-    write("push", next, next === "files" ? filesPath : changesPath);
+    writeHistory("push", next, next === "files" ? filesPath : changesPath);
     if (next === "changes") {
       void changes.refresh(true);
       if (changesPath) setDiffVersion((value) => value + 1);
@@ -194,7 +210,7 @@ export default function FilesPage() {
     setProtectedPath("");
     // Keep the URL pointing at the directory, open or closed: a reload
     // reopens it instead of forgetting where the user was.
-    write("replace", "files", path);
+    writeHistory("replace", "files", path);
   };
 
   const selectFile = (entry: WorkspaceEntry) => {
@@ -205,7 +221,7 @@ export default function FilesPage() {
       // Re-selecting the open file is the cheap way to pick up an edit.
       setPreviewVersion((value) => value + 1);
     }
-    write("replace", "files", entry.path);
+    writeHistory("replace", "files", entry.path);
   };
 
   const setDiffStyle = (next: DiffStyle) => {
@@ -223,7 +239,7 @@ export default function FilesPage() {
     setChangeExpanded((current) => [
       ...new Set([...current, ...ancestorDirs(entry.path)]),
     ]);
-    write("replace", "changes", entry.path);
+    writeHistory("replace", "changes", entry.path);
   };
 
   const refresh = () => {
@@ -241,19 +257,19 @@ export default function FilesPage() {
       setSelectedFile("");
       setProtectedPath("");
       setFilesPath("");
-      write("replace", "files", "");
+      writeHistory("replace", "files", "");
       return;
     }
     setChangesPath("");
     setDiffProtected("");
-    write("replace", "changes", "");
+    writeHistory("replace", "changes", "");
   };
 
   const openInFiles = () => {
     if (!changesPath) return;
     const path = changesPath;
     setTab("files");
-    void openFilesPath(path).then(() => write("push", "files", path));
+    void openFilesPath(path).then(() => writeHistory("push", "files", path));
   };
 
   const toggleIgnored = () => {
@@ -261,7 +277,7 @@ export default function FilesPage() {
     setSelectedFile("");
     setProtectedPath("");
     setFilesPath("");
-    write("replace", "files", "");
+    writeHistory("replace", "files", "");
   };
 
   const rootState = tree.dirs[""];
