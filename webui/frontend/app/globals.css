@@ -223,8 +223,16 @@ button {
   color: var(--text);
 }
 
+/* 公共图标按钮样式，供各页面小图标操作统一复用
+ * 三种尺寸：small / medium / big，仅改尺寸，其余样式一致 */
 .icon-btn.small { width: 24px; height: 24px; }
 .icon-btn.small svg { width: 15px; height: 15px; }
+
+.icon-btn.medium { width: 32px; height: 32px; }
+.icon-btn.medium svg { width: 18px; height: 18px; }
+
+.icon-btn.big { width: 40px; height: 40px; }
+.icon-btn.big svg { width: 22px; height: 22px; }
 
 .icon-btn.primary {
   color: var(--accent-strong);
@@ -604,6 +612,15 @@ button {
   color: var(--muted);
   opacity: 0.8;
 }
+
+.msg-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-1);
+  margin-top: 6px;
+  padding-right: 4px;
+}
+
 
 .msg-row[data-role="assistant"] .msg-label::before {
   content: "";

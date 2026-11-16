@@ -4,8 +4,9 @@ import { useState, type RefObject } from "react";
 
 import { render as renderMarkdown } from "@/lib/markdown";
 import { useI18n, type MessageKey } from "@/lib/i18n";
+import { useToast } from "@/lib/stores/toast";
 import type { Segment, TextSegment, ToolSegment } from "@/lib/types";
-import { EmptyMark } from "./Icons";
+import { CopyIcon, EmptyMark } from "./Icons";
 
 const SUGGESTIONS: MessageKey[] = [
   "suggestionFiles",
@@ -30,11 +31,33 @@ function formatValue(value: unknown): string {
   }
 }
 
+function CopyButton({ content }: { content: string }) {
+  const { t } = useI18n();
+  const { showToast } = useToast();
+
+  return (
+    <button
+      type="button"
+      className="icon-btn medium"
+      aria-label={t("msgCopy")}
+      onClick={() => {
+        navigator.clipboard.writeText(content);
+        showToast(t("msgCopied"));
+      }}
+    >
+      <CopyIcon />
+    </button>
+  );
+}
+
 function TextBlock({ block }: { block: TextSegment }) {
   if (block.type === "user") {
     return (
       <div className="msg-row" data-role="user">
         <div className="msg-bubble">{block.content || ""}</div>
+        <div className="msg-actions">
+          <CopyButton content={block.content || ""} />
+        </div>
       </div>
     );
   }
@@ -44,12 +67,15 @@ function TextBlock({ block }: { block: TextSegment }) {
   }
 
   return (
-    <div className="msg-row" data-role="assistant">
+      <div className="msg-row" data-role="assistant">
       <div className="msg-label">SunAgent</div>
       <div
         className="msg-body"
         dangerouslySetInnerHTML={{ __html: renderMarkdown(block.content || "") }}
       />
+      <div className="msg-actions">
+        <CopyButton content={block.content || ""} />
+      </div>
     </div>
   );
 }
