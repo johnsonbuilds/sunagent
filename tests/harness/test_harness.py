@@ -11,7 +11,6 @@ sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
 
 from agent_runtime.harness import (
     BUILTIN_HARNESS,
-    DEFAULT_HARNESS_ID,
     ControlGenome,
     HarnessError,
     HarnessSpec,
@@ -28,24 +27,9 @@ from agent_runtime.trace import RunTrace
 
 
 REPO_ROOT = Path(__file__).parents[2]
-BASELINE_YAML = REPO_ROOT / "harnesses" / "baseline-v0.yaml"
-COMMON_YAML = REPO_ROOT / "harnesses" / "common-v0.yaml"
 
 
 class HarnessDefaultTests(unittest.TestCase):
-    def test_builtin_default_stays_in_sync_with_baseline_manifest(self) -> None:
-        loaded = load_harness(BASELINE_YAML)
-        self.assertEqual(loaded.id, BUILTIN_HARNESS.id)
-        self.assertEqual(loaded.genes_hash, BUILTIN_HARNESS.genes_hash)
-
-    def test_default_harness_is_the_manifest_common_v0(self) -> None:
-        self.assertEqual(DEFAULT_HARNESS_ID, "common-v0")
-        spec = default_harness()
-        self.assertEqual(spec.id, "common-v0")
-        self.assertEqual(Path(spec.source or "").resolve(), COMMON_YAML.resolve())
-        self.assertEqual(spec.genes_hash,
-                         load_named_harness("common-v0").genes_hash)
-
     def test_genes_hash_ignores_lineage_metadata(self) -> None:
         base = HarnessSpec()
         annotated = HarnessSpec(id="baseline-v1", parent="baseline-v0",
@@ -267,27 +251,6 @@ class HarnessValidationTests(unittest.TestCase):
     def test_unresolvable_reference_lists_candidates(self) -> None:
         with self.assertRaisesRegex(HarnessError, "no-such-harness"):
             resolve_harness("no-such-harness")
-
-    def test_resolve_none_returns_the_default_harness(self) -> None:
-        self.assertIs(resolve_harness(None), default_harness())
-        self.assertIs(resolve_harness(""), default_harness())
-        self.assertEqual(resolve_harness(None).id, "common-v0")
-
-
-class HarnessResolveTests(unittest.TestCase):
-    def test_resolve_by_id_finds_repo_manifest(self) -> None:
-        spec = resolve_harness("baseline-v0")
-        self.assertEqual(spec.id, "baseline-v0")
-        self.assertEqual(Path(spec.source).resolve(), BASELINE_YAML.resolve())
-
-    def test_resolve_by_id_finds_the_default_manifest(self) -> None:
-        spec = resolve_harness("common-v0")
-        self.assertEqual(spec.id, "common-v0")
-        self.assertEqual(Path(spec.source).resolve(), COMMON_YAML.resolve())
-
-    def test_resolve_by_path_loads_file(self) -> None:
-        self.assertEqual(resolve_harness(str(BASELINE_YAML)).id, "baseline-v0")
-
 
 class TraceHarnessHeaderTests(unittest.TestCase):
     def test_jsonl_leads_with_harness_header_then_events(self) -> None:

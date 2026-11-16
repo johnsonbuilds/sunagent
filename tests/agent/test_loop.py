@@ -32,6 +32,12 @@ from agent_runtime.tools.tools import ToolRegistry, ToolSpec
 # The runtime-mechanics tests pin the neutral built-in genome: they
 # exercise the loop, not the default manifest, so they must not drift
 # when harnesses/common-v0.yaml changes.
+# Persistent memory is disabled for these tests: AGENT_RUNTIME_MEMORY=1
+# (set in .env) would inject memory content into system prompts and emit
+# memory.recall events, which are unrelated to loop mechanics.
+import os as _os
+_os.environ["AGENT_RUNTIME_MEMORY"] = "0"
+
 NEUTRAL_HARNESS = HarnessSpec()
 
 

@@ -71,6 +71,10 @@ export default function AppShell({ children }: { children: ReactNode }) {
   let primaryTitle: MessageKey | undefined;
   let primaryLabel: MessageKey | undefined;
   let onPrimary: (() => void) | undefined;
+  let onOpenFiles: (() => void) | undefined;
+  if (isChat || route?.id === "board") {
+    onOpenFiles = () => void router.push("/files");
+  }
   if (route?.primary === "newChat") {
     primaryTitle = "newConversationShortcut";
     primaryLabel = "newConversation";
@@ -209,6 +213,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
           onToggleSidebar={value.toggleSidebar}
           onToggleTheme={toggleTheme}
           onNewChat={onPrimary}
+          onOpenFiles={onOpenFiles}
         />
 
         <div className="layout">

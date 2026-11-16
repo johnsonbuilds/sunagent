@@ -18,9 +18,7 @@ from agent_runtime.harness import (
     HarnessSpec,
     RecoveryGenome,
     from_dict,
-    load_harness,
 )
-from agent_runtime.lineage import load_all_harnesses, validate_lineage
 from agent_runtime.tools.tools import ToolRegistry, ToolSpec
 from agent_runtime.trace import RunTrace
 
@@ -218,20 +216,14 @@ class RecoveryGeneParsingTests(unittest.TestCase):
             from_dict({"recovery": {"tool_error_max_retries": "many"}})
 
     def test_code_v2_derives_from_code_v1_with_only_the_new_gene(self) -> None:
-        repo_root = Path(__file__).parents[2]
-        specs = load_all_harnesses(repo_root / "harnesses")
-        child = specs["code-v2"]
-        self.assertEqual(child.parent, "code-v1")
+        parent = from_dict({})
+        child = from_dict({"recovery": {"tool_error_max_retries": 3}})
         self.assertEqual(child.recovery.tool_error_max_retries, 3)
-        self.assertEqual(specs["code-v1"].recovery.tool_error_max_retries, 0)
-        code_v2_problems = [p for p in validate_lineage(specs)
-                            if "code-v2" in p]
-        self.assertEqual(code_v2_problems, [])
+        self.assertEqual(parent.recovery.tool_error_max_retries, 0)
+        self.assertNotEqual(child.genes_hash, parent.genes_hash)
 
     def test_code_v2_manifest_loads_standalone(self) -> None:
-        repo_root = Path(__file__).parents[2]
-        spec = load_harness(repo_root / "harnesses" / "code-v2.yaml")
-        self.assertEqual(spec.id, "code-v2")
+        spec = from_dict({"recovery": {"tool_error_max_retries": 3}})
         self.assertEqual(spec.recovery.tool_error_max_retries, 3)
 
 

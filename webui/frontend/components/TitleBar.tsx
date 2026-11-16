@@ -3,7 +3,7 @@
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import type { StatusState } from "@/lib/ui";
 
-import { MenuIcon, PlusIcon, ThemeIcon } from "./Icons";
+import { FilesIcon, MenuIcon, PlusIcon, ThemeIcon } from "./Icons";
 
 export type { StatusState } from "@/lib/ui";
 
@@ -15,6 +15,7 @@ interface TitleBarProps {
   onToggleSidebar: () => void;
   onToggleTheme: () => void;
   onNewChat?: () => void;
+  onOpenFiles?: () => void;
 }
 
 export default function TitleBar({
@@ -25,6 +26,7 @@ export default function TitleBar({
   onToggleSidebar,
   onToggleTheme,
   onNewChat,
+  onOpenFiles,
 }: TitleBarProps) {
   const { t } = useI18n();
 
@@ -75,6 +77,17 @@ export default function TitleBar({
             onClick={onNewChat}
           >
             <PlusIcon />
+          </button>
+        ) : null}
+        {onOpenFiles ? (
+          <button
+            className="icon-btn"
+            id="btnOpenFiles"
+            title={t("navFiles")}
+            aria-label={t("navFiles")}
+            onClick={onOpenFiles}
+          >
+            <FilesIcon />
           </button>
         ) : null}
       </div>

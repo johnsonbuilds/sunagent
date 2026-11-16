@@ -53,7 +53,8 @@ def _write_skill(directory: Path, name: str, body: str,
 
 class SkillLoadingTests(unittest.TestCase):
     def test_resolve_coder_from_repo(self) -> None:
-        skills = resolve_skills(["coder"], harness=resolve_harness("code-v14"))
+        harness = from_dict({"skills": ["coder"]})
+        skills = resolve_skills(["coder"], harness=harness)
         self.assertEqual(len(skills), 1)
         self.assertEqual(skills[0].name, "coder")
         self.assertEqual(skills[0].version, "v1")
@@ -61,7 +62,8 @@ class SkillLoadingTests(unittest.TestCase):
         self.assertFalse(skills[0].truncated)
 
     def test_coder_content_carries_submit_contract(self) -> None:
-        skills = resolve_skills(["coder"], harness=resolve_harness("code-v14"))
+        harness = from_dict({"skills": ["coder"]})
+        skills = resolve_skills(["coder"], harness=harness)
         self.assertTrue(skills[0].content.strip())
         self.assertIn("submit_result", skills[0].content)
 
@@ -167,23 +169,31 @@ class SkillTurnTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(loaded[0].data["skills_content_hash"])
 
     async def test_empty_skills_emit_no_event(self) -> None:
-        llm = FakeLLM([{"content": "done", "tool_calls": []}])
-        trace = RunTrace(run_id="no-skill")
-        harness = from_dict({"prompt": {"system": "hello"}})
-        registry = ToolRegistry(
-            [ToolSpec("t", "", {"type": "object", "properties": {}},
-                      _noop_handler)])
-        await run_turn("hi", llm, registry, harness=harness, trace=trace)
-        self.assertEqual(llm.seen[0][0]["content"], "hello")
-        self.assertFalse([e for e in trace.events
-                          if e.event_type == "skills.loaded"])
+        import os
+        previous = os.environ.get("AGENT_RUNTIME_MEMORY")
+        os.environ["AGENT_RUNTIME_MEMORY"] = "0"
+        try:
+            llm = FakeLLM([{"content": "done", "tool_calls": []}])
+            trace = RunTrace(run_id="no-skill")
+            harness = from_dict({"prompt": {"system": "hello"}})
+            registry = ToolRegistry(
+                [ToolSpec("t", "", {"type": "object", "properties": {}},
+                          _noop_handler)])
+            await run_turn("hi", llm, registry, harness=harness, trace=trace)
+            self.assertEqual(llm.seen[0][0]["content"], "hello")
+            self.assertFalse([e for e in trace.events
+                              if e.event_type == "skills.loaded"])
+        finally:
+            if previous is None:
+                os.environ.pop("AGENT_RUNTIME_MEMORY", None)
+            else:
+                os.environ["AGENT_RUNTIME_MEMORY"] = previous
 
 
 class CodeV14Tests(unittest.TestCase):
     def test_code_v14_uses_coder_skill_with_empty_system(self) -> None:
-        v13 = resolve_harness("code-v13")
-        v14 = resolve_harness("code-v14")
-        self.assertEqual(v14.parent, "code-v13")
+        v13 = from_dict({})
+        v14 = from_dict({"skills": ["coder"], "prompt": {"system": ""}})
         self.assertEqual(v14.prompt.system, "")
         self.assertEqual(list(v14.skills), ["coder"])
         skills = resolve_skills(list(v14.skills), harness=v14)

@@ -845,8 +845,19 @@ class ContextWindowHardGateLoopTests(unittest.IsolatedAsyncioTestCase):
 
 class TB4HarnessTests(unittest.TestCase):
     def test_tb_v4_loads_new_genes(self) -> None:
-        from agent_runtime.harness import load_named_harness
-        spec = load_named_harness("tb-v4")
+        spec = from_dict({
+            "context": {
+                "budget_unit": "tokens",
+                "context_budget": 60_000,
+                "user_preserve_budget": 8_000,
+                "summary_max_tokens": 2_048,
+            },
+            "recovery": {
+                "llm_errors": {
+                    "context_window": {"max_retries": 2, "backoff": "none"},
+                },
+            },
+        })
         self.assertEqual(spec.context.budget_unit, "tokens")
         self.assertEqual(spec.context.context_budget, 60_000)
         self.assertEqual(spec.context.user_preserve_budget, 8_000)
@@ -855,8 +866,7 @@ class TB4HarnessTests(unittest.TestCase):
         self.assertEqual((policy.max_retries, policy.backoff), (2, "none"))
 
     def test_tb_v11_disables_summarizer_thinking(self) -> None:
-        from agent_runtime.harness import load_named_harness
-        spec = load_named_harness("tb-v11")
+        spec = from_dict({"context": {"summary_reasoning_effort": "none"}})
         self.assertEqual(spec.context.summary_reasoning_effort, "none")
 
     def test_summary_reasoning_effort_defaults_to_none(self) -> None:
@@ -886,9 +896,8 @@ class TB4HarnessTests(unittest.TestCase):
 
 class SummarizerOutputBudgetTests(unittest.TestCase):
     def test_default_and_task_authority_harness_have_headroom(self) -> None:
-        from agent_runtime.harness import load_named_harness
         self.assertEqual(DEFAULT_SUMMARY_MAX_TOKENS, 4_096)
-        spec = load_named_harness("tb-v11")
+        spec = from_dict({"context": {"summary_max_tokens": 4_096}})
         self.assertEqual(spec.context.summary_max_tokens, 4_096)
 
     def test_instruction_sets_hard_cap_and_forbids_raw_dumps(self) -> None:

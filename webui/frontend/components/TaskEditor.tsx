@@ -61,6 +61,26 @@ export default function TaskEditor({
   const [harness, setHarness] = useState("");
   const [tagsText, setTagsText] = useState("");
   const [titleError, setTitleError] = useState("");
+
+  /** Quick-pick tags offered as clickable chips below the tags input. */
+  const DEFAULT_TAG_CHIPS = ["bugfix", "feature"];
+
+  const toggleTag = (tag: string) => {
+    const current = tagsText
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean);
+    const next = current.includes(tag)
+      ? current.filter((t) => t !== tag)
+      : [...current, tag];
+    setTagsText(next.join(", "));
+  };
+
+  const hasTag = (tag: string) =>
+    tagsText
+      .split(",")
+      .map((t) => t.trim())
+      .includes(tag);
   const [descriptionError, setDescriptionError] = useState("");
   const [saving, setSaving] = useState(false);
   const lastResetKey = useRef("");
@@ -313,6 +333,18 @@ export default function TaskEditor({
           placeholder={t("boardTagsPlaceholder")}
           onChange={(event) => setTagsText(event.target.value)}
         />
+        <div className="tag-chips">
+          {DEFAULT_TAG_CHIPS.map((tag) => (
+            <button
+              type="button"
+              key={tag}
+              className={`tag-chip${hasTag(tag) ? " tag-chip-active" : ""}`}
+              onClick={() => toggleTag(tag)}
+            >
+              {tag}
+            </button>
+          ))}
+        </div>
       </div>
 
       {task ? (
