@@ -24,21 +24,22 @@ from agent_runtime.tools.spec import ToolSpec
 from functools import partial
 
 
+# One edit's expected shape, rendered from the same key names the tool schema
+# requires (old_text first, then new_text).  Error messages quote this string
+# verbatim so they stay accurate for any malformed shapes we did not foresee.
+_EDIT_SHAPE = "{'old_text': ..., 'new_text': ...}"
+
+
 def _validate_edits(edits: Any) -> list[dict[str, str]]:
     if not isinstance(edits, list) or not edits:
-        raise ValueError("edits must be a non-empty array of "
-                         "{old_text, new_text} objects")
+        raise ValueError(f"apply_patch: edits must be a non-empty array "
+                         f"of {_EDIT_SHAPE} objects")
     normalized: list[dict[str, str]] = []
     for index, edit in enumerate(edits, 1):
-        if not isinstance(edit, Mapping):
-            raise ValueError(
-                f"apply_patch: edit {index}: must be an object with "
-                "old_text and new_text")
-        if set(edit.keys()) != {"old_text", "new_text"}:
-            raise ValueError(
-                f"apply_patch: edit {index}: unexpected keys "
-                f"{sorted(edit.keys())!r}; allowed keys: "
-                "['new_text', 'old_text']")
+        if not isinstance(edit, Mapping) \
+                or set(edit.keys()) != {"old_text", "new_text"}:
+            raise ValueError(f"apply_patch: edit {index} must be exactly "
+                             f"one object {_EDIT_SHAPE}")
         old_text, new_text = edit["old_text"], edit["new_text"]
         if not isinstance(old_text, str) or not old_text:
             raise ValueError(

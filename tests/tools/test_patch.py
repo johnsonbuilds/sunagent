@@ -125,7 +125,9 @@ class ApplyPatchTests(unittest.IsolatedAsyncioTestCase):
             registry = make_registry(directory)
             await registry.execute("write_file", {"path": "a.py",
                                                   "content": "x = 1\n"})
-            with self.assertRaisesRegex(ValueError, "unexpected keys"):
+            with self.assertRaisesRegex(
+                    ValueError, r"edit 1 must be exactly one object "
+                                r"\{'old_text': \.\.\., 'new_text': \.\.\.\}"):
                 await registry.execute("apply_patch", {
                     "path": "a.py",
                     "edits": [{"old_text": "x = 1",
