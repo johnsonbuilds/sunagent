@@ -9,6 +9,11 @@ import {
 } from "react";
 
 import { api } from "@/lib/api";
+import { tasksEnteredReview } from "@/lib/board";
+import {
+  playNotificationChime,
+  primeNotificationSound,
+} from "@/lib/sound";
 import type {
   BoardSnapshot,
   CommentResult,
@@ -95,6 +100,17 @@ export function useBoard({ onError, fastPoll = false }: UseBoardOptions) {
     loadedRef.current = true;
   }, []);
 
+  // A task landing in Review needs a human look, whether the executor put
+  // it there or a person dragged the card.
+  const notifyReview = useCallback(
+    (before: BoardSnapshot | null, after: BoardSnapshot) => {
+      if (tasksEnteredReview(before, after).length > 0) {
+        playNotificationChime();
+      }
+    },
+    [],
+  );
+
   const refresh = useCallback(async (force = false) => {
     // A mutation in flight is the source of truth until it returns.
     if (!force && pendingRef.current > 0) return;
@@ -112,6 +128,7 @@ export function useBoard({ onError, fastPoll = false }: UseBoardOptions) {
       if (!current || JSON.stringify(current) !== JSON.stringify(next)) {
         snapshotRef.current = next;
         setSnapshot(next);
+        notifyReview(current, next);
       }
       setError(null);
       loadedRef.current = true;
@@ -120,7 +137,7 @@ export function useBoard({ onError, fastPoll = false }: UseBoardOptions) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [notifyReview]);
 
   const mutate = useCallback(async <T,>(path: string,
                                         init: RequestInit): Promise<T> => {
@@ -148,18 +165,20 @@ export function useBoard({ onError, fastPoll = false }: UseBoardOptions) {
 
   const updateTask = useCallback(
     async (taskId: string, patch: Partial<TaskInput>) => {
+      const previous = snapshotRef.current;
       try {
         const next = await mutate<BoardSnapshot>(`/api/board/tasks/${taskId}`, {
           method: "PATCH",
           body: JSON.stringify(patch),
         });
         apply(next);
+        notifyReview(previous, next);
       } catch (failure) {
         report(failure);
         throw failure;
       }
     },
-    [apply, mutate, report],
+    [apply, mutate, notifyReview, report],
   );
 
   const deleteTask = useCallback(async (taskId: string) => {
@@ -190,6 +209,7 @@ export function useBoard({ onError, fastPoll = false }: UseBoardOptions) {
           body: JSON.stringify({ status, position }),
         });
         apply(next);
+        notifyReview(previous, next);
       } catch (failure) {
         if (previous) {
           snapshotRef.current = previous;
@@ -200,7 +220,7 @@ export function useBoard({ onError, fastPoll = false }: UseBoardOptions) {
         throw failure;
       }
     },
-    [apply, mutate, refresh, report],
+    [apply, mutate, notifyReview, refresh, report],
   );
 
   const ensureSession = useCallback(async (taskId: string) => {
@@ -254,6 +274,7 @@ export function useBoard({ onError, fastPoll = false }: UseBoardOptions) {
   );
 
   useEffect(() => {
+    primeNotificationSound();
     const interval = fastPoll ? POLL_FAST_MS : POLL_SLOW_MS;
     void refresh();
     const timer = window.setInterval(() => {

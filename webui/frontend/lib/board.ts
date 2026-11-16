@@ -1,7 +1,12 @@
 /** Shared board vocabulary: order, labels, and display weights. */
 
 import type { MessageKey, TFunction } from "@/lib/i18n";
-import type { BoardTask, TaskPriority, TaskStatus } from "@/lib/types";
+import type {
+  BoardSnapshot,
+  BoardTask,
+  TaskPriority,
+  TaskStatus,
+} from "@/lib/types";
 
 /** Human-readable age, matching the conversation list's wording. */
 export function relativeTime(epochSeconds: number, t: TFunction): string {
@@ -52,6 +57,18 @@ export const PRIORITY_WEIGHT: Record<TaskPriority, number> = {
   high: 2,
   urgent: 3,
 };
+
+/** Tasks that moved from Doing into Review between two snapshots. */
+export function tasksEnteredReview(
+  before: BoardSnapshot | null,
+  after: BoardSnapshot,
+): BoardTask[] {
+  if (!before) return [];
+  const previous = new Map(before.tasks.map((task) => [task.id, task.status]));
+  return after.tasks.filter(
+    (task) => task.status === "review" && previous.get(task.id) === "doing",
+  );
+}
 
 /** Execution order of explicitly queued Todo cards. */
 export function queueOrder(tasks: BoardTask[]): Map<string, number> {
