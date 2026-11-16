@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from agent_runtime.agent.runtime_message import runtime_user_message
+from agent_runtime.tools.schema_gate import matches_type, nested_problem
 from agent_runtime.trace import RunTrace
 
 
@@ -64,19 +65,6 @@ def available_tools_hint(schemas: list[dict[str, Any]]) -> str:
         summary = str(description).split(". ")[0].split("\n")[0].strip()
         parts.append(f"{name} ({summary})" if summary else name)
     return ", ".join(parts)
-
-
-def _matches_type(value: Any, expected: str) -> bool:
-    # bool is a subclass of int, so it needs to be checked separately.
-    return {
-        "object": isinstance(value, dict),
-        "array": isinstance(value, list),
-        "string": isinstance(value, str),
-        "integer": isinstance(value, int) and not isinstance(value, bool),
-        "number": isinstance(value, (int, float)) and not isinstance(value, bool),
-        "boolean": isinstance(value, bool),
-        "null": value is None,
-    }.get(expected, True)
 
 
 def validate_tool_call(tool_call: Any, schemas: list[dict[str, Any]]) -> ValidatedToolCall:
@@ -134,8 +122,15 @@ def validate_tool_call(tool_call: Any, schemas: list[dict[str, Any]]) -> Validat
                 )
             continue
         expected = definition.get("type")
-        if isinstance(expected, str) and not _matches_type(value, expected):
+        if isinstance(expected, str) and not matches_type(value, expected):
             raise ValueError(f"argument '{field}' must be {expected}")
+
+    # Constraints declared inside a schema (array items, nested objects) are
+    # enforced here too, before the handler runs, so a tool never has to
+    # re-implement its own schema in hand-written checks.
+    problem = nested_problem(arguments, parameters, name)
+    if problem:
+        raise ValueError(problem)
 
     return ValidatedToolCall(call_id, name, arguments)
 
@@ -206,7 +201,7 @@ def rejected_observation_message(tool_call: Any, content: str) -> dict[str, Any]
     """
     call_id = tool_call.get("id") if isinstance(tool_call, Mapping) else None
     if isinstance(call_id, str) and call_id:
-        retry = "Please retry this tool call with valid JSON arguments."
+        retry = "Please retry with corrected arguments."
     else:
         retry = "Please retry this tool call with a valid tool_call_id."
     return runtime_user_message(f"{content} {retry}", kind="tool_rejection")

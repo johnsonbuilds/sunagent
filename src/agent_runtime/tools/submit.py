@@ -35,17 +35,19 @@ def submit_result_spec() -> ToolSpec:
         "Example: solution_description: fixed missing URL-encoding in auth.py with quote_plus()."
         "evidence: pytest -q passed: 128 passed in 4.3s. command_to_verify: cd /testbed && pytest tests/test_auth.py -q --tb=short.",
         {"type": "object", "properties": {
+            # Length/content policy lives in the return-contract gate
+            # (verification.check_submission), which names the failing field
+            # and why. Declaring thresholds here too would enforce them at
+            # dispatch, where the rejected call never reaches the gate and
+            # the model gets no field-level reason.
             "solution_description": {"type": "string",
-                                     "description": "Root cause and fix",
-                                     "minLength": 20},
+                                     "description": "Root cause and fix"},
             "evidence": {"type": "string",
-                         "description": "Quoted shell output observed",
-                         "minLength": 20},
+                         "description": "Quoted shell output observed"},
             "command_to_verify": {"type": "string",
                                   "description": "Test command "
                                                  "already run, exits 0."
-                                                 "Keep test output concise (-q --tb=short, no tail pipes hiding failures). ",
-                                  "minLength": 3}},
+                                                 "Keep test output concise (-q --tb=short, no tail pipes hiding failures). "}},
          "required": ["solution_description", "evidence"],
          "additionalProperties": False},
         submit_result)

@@ -13,44 +13,47 @@ files (``old_text`` must be non-empty).
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import copy
 from typing import Any
 
 from agent_runtime.execution.base import Workspace, error_text
 from agent_runtime.execution.local import LocalWorkspace
 from agent_runtime.tools.edit_match import MatchError, apply_edit
+from agent_runtime.tools.schema_gate import value_problem
 from agent_runtime.tools.syntax_gate import syntax_error
 from agent_runtime.tools.spec import ToolSpec
 from functools import partial
 
 
-# One edit's expected shape, rendered from the same key names the tool schema
-# requires (old_text first, then new_text).  Error messages quote this string
-# verbatim so they stay accurate for any malformed shapes we did not foresee.
-_EDIT_SHAPE = "{'old_text': ..., 'new_text': ...}"
+# The one description of the call's shape: sent to the model as the tool
+# schema, enforced before dispatch, and quoted in every error message.  Key
+# names live here only, so a message cannot drift from the constraint.
+_EDIT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "old_text": {"type": "string", "minLength": 1,
+                     "description": "Text to replace, must match uniquely"},
+        "new_text": {"type": "string",
+                     "description": "Replacement text (empty to delete)"},
+    },
+    "required": ["old_text", "new_text"],
+    "additionalProperties": False,
+}
+
+_EDITS_SCHEMA: dict[str, Any] = {
+    "type": "array",
+    "description": "Ordered edits to apply",
+    "minItems": 1,
+    "items": _EDIT_SCHEMA,
+}
 
 
 def _validate_edits(edits: Any) -> list[dict[str, str]]:
-    if not isinstance(edits, list) or not edits:
-        raise ValueError(f"apply_patch: edits must be a non-empty array "
-                         f"of {_EDIT_SHAPE} objects")
-    normalized: list[dict[str, str]] = []
-    for index, edit in enumerate(edits, 1):
-        if not isinstance(edit, Mapping) \
-                or set(edit.keys()) != {"old_text", "new_text"}:
-            raise ValueError(f"apply_patch: edit {index} must be exactly "
-                             f"one object {_EDIT_SHAPE}")
-        old_text, new_text = edit["old_text"], edit["new_text"]
-        if not isinstance(old_text, str) or not old_text:
-            raise ValueError(
-                f"apply_patch: edit {index}: old_text is empty; "
-                "old_text must be a non-empty string")
-        if not isinstance(new_text, str):
-            raise ValueError(
-                f"apply_patch: edit {index}: new_text must be a string "
-                "(empty string deletes the match)")
-        normalized.append({"old_text": old_text, "new_text": new_text})
-    return normalized
+    problem = value_problem(edits, _EDITS_SCHEMA, "edits", tool="apply_patch")
+    if problem:
+        raise ValueError(problem)
+    return [{"old_text": edit["old_text"], "new_text": edit["new_text"]}
+            for edit in edits]
 
 
 async def apply_patch(path: str, edits: list[dict[str, str]], *,
@@ -117,18 +120,10 @@ def apply_patch_spec(workspace: Workspace) -> ToolSpec:
                     {"type": "object", "properties": {
                         "path": {"type": "string",
                                  "description": "File path inside the workspace"},
-                        "edits": {"type": "array",
-                                  "description": "Ordered edits to apply",
-                                  "minItems": 1,
-                                  "items": {"type": "object", "properties": {
-                                      "old_text": {
-                                          "type": "string",
-                                          "description": "Text to replace, must match uniquely"},
-                                      "new_text": {
-                                          "type": "string",
-                                          "description": "Replacement text (empty to delete)"}},
-                                      "required": ["old_text", "new_text"],
-                                      "additionalProperties": False}}},
+                        # A copy: each registry may hold its own schema
+                        # object, but the shape the handler enforces stays
+                        # this one dict.
+                        "edits": copy.deepcopy(_EDITS_SCHEMA)},
                      "required": ["path", "edits"],
                      "additionalProperties": False},
                     partial(apply_patch, workspace=workspace))

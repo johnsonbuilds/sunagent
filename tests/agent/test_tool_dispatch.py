@@ -65,6 +65,33 @@ class UnknownToolHintTests(unittest.TestCase):
         self.assertIn("Available tools", str(outcome.rejection))
 
 
+class NestedArgumentValidationTests(unittest.TestCase):
+    """Constraints declared inside a schema are enforced before execution."""
+
+    def test_flat_alternating_edits_are_rejected_before_the_handler(self) -> None:
+        arguments = ('{"path": "a.py", "edits": '
+                     '[{"old_text": "x"}, {"new_text": "y"}]}')
+        with self.assertRaisesRegex(ValueError,
+                                    r"apply_patch: edits\[1\] must be exactly "
+                                    r"one object") as caught:
+            validate_tool_call(_call("apply_patch", arguments), _schemas())
+        self.assertIn("got {'old_text'}", str(caught.exception))
+
+    def test_valid_edits_still_pass(self) -> None:
+        arguments = ('{"path": "a.py", "edits": '
+                     '[{"old_text": "x", "new_text": "y"}]}')
+        validated = validate_tool_call(_call("apply_patch", arguments),
+                                       _schemas())
+        self.assertEqual(validated.name, "apply_patch")
+
+    def test_rejection_is_recorded_without_raising(self) -> None:
+        arguments = '{"path": "a.py", "edits": [{"old_text": "x"}]}'
+        (outcome,) = classify_tool_calls(
+            [_call("apply_patch", arguments)], _schemas())
+        self.assertIsNone(outcome.validated)
+        self.assertIn("must be exactly one object", str(outcome.rejection))
+
+
 class ObservationProvenanceTests(unittest.TestCase):
     def test_missing_id_observation_is_marked_runtime(self) -> None:
         message = tool_observation_message(

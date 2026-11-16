@@ -371,7 +371,8 @@ class AgentLoopErrorHandlingTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("missing required argument: location",
                       second_request[-1]["content"])
         self.assertIn("weather", second_request[-1]["content"])
-        self.assertIn("retry this tool call", second_request[-1]["content"])
+        self.assertIn("Please retry with corrected arguments.",
+                      second_request[-1]["content"])
 
     async def test_replayed_tool_calls_are_always_valid_json(self) -> None:
         llm = FakeLLM([

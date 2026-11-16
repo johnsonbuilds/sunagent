@@ -126,12 +126,57 @@ class ApplyPatchTests(unittest.IsolatedAsyncioTestCase):
             await registry.execute("write_file", {"path": "a.py",
                                                   "content": "x = 1\n"})
             with self.assertRaisesRegex(
-                    ValueError, r"edit 1 must be exactly one object "
-                                r"\{'old_text': \.\.\., 'new_text': \.\.\.\}"):
+                    ValueError,
+                    r"apply_patch: edits\[1\] must be exactly one object "
+                    r"\{'old_text': \.\.\., 'new_text': \.\.\.\}; "
+                    r"got \{'new_string', 'old_text'\}"):
                 await registry.execute("apply_patch", {
                     "path": "a.py",
                     "edits": [{"old_text": "x = 1",
                                "new_string": "x = 2"}]})
+
+    async def test_edit_split_into_two_objects_names_the_shape(self) -> None:
+        # The model's commonest slip: one edit spread over two objects.
+        # The message must say what shape to send and what arrived.
+        with tempfile.TemporaryDirectory() as directory:
+            registry = make_registry(directory)
+            await registry.execute("write_file", {"path": "a.py",
+                                                  "content": "x = 1\n"})
+            with self.assertRaisesRegex(
+                    ValueError,
+                    r"apply_patch: edits\[1\] must be exactly one object "
+                    r"\{'old_text': \.\.\., 'new_text': \.\.\.\}; "
+                    r"got \{'old_text'\}"):
+                await registry.execute("apply_patch", {
+                    "path": "a.py",
+                    "edits": [{"old_text": "x = 1"},
+                              {"new_text": "x = 2"}]})
+
+    async def test_empty_old_text_is_rejected_by_the_schema(self) -> None:
+        # minLength lives in the schema, so the message is schema-driven too.
+        with tempfile.TemporaryDirectory() as directory:
+            registry = make_registry(directory)
+            await registry.execute("write_file", {"path": "a.py",
+                                                  "content": "x = 1\n"})
+            with self.assertRaisesRegex(
+                    ValueError,
+                    r"apply_patch: edits\[1\]\.old_text "
+                    r"must be a non-empty string"):
+                await registry.execute("apply_patch", {
+                    "path": "a.py", "edits": edits(("", "x = 2"))})
+
+    async def test_edit_value_of_wrong_type_names_the_type(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            registry = make_registry(directory)
+            await registry.execute("write_file", {"path": "a.py",
+                                                  "content": "x = 1\n"})
+            with self.assertRaisesRegex(
+                    ValueError,
+                    r"apply_patch: edits\[1\]\.old_text must be a string; "
+                    r"got an integer"):
+                await registry.execute("apply_patch", {
+                    "path": "a.py",
+                    "edits": [{"old_text": 1, "new_text": "x = 2"}]})
 
     async def test_edit_missing_file_raises(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
