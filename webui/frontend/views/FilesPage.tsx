@@ -39,7 +39,7 @@ function filesUrl(tab: FilesTabId, path: string): string {
   if (tab !== "files") params.set("tab", tab);
   if (path) params.set("path", path);
   const query = params.toString();
-  return query ? `/files?${query}` : "/files";
+  return query ? `${window.location.pathname}?${query}` : window.location.pathname;
 }
 
 /**
