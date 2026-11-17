@@ -62,6 +62,16 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   const toggleFilesDrawer = () => setFilesDrawerOpen((prev) => !prev);
 
+  // The drawer covers the rail, so a hamburger click while it is open only
+  // dismisses the drawer; the sidebar state is left alone.
+  const toggleSidebar = useCallback(() => {
+    if (filesDrawerOpen) {
+      setFilesDrawerOpen(false);
+      return;
+    }
+    setCollapsed((current) => !current);
+  }, [filesDrawerOpen]);
+
   const route = matchRoute(pathname);
   const isChat = route?.id === "chat";
   const title =
@@ -88,6 +98,20 @@ export default function AppShell({ children }: { children: ReactNode }) {
     primaryLabel = "boardNewTask";
     onPrimary = () => board.openCreateTask("backlog");
   }
+
+  // Same rule as the hamburger button: while the files drawer is open, a
+  // title-bar action only dismisses it. Ctrl/Cmd+K keeps running the action
+  // directly, since the shortcut is not a click on that button.
+  const primary = onPrimary;
+  const primaryClick = primary
+    ? () => {
+        if (filesDrawerOpen) {
+          setFilesDrawerOpen(false);
+          return;
+        }
+        primary();
+      }
+    : undefined;
 
   // URL <-> selected conversation. The router owns page navigation; this
   // only keeps `?session=` in step with the active conversation.
@@ -201,9 +225,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
       collapsed,
       closeSidebar: () => setCollapsed(true),
       openSidebar: () => setCollapsed(false),
-      toggleSidebar: () => setCollapsed((current) => !current),
+      toggleSidebar,
     }),
-    [narrow, collapsed],
+    [narrow, collapsed, toggleSidebar],
   );
 
   return (
@@ -216,7 +240,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
           newActionLabel={primaryLabel}
           onToggleSidebar={value.toggleSidebar}
           onToggleTheme={toggleTheme}
-          onNewChat={onPrimary}
+          onNewChat={primaryClick}
           onOpenFiles={toggleFilesDrawer}
           isFilesOpen={filesDrawerOpen}
         />
