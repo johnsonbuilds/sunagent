@@ -394,9 +394,11 @@ export default function DiffView({
                 ))}
               </div>
             ) : (
-              data?.hunks.map((hunk, index) => (
-                <UnifiedHunk hunk={hunk} decorated={decorated} key={index} />
-              ))
+              <div className="diff-unified">
+                {data?.hunks.map((hunk, index) => (
+                  <UnifiedHunk hunk={hunk} decorated={decorated} key={index} />
+                ))}
+              </div>
             )}
             {expandError ? (
               <div className="files-note is-warning">

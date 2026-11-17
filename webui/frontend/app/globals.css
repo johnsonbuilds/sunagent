@@ -2875,13 +2875,21 @@ button {
 .hljs-emphasis { font-style: italic; }
 .hljs-strong { font-weight: 700; }
 
-.diff-hunk {
-  margin: 0;
+.diff-unified {
   /* Grow past the viewport for long lines so the row tint covers the
      whole line while the preview body scrolls sideways. */
   width: max-content;
   min-width: 100%;
 }
+
+/* One width for the whole file, so every hunk (and every tinted row)
+   ends at the same edge. */
+.diff-unified .diff-hunk {
+  width: 100%;
+  min-width: 0;
+}
+
+.diff-hunk { margin: 0; }
 
 .diff-hunk-head {
   padding: 4px 12px;
