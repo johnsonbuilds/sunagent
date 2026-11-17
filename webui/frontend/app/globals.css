@@ -3024,3 +3024,51 @@ button {
   .files-body.is-narrow-open .files-back-btn { display: inline-flex; }
   .files-changes-summary { padding: 8px 10px; }
 }
+
+/* ---------------------------------------------------------- files drawer */
+
+.files-drawer {
+  position: fixed;
+  top: var(--titlebar-h);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 50;
+  display: none;
+  align-items: flex-start;
+  justify-content: flex-end;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.files-drawer.open {
+  display: flex;
+}
+
+.files-drawer-panel {
+  width: 100vw;
+  max-width: 100vw;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--sidebar);
+  border-left: 1px solid var(--border);
+  box-shadow: -24px 0 64px var(--shadow);
+  transform: translateX(100%);
+  transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.files-drawer.open .files-drawer-panel {
+  transform: translateX(0);
+}
+
+.files-drawer-panel .icon-btn.small {
+  margin: var(--space-3);
+  align-self: flex-start;
+}
+
+.files-drawer-panel .files-page {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}

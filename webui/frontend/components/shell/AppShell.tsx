@@ -17,6 +17,7 @@ import {
 
 import Sidebar from "@/components/Sidebar";
 import TitleBar from "@/components/TitleBar";
+import FilesPage from "@/views/FilesPage";
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import { matchRoute } from "@/lib/routes";
 import { useBoardStore } from "@/lib/stores/board";
@@ -57,6 +58,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   const [collapsed, setCollapsed] = useState(false);
   const [narrow, setNarrow] = useState(false);
+  const [filesDrawerOpen, setFilesDrawerOpen] = useState(false);
+
+  const toggleFilesDrawer = () => setFilesDrawerOpen((prev) => !prev);
 
   const route = matchRoute(pathname);
   const isChat = route?.id === "chat";
@@ -73,7 +77,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
   let onPrimary: (() => void) | undefined;
   let onOpenFiles: (() => void) | undefined;
   if (isChat || route?.id === "board") {
-    onOpenFiles = () => void router.push("/files");
+    onOpenFiles = toggleFilesDrawer;
   }
   if (route?.primary === "newChat") {
     primaryTitle = "newConversationShortcut";
@@ -213,7 +217,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
           onToggleSidebar={value.toggleSidebar}
           onToggleTheme={toggleTheme}
           onNewChat={onPrimary}
-          onOpenFiles={onOpenFiles}
+          onOpenFiles={toggleFilesDrawer}
+          isFilesOpen={filesDrawerOpen}
         />
 
         <div className="layout">
@@ -231,6 +236,18 @@ export default function AppShell({ children }: { children: ReactNode }) {
           >
             {children}
           </main>
+        </div>
+
+        <div
+          className={`files-drawer${filesDrawerOpen ? " open" : ""}`}
+          onClick={toggleFilesDrawer}
+        >
+          <div
+            className="files-drawer-panel"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <FilesPage />
+          </div>
         </div>
       </div>
     </ShellContext.Provider>
