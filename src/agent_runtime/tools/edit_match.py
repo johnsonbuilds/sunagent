@@ -1,16 +1,16 @@
-"""edit_match.py — shared SEARCH/old_str matching semantics for edit_file / apply_patch.
+"""edit_match.py — shared SEARCH/old_text matching semantics for edit_file / apply_patch.
 
 Match ladder; each level must resolve to exactly ONE location before it applies:
 
-  L0  exact bytes               old_str is a literal substring of content
-  L1  lineno-prefix-stripped    old_str was copied from cat -n / grep -n output
+  L0  exact bytes               old_text is a literal substring of content
+  L1  lineno-prefix-stripped    old_text was copied from cat -n / grep -n output
   L2  indent-insensitive        per-line lstrip comparison; CRLF == LF
 
 Rules that make it safe:
   * every level enforces uniqueness (0 or >1 hits -> error, never a guess)
   * non-exact levels are LOCATORS: they return the span to replace and the
     mode used, so the caller reports ``match_mode`` back to the model
-  * L2 shifts new_str by the indent delta (file level - old_str level),
+  * L2 shifts new_text by the indent delta (file level - old_text level),
     fixing the "off by one nesting level" class
   * when the whole ladder fails, MatchError carries a rendered diagnosis
     (visible tabs, trailing whitespace, best candidate window, file indent
@@ -75,7 +75,7 @@ def apply_edit(content: str, old: str, new: str) -> tuple[str, str]:
     no level matches or the reference is ambiguous.
     """
     if not old:
-        raise MatchError("old_str must not be empty")
+        raise MatchError("old_text must not be empty")
 
     # -- L0: exact bytes (current semantics, unchanged) --------------------
     hits = _exact_hits(content, old)
@@ -112,7 +112,7 @@ def apply_edit(content: str, old: str, new: str) -> tuple[str, str]:
 
 
 def _lineno_variants(old_lines: list[str]) -> list[str]:
-    """Candidate de-numbered forms of old_str.
+    """Candidate de-numbered forms of old_text.
 
     ``12:LINE`` (grep/rg) and ``    12\tLINE`` (cat -n) carry no separator
     whitespace, but awk-style ``12: LINE`` adds one — and swallowing that
@@ -144,7 +144,7 @@ def _unique_window(content: str, old: str) -> tuple[int, int, list[str]]:
     o_lines = old.splitlines()
     m = len(o_lines)
     if m == 0:
-        raise MatchError("old_str is empty")
+        raise MatchError("old_text is empty")
     if len(c_lines) < m:
         raise MatchError(_not_found_msg(content, old))
     starts = _line_starts(content)
@@ -159,19 +159,19 @@ def _unique_window(content: str, old: str) -> tuple[int, int, list[str]]:
     if len(hits) > 1:
         ranges = ", ".join(f"lines {i + 1}-{i + m}" for i in hits[:8])
         raise MatchError(
-            f"old_str is ambiguous: matches {len(hits)} locations "
+            f"old_text is ambiguous: matches {len(hits)} locations "
             f"({ranges}); include more surrounding lines to disambiguate")
     raise MatchError(_not_found_msg(content, old))
 
 
 def _make_replacement(new: str, old: str, window_lines: list[str],
                       eol: str) -> tuple[str, str]:
-    """L2 apply: shift new_str by the block's rigid indent delta, file's EOL.
+    """L2 apply: shift new_text by the block's rigid indent delta, file's EOL.
 
     The shift applies only when every non-blank line pair shows the same
     indent delta (a rigid whole-block offset — the common "miscounted
     nesting level" failure).  Ragged per-line mismatches are not guessed
-    at: new_str lands as authored and the mode says so.
+    at: new_text lands as authored and the mode says so.
     """
     deltas: list[int] = []
     same_char = True
@@ -183,7 +183,7 @@ def _make_replacement(new: str, old: str, window_lines: list[str],
             same_char = False  # tab vs space: never translate
             break
         deltas.append(len(fi) - len(oi))
-    # shifting new_str whose indent character differs from old_str's would
+    # shifting new_text whose indent character differs from old_text's would
     # splice mixed indentation into the file — leave it as authored
     new_chars = {_indent(ln)[0] for ln in new.splitlines()
                  if ln.strip() and _indent(ln)}
@@ -215,18 +215,18 @@ def _ambiguous_msg(content: str, old: str, hits: list[int],
     starts = _line_starts(content)
     to_line = {s: i + 1 for i, s in enumerate(starts)}
     where = [f"line {to_line.get(h, '?')}" for h in hits[:8]]
-    return (f"old_str appears {len(hits)} times in the file ({level}); "
+    return (f"old_text appears {len(hits)} times in the file ({level}); "
             f"matches at {', '.join(where)}. "
             "Include more surrounding lines to make it unique.")
 
 
 def _not_found_msg(content: str, old: str) -> str:
     """Best-effort diagnosis: WHY did it not match, in model-readable form."""
-    out = ["old_str not found at any match level. Diagnosis:"]
+    out = ["old_text not found at any match level. Diagnosis:"]
     o_lines, c_lines = old.splitlines(), content.splitlines()
 
     if any(_LINE_NO.match(ln) for ln in o_lines):
-        out.append("  - old_str lines carry line-number prefixes "
+        out.append("  - old_text lines carry line-number prefixes "
                    "(e.g. '123:' from cat -n / grep -n); the file does not "
                    "contain them.")
 
@@ -240,7 +240,7 @@ def _not_found_msg(content: str, old: str) -> str:
                + (", CRLF line endings" if crlf else ""))
 
     if crlf and "\n" in old and "\r" not in old and len(o_lines) > 1:
-        out.append("  - CRLF file + LF old_str: multi-line old_str can never "
+        out.append("  - CRLF file + LF old_text: multi-line old_text can never "
                    "exact-match; the line-window level handles it, but its "
                    "lstripped lines must equal yours.")
 
@@ -253,7 +253,7 @@ def _not_found_msg(content: str, old: str) -> str:
         for j in range(lo, hi):
             marker = ">" if i <= j < i + m else " "
             out.append(f"    {marker}{j + 1:5d}| {_visual(c_lines[j])}")
-    out.append("Re-copy old_str from this region, or address the "
+    out.append("Re-copy old_text from this region, or address the "
                "diagnosis above and retry.")
     return "\n".join(out)
 

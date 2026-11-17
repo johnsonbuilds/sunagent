@@ -30,15 +30,15 @@ class MatchLadderTests(unittest.TestCase):
         self.assertIn("2 times", str(ctx.exception))
 
     def test_l1_strips_line_number_prefixes(self) -> None:
-        # old_str copied from a `grep -n` listing carries N: prefixes
+        # old_text copied from a `grep -n` listing carries N: prefixes
         content = "class Foo:\n    def bar(self):\n        return 1\n"
         old = "class Foo:\n12:    def bar(self):\n13:        return 1\n"
         updated, mode = apply_edit(content, old, "def bar(self):\n    return 2\n")
         self.assertEqual(mode, "lineno-stripped")
         self.assertIn("return 2", updated)
 
-    def test_l2_shifts_new_str_to_file_indent_level(self) -> None:
-        # model wrote old_str one nesting level too shallow
+    def test_l2_shifts_new_text_to_file_indent_level(self) -> None:
+        # model wrote old_text one nesting level too shallow
         old = "def bar(self):\n    return 1\n"
         new = "def bar(self):\n    return 2\n"
         updated, mode = apply_edit(PY_FILE, old, new)
@@ -47,7 +47,7 @@ class MatchLadderTests(unittest.TestCase):
 
     def test_l2_does_not_guess_on_ragged_indent(self) -> None:
         # line 1 delta 0, line 2 delta -4: not a rigid block shift, so
-        # new_str lands as authored (over-indented but valid) and the
+        # new_text lands as authored (over-indented but valid) and the
         # mode says the matcher did not translate
         content = "def f():\n    pass\n"
         old = "def f():\n        pass\n"
@@ -152,7 +152,7 @@ class ApplyPatchIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["edits_applied"], 1)
         self.assertIn("<<<<<<< LOCAL", read["content"])
 
-    async def test_syntax_broken_new_str_is_blocked_before_write(self) -> None:
+    async def test_syntax_broken_new_text_is_blocked_before_write(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             registry = self._registry_files(directory)
             await registry.execute("write_file", {"path": "app.py",

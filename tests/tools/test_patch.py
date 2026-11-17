@@ -86,10 +86,33 @@ class ApplyPatchTests(unittest.IsolatedAsyncioTestCase):
             registry = make_registry(directory)
             await registry.execute("write_file", {
                 "path": "dup.py", "content": "same\nsame\n"})
-            with self.assertRaisesRegex(ValueError, "2 times"):
+            with self.assertRaisesRegex(ValueError, "2 times") as ctx:
                 await registry.execute("apply_patch", {
                     "path": "dup.py",
                     "edits": edits(("same", "other"))})
+
+        self.assertIn("old_text", str(ctx.exception))
+        self.assertNotIn("old_str", str(ctx.exception))
+
+    async def test_failure_messages_name_the_apply_patch_keys(self) -> None:
+        # edit_match is shared with edit_file; with both tools on the same key
+        # names one wording is correct for both, so the kernel needs no
+        # per-caller vocabulary switch.
+        with tempfile.TemporaryDirectory() as directory:
+            registry = make_registry(directory)
+            await registry.execute("write_file", {"path": "a.py",
+                                                  "content": "keep me\n"})
+
+            with self.assertRaisesRegex(ValueError, "not found") as ctx:
+                await registry.execute("apply_patch", {
+                    "path": "a.py",
+                    "edits": edits(("keep me", "changed"),
+                                   ("not present", "boom"))})
+
+        message = str(ctx.exception)
+        self.assertIn("apply_patch: edit 2:", message)
+        self.assertIn("old_text", message)
+        self.assertNotIn("old_str", message)
 
     async def test_empty_old_text_is_rejected(self) -> None:
         # creation is write_file's job; apply_patch edits existing files only

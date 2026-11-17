@@ -1,3 +1,4 @@
+import json
 import sys
 import tempfile
 import unittest
@@ -6,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
 
+from agent_runtime.agent.tool_dispatch import validate_tool_call
 from agent_runtime.execution.local import LocalWorkspace
 from agent_runtime.tools.tools import create_default_registry
 
@@ -76,8 +78,8 @@ class FileToolTests(unittest.IsolatedAsyncioTestCase):
                 "path": "calc.py", "content": "def add(a, b):\n    return a + b\n"})
 
             edited = await registry.execute("edit_file", {
-                "path": "calc.py", "old_str": "return a + b",
-                "new_str": "return a - b"})
+                "path": "calc.py", "old_text": "return a + b",
+                "new_text": "return a - b"})
             read = await registry.execute("read_file", {"path": "calc.py"})
 
         self.assertEqual(edited["occurrences_replaced"], 1)
@@ -91,7 +93,7 @@ class FileToolTests(unittest.IsolatedAsyncioTestCase):
 
             with self.assertRaisesRegex(ValueError, "not found"):
                 await registry.execute("edit_file", {
-                    "path": "a.txt", "old_str": "goodbye", "new_str": "x"})
+                    "path": "a.txt", "old_text": "goodbye", "new_text": "x"})
 
     async def test_edit_file_rejects_ambiguous_match(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -99,17 +101,57 @@ class FileToolTests(unittest.IsolatedAsyncioTestCase):
             await registry.execute("write_file", {
                 "path": "a.txt", "content": "x = 1\nx = 1\n"})
 
-            with self.assertRaisesRegex(ValueError, "appears 2 times"):
+            with self.assertRaisesRegex(ValueError, "appears 2 times") as ctx:
                 await registry.execute("edit_file", {
-                    "path": "a.txt", "old_str": "x = 1", "new_str": "x = 2"})
+                    "path": "a.txt", "old_text": "x = 1", "new_text": "x = 2"})
 
-    async def test_edit_file_rejects_empty_old_str(self) -> None:
+        self.assertIn("old_text", str(ctx.exception))
+        self.assertNotIn("old_str", str(ctx.exception))
+
+    async def test_edit_file_names_its_schema_keys_not_the_old_ones(self) -> None:
+        # The shared match kernel must speak the caller's vocabulary: a
+        # message quoting a key that is not in the schema sends the model
+        # looking for a typo instead of fixing the edit.
+        with tempfile.TemporaryDirectory() as directory:
+            registry = make_registry(directory)
+            await registry.execute("write_file", {"path": "a.txt",
+                                                  "content": "hello\n"})
+
+            with self.assertRaisesRegex(ValueError, "not found") as ctx:
+                await registry.execute("edit_file", {
+                    "path": "a.txt", "old_text": "goodbye", "new_text": "x"})
+
+        self.assertIn("old_text", str(ctx.exception))
+        self.assertNotIn("old_str", str(ctx.exception))
+
+    async def test_edit_file_rejects_the_pre_rename_key_names(self) -> None:
+        """A call still using old_str/new_str must be named as such, not silently
+        accepted: the schema is the only vocabulary the model may speak."""
+        schemas = make_registry("/tmp").schemas
+
+        def call(arguments: dict):
+            return validate_tool_call(
+                {"id": "1", "type": "function",
+                 "function": {"name": "edit_file",
+                              "arguments": json.dumps(arguments)}},
+                schemas)
+
+        # pre-rename call: the missing key is named first
+        with self.assertRaisesRegex(
+                ValueError, r"missing required argument: old_text"):
+            call({"path": "a.txt", "old_str": "hello", "new_str": "bye"})
+        # current keys validate cleanly
+        self.assertEqual(
+            call({"path": "a.txt", "old_text": "hello",
+                  "new_text": "bye"}).arguments["old_text"], "hello")
+
+    async def test_edit_file_rejects_empty_old_text(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             registry = make_registry(directory)
 
             with self.assertRaisesRegex(ValueError, "must not be empty"):
                 await registry.execute("edit_file", {
-                    "path": "a.txt", "old_str": "", "new_str": "x"})
+                    "path": "a.txt", "old_text": "", "new_text": "x"})
 
     async def test_edit_file_reports_missing_file_error(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -117,7 +159,7 @@ class FileToolTests(unittest.IsolatedAsyncioTestCase):
 
             with self.assertRaisesRegex(ValueError, "cannot read file"):
                 await registry.execute("edit_file", {
-                    "path": "missing.txt", "old_str": "a", "new_str": "b"})
+                    "path": "missing.txt", "old_text": "a", "new_text": "b"})
 
     async def test_path_escape_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

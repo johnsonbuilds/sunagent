@@ -64,9 +64,9 @@ async def list_dir(path: str = ".", *,
     return await (workspace or LocalWorkspace()).list_dir(path)
 
 
-async def edit_file(path: str, old_str: str, new_str: str, *,
+async def edit_file(path: str, old_text: str, new_text: str, *,
                     workspace: Workspace | None = None) -> dict[str, Any]:
-    """Replace exactly one occurrence of ``old_str`` with ``new_str``.
+    """Replace exactly one occurrence of ``old_text`` with ``new_text``.
 
     Matching runs the edit-match ladder (see ``edit_match``): exact bytes
     first, then de-numbered / indent-insensitive fallbacks.  Every level
@@ -76,8 +76,8 @@ async def edit_file(path: str, old_str: str, new_str: str, *,
     the edited content passes a syntax gate (see ``syntax_gate``);
     extensions without a checker are exempt.
     """
-    if not old_str:
-        raise ValueError("old_str must not be empty")
+    if not old_text:
+        raise ValueError("old_text must not be empty")
     ws = workspace or LocalWorkspace()
     read = await ws.read_file(path)
     if "error" in read:
@@ -86,7 +86,7 @@ async def edit_file(path: str, old_str: str, new_str: str, *,
             f"{error_text(read['error'])}")
     content = read["content"]
     try:
-        updated, mode = apply_edit(content, old_str, new_str)
+        updated, mode = apply_edit(content, old_text, new_text)
     except MatchError as exc:
         raise ValueError(f"edit_file: {exc}") from exc
     problem = syntax_error(path, updated)
@@ -175,8 +175,8 @@ def list_dir_spec(workspace: Workspace) -> ToolSpec:
 
 def edit_file_spec(workspace: Workspace) -> ToolSpec:
     return ToolSpec("edit_file",
-                    "Replace exactly one occurrence of old_str with new_str in a file."
-                    "old_str must match uniquely (exact first, tolerant fallbacks "
+                    "Replace exactly one occurrence of old_text with new_text in a file."
+                    "old_text must match uniquely (exact first, tolerant fallbacks "
                     "for line-number prefixes and indentation; "
                     "the applied mode is reported back as match_mode). "
                     "Zero or ambiguous matches raise with a rendered diagnosis. "
@@ -187,15 +187,15 @@ def edit_file_spec(workspace: Workspace) -> ToolSpec:
                     {"type": "object", "properties": {
                         "path": {"type": "string",
                                  "description": "File path inside the workspace"},
-                        "old_str": {"type": "string",
+                        "old_text": {"type": "string",
                                     "description": "Text to replace, must match "
                                                    "uniquely (exact preferred; "
                                                    "line-number-prefix-stripped "
                                                    "and indent-insensitive "
                                                    "fallbacks allowed)"},
-                        "new_str": {"type": "string",
+                        "new_text": {"type": "string",
                                     "description": "Replacement text (empty to delete)"}},
-                     "required": ["path", "old_str", "new_str"]},
+                     "required": ["path", "old_text", "new_text"]},
                     partial(edit_file, workspace=workspace))
 
 
