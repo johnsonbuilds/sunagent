@@ -40,11 +40,30 @@
 .files-path-icon svg { width: 14px; height: 14px; }
 
 .files-path {
+  display: flex;
+  align-items: center;
+  min-width: 0;
   overflow: hidden;
   font-family: var(--font-mono);
   font-size: var(--label-size);
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* The directory is the part that may be shortened; the file name is not. */
+.files-path-dir {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.files-path-sep { flex: none; }
+
+.files-path-base {
+  flex: 0 0 auto;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .files-preview-meta {
@@ -149,3 +168,21 @@
   tab-size: 4;
 }
 
+/* Narrow screens: the head controls need more width than the title has, so
+   give the title a full row of its own (basis 0, not auto — auto wraps the
+   title *below* the back arrow into a third row). */
+@media (max-width: 640px) {
+  .files-preview-head {
+    flex-wrap: wrap;
+    row-gap: 4px;
+    /* The actions row needs ~334px in its widest state (collapsed vs full
+     file label); 12px keeps it on one line down to 360px. */
+    padding-inline: 12px;
+  }
+
+  .files-preview-title { flex: 1 1 0; }
+
+  /* The meta row keeps status/staged flags; the rename source is its
+     longest item and the least useful one on a phone. */
+  .files-old-path { display: none; }
+}

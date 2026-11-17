@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { BackIcon, LockIcon } from "@/components/Icons";
+import FilePath from "@/components/files/FilePath";
 import StatusBadge from "@/components/files/StatusBadge";
 import { markRanges, markText } from "@/lib/diffMark";
 import { statusKey, toSplitRows } from "@/lib/files";
@@ -290,7 +291,7 @@ export default function DiffView({
           <BackIcon />
         </button>
         <div className="files-preview-title">
-          <span className="files-path">{path}</span>
+          <FilePath path={path} />
           <span className="files-preview-meta">
             {data ? (
               <>

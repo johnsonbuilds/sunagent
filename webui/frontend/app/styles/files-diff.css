@@ -198,3 +198,20 @@
   }
 }
 
+/* Narrow screens: the head wraps the actions onto their own row (see
+   files-preview.css); keep the controls on one line and scroll sideways
+   when even that row is too tight rather than squashing the buttons. */
+@media (max-width: 640px) {
+  .files-preview-actions {
+    flex: 1 0 100%;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    overflow-x: auto;
+  }
+
+  .files-preview-actions > * { flex: none; }
+
+  /* The footer repeats the header's expand/collapse button, and the header
+     stays visible at every scroll position — drop the duplicate. */
+  .files-diff-foot { display: none; }
+}

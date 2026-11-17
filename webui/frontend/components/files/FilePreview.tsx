@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { BackIcon, CopyIcon, LockIcon } from "@/components/Icons";
+import FilePath from "@/components/files/FilePath";
 import LanguageIcon from "@/components/files/LanguageIcon";
 import { formatSize } from "@/lib/files";
 import { highlightLanguage } from "@/lib/fileIcons";
@@ -103,7 +104,7 @@ export default function FilePreview({
             <span className="files-path-icon">
               <LanguageIcon name={path} />
             </span>
-            <span className="files-path">{path}</span>
+            <FilePath path={path} />
           </span>
           <span className="files-preview-meta">
             {data ? formatSize(data.size) : ""}
