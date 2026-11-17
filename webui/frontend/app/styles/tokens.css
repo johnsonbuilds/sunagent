@@ -1,0 +1,118 @@
+/* SunAgent web UI.
+ *
+ * The palette follows the "calm console" direction: parchment text on a
+ * near-black field, a slate-teal surface for structural panels, and a
+ * clay accent that is used sparingly. Both themes share one token set
+ * so components never hard-code a colour.
+ */
+
+:root {
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui,
+             "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-prose: Georgia, "Times New Roman", "Songti SC", "Noto Serif CJK SC",
+                serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
+                "Liberation Mono", monospace;
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-pill: 999px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+
+  --titlebar-h: 44px;
+  --sidebar-w: 268px;
+  --rail-w: 52px;
+  --msg-max: 780px;
+
+  --body-size: 15px;
+  --line-height: 1.7;
+  --meta-size: 11px;
+  --label-size: 12px;
+  --ui-size: 13px;
+}
+
+/* Dark is the default field. */
+:root,
+:root[data-theme="dark"] {
+  --bg: #0a0908;
+  --sidebar: #100e0c;
+  --surface: #22333b;
+  --surface-subtle: #141312;
+  --border: #2c2a27;
+  --border-strong: #3b4a50;
+  --text: #eae0d5;
+  --muted: #9d9488;
+  --accent: #c6ac8f;
+  --accent-strong: #ddc4a5;
+  --accent-bg: rgba(198, 172, 143, 0.12);
+  --accent-bg-strong: rgba(198, 172, 143, 0.2);
+  --success: #86c08b;
+  --warning: #e0b15d;
+  --error: #f87171;
+  --info: #7fb3c8;
+  --user-bubble: #22333b;
+  --user-bubble-text: #eae0d5;
+  --code-bg: #15130f;
+  --shadow: rgba(0, 0, 0, 0.45);
+  --selection: rgba(198, 172, 143, 0.28);
+}
+
+:root[data-theme="light"] {
+  --bg: #eae0d5;
+  --sidebar: #e2d7c9;
+  --surface: #f4eee7;
+  --surface-subtle: #f0e9e0;
+  --border: #d5c7b4;
+  --border-strong: #bcae9a;
+  --text: #1a1610;
+  --muted: #6b6153;
+  --accent: #8a6f4c;
+  --accent-strong: #6f5739;
+  --accent-bg: rgba(138, 111, 76, 0.1);
+  --accent-bg-strong: rgba(138, 111, 76, 0.18);
+  --success: #3f7a45;
+  --warning: #9a6b18;
+  --error: #b3402f;
+  --info: #2f6d80;
+  --user-bubble: #d8c9b3;
+  --user-bubble-text: #1a1610;
+  --code-bg: #f0e9df;
+  --shadow: rgba(60, 48, 32, 0.18);
+  --selection: rgba(138, 111, 76, 0.25);
+}
+
+* { box-sizing: border-box; }
+
+/* Components below set their own `display`, which would otherwise beat
+ * the user-agent rule for the `hidden` attribute. */
+[hidden] { display: none !important; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--ui-size);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+::selection { background: var(--selection); }
+
+button {
+  font: inherit;
+  color: inherit;
+}
+

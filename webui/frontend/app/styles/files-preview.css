@@ -1,0 +1,151 @@
+/* ------------------------------------------------------- file preview */
+
+.files-preview {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.files-preview-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 46px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.files-preview-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.files-path-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.files-path-icon {
+  display: flex;
+  flex: none;
+  align-items: center;
+}
+
+.files-path-icon svg { width: 14px; height: 14px; }
+
+.files-path {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: var(--label-size);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.files-preview-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: var(--meta-size);
+}
+
+.files-old-path {
+  overflow: hidden;
+  max-width: 260px;
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.files-tag {
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.files-back-btn { display: none; }
+
+.files-preview-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: 16px;
+}
+
+.files-code {
+  min-width: max-content;
+  padding: 6px 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 20px;
+  tab-size: 4;
+}
+
+.files-code-line {
+  display: flex;
+  min-height: 20px;
+}
+
+.files-code-line:hover { background: var(--surface-subtle); }
+
+.files-code-no {
+  flex: none;
+  width: 54px;
+  padding-right: 12px;
+  color: var(--muted);
+  text-align: right;
+  user-select: none;
+}
+
+.files-code-text {
+  padding-right: 24px;
+  white-space: pre;
+}
+
+.files-code-highlight {
+  display: flex;
+  align-items: flex-start;
+  padding: 6px 0;
+}
+
+.files-code-gutter {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  flex: none;
+  width: 54px;
+  padding-right: 12px;
+  background: var(--bg);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 20px;
+  text-align: right;
+  user-select: none;
+}
+
+.files-code-gutter span {
+  display: block;
+  height: 20px;
+}
+
+.files-code-hl {
+  margin: 0;
+  padding: 0 24px 0 0;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 20px;
+  white-space: pre;
+  tab-size: 4;
+}
+

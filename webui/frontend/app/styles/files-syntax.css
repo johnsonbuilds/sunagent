@@ -1,0 +1,43 @@
+/* highlight.js token classes mapped onto the theme tokens. */
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-section,
+.hljs-link { color: var(--syntax-keyword); }
+
+.hljs-string,
+.hljs-template-tag,
+.hljs-template-variable,
+.hljs-attr,
+.hljs-attribute { color: var(--syntax-string); }
+
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet { color: var(--syntax-number); }
+
+.hljs-comment,
+.hljs-quote { color: var(--syntax-comment); font-style: italic; }
+
+.hljs-title,
+.hljs-title.function_,
+.hljs-function .hljs-title { color: var(--syntax-function); }
+
+.hljs-type,
+.hljs-class .hljs-title,
+.hljs-built_in { color: var(--syntax-type); }
+
+.hljs-variable,
+.hljs-params,
+.hljs-property { color: var(--syntax-variable); }
+
+.hljs-punctuation,
+.hljs-operator { color: var(--syntax-punctuation); }
+
+.hljs-meta,
+.hljs-meta .hljs-keyword { color: var(--syntax-meta); }
+
+.hljs-addition { color: var(--diff-add-text); }
+.hljs-deletion { color: var(--diff-del-text); }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 700; }
+

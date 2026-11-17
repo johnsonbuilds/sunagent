@@ -1,0 +1,200 @@
+/* --------------------------------------------------------------- diff */
+
+.diff-unified {
+  /* Grow past the viewport for long lines so the row tint covers the
+     whole line while the preview body scrolls sideways. */
+  width: max-content;
+  min-width: 100%;
+}
+
+/* One width for the whole file, so every hunk (and every tinted row)
+   ends at the same edge. */
+.diff-unified .diff-hunk {
+  width: 100%;
+  min-width: 0;
+}
+
+.diff-hunk { margin: 0; }
+
+.diff-hunk-head {
+  padding: 4px 12px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-subtle);
+  color: var(--info);
+  font-family: var(--font-mono);
+  font-size: var(--meta-size);
+}
+
+.diff-line {
+  display: grid;
+  grid-template-columns: 46px 46px 16px auto;
+  align-items: stretch;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 19px;
+}
+
+.diff-line.kind-add { background: var(--diff-add-bg); }
+.diff-line.kind-del { background: var(--diff-del-bg); }
+
+.diff-line.kind-add .diff-text,
+.diff-line.kind-add .diff-mark { color: var(--diff-add-text); }
+.diff-line.kind-del .diff-text,
+.diff-line.kind-del .diff-mark { color: var(--diff-del-text); }
+
+.diff-no {
+  padding-right: 8px;
+  color: var(--muted);
+  text-align: right;
+  user-select: none;
+}
+
+.diff-mark { text-align: center; user-select: none; }
+
+.diff-text {
+  padding-right: 16px;
+  white-space: pre;
+  tab-size: 4;
+}
+
+.diff-line.kind-note {
+  display: block;
+  padding: 2px 12px;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.files-preview-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.diff-style {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-subtle);
+}
+
+.diff-style-btn {
+  height: 22px;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--meta-size);
+  cursor: pointer;
+}
+
+.diff-style-btn:hover { color: var(--text); }
+
+.diff-style-btn.is-active {
+  background: var(--accent-bg);
+  color: var(--text);
+}
+
+/* One grid for the whole split diff, so the two code columns line up on
+   every row.  Wide screens keep the 50/50 split; narrow screens let a
+   column grow to its longest line instead of truncating with an ellipsis
+   (the preview body provides the horizontal scrollbar). */
+.diff-split {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) 46px minmax(0, 1fr);
+  align-items: stretch;
+}
+
+.diff-split .diff-hunk,
+.diff-split .diff-split-row { display: contents; }
+
+.diff-split .diff-hunk-head,
+.diff-split .diff-line.kind-note { grid-column: 1 / -1; }
+
+.diff-split-row {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 19px;
+}
+
+.diff-split-row > :nth-child(3) {
+  border-left: 1px solid var(--border);
+}
+
+.diff-cell {
+  min-width: 0;
+  padding-right: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre;
+  tab-size: 4;
+}
+
+.diff-cell.kind-add,
+.diff-no.kind-add { background: var(--diff-add-bg); color: var(--diff-add-text); }
+.diff-cell.kind-del,
+.diff-no.kind-del { background: var(--diff-del-bg); color: var(--diff-del-text); }
+
+.diff-cell.kind-empty {
+  background: var(--surface-subtle);
+  opacity: 0.45;
+}
+
+/* Intra-line word marks: the tokens that changed within a modified line. */
+.diff-word { border-radius: 2px; }
+.kind-add .diff-word { background: var(--diff-add-word); }
+.kind-del .diff-word { background: var(--diff-del-word); }
+
+.files-diff-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+}
+
+.files-diff-hint {
+  color: var(--muted);
+  font-size: var(--meta-size);
+}
+
+.files-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+@media (max-width: 859px) {
+  .files-head {
+    flex-wrap: wrap;
+    padding: 8px 12px;
+  }
+  .files-root { display: none; }
+  .files-tree-pane {
+    width: 100%;
+    max-width: none;
+    border-right: none;
+  }
+  .files-view-pane { display: none; }
+  .files-body.is-narrow-open .files-tree-pane { display: none; }
+  .files-body.is-narrow-open .files-view-pane { display: flex; }
+  .files-body.is-narrow-open .files-back-btn { display: inline-flex; }
+  .files-changes-summary { padding: 8px 10px; }
+  /* Split view: grow each side past the screen for long lines and let
+     the preview body scroll sideways instead of truncating. */
+  .diff-split {
+    grid-template-columns:
+      46px minmax(max-content, 1fr)
+      46px minmax(max-content, 1fr);
+  }
+  .diff-split .diff-cell {
+    overflow: visible;
+    text-overflow: clip;
+  }
+}
+

@@ -1,0 +1,52 @@
+/* --------------------------------------------------------- board sidebar */
+
+.board-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-3) var(--space-3);
+  color: var(--muted);
+  font-size: var(--label-size);
+  cursor: pointer;
+}
+
+.board-toggle input { accent-color: var(--accent); }
+
+.board-counts {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.board-counts .sidebar-label {
+  padding: var(--space-1) 0 var(--space-2);
+}
+
+.board-count-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 4px;
+  color: var(--muted);
+  font-size: var(--ui-size);
+}
+
+.board-count {
+  min-width: 20px;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-subtle);
+  color: var(--muted);
+  font-size: var(--meta-size);
+  text-align: center;
+}
+
+.board-panel-foot {
+  flex: 1;
+  padding: 0 var(--space-3);
+  color: var(--muted);
+  font-size: var(--meta-size);
+}
+
