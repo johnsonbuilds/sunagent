@@ -165,9 +165,13 @@ export interface SplitRow {
 /**
  * Pair a unified hunk's deletions and additions into side-by-side rows.
  *
- * Git emits deletions before additions, so the i-th deletion pairs with
- * the i-th addition; the longer side keeps its extra rows with an empty
- * cell on the other side. Context and note lines flush the pair buffer.
+ * Lines inside one change block are aligned by similarity (a shared
+ * prefix/suffix), the way GitHub lines up a modified file: an unrelated
+ * deletion keeps its own row with an empty addition cell instead of
+ * being forced next to a line it has nothing in common with.  Very large
+ * blocks fall back to index pairing to keep the table small.
+ *
+ * Context and note lines flush the pair buffer.
  */
 export function toSplitRows(lines: DiffLine[]): SplitRow[] {
   const rows: SplitRow[] = [];
@@ -175,16 +179,7 @@ export function toSplitRows(lines: DiffLine[]): SplitRow[] {
   let additions: DiffLine[] = [];
 
   const flush = () => {
-    const count = Math.max(deletions.length, additions.length);
-    for (let index = 0; index < count; index += 1) {
-      const left = deletions[index] ?? null;
-      const right = additions[index] ?? null;
-      rows.push({
-        kind: left ? "del" : "add",
-        left,
-        right,
-      });
-    }
+    rows.push(...alignBlock(deletions, additions));
     deletions = [];
     additions = [];
   };
@@ -206,6 +201,97 @@ export function toSplitRows(lines: DiffLine[]): SplitRow[] {
     }
   }
   flush();
+  return rows;
+}
+
+/** Below this share of shared characters two lines are not shown side by side. */
+const MIN_PAIR_SIMILARITY = 0.3;
+
+/** Largest deletion-times-addition table a block may align with. */
+const MAX_ALIGN_CELLS = 2500;
+
+/** Share of the longer line taken by its common prefix and suffix. */
+function lineSimilarity(left: string, right: string): number {
+  if (left === right) return 1;
+  const longest = Math.max(left.length, right.length);
+  if (longest === 0) return 1;
+  const shortest = Math.min(left.length, right.length);
+  let prefix = 0;
+  while (prefix < shortest && left[prefix] === right[prefix]) prefix += 1;
+  let suffix = 0;
+  while (
+    suffix < shortest - prefix &&
+    left[left.length - 1 - suffix] === right[right.length - 1 - suffix]
+  ) {
+    suffix += 1;
+  }
+  return (prefix + suffix) / longest;
+}
+
+function pairByIndex(deletions: DiffLine[], additions: DiffLine[]): SplitRow[] {
+  const rows: SplitRow[] = [];
+  const count = Math.max(deletions.length, additions.length);
+  for (let index = 0; index < count; index += 1) {
+    const left = deletions[index] ?? null;
+    const right = additions[index] ?? null;
+    rows.push({ kind: left ? "del" : "add", left, right });
+  }
+  return rows;
+}
+
+/**
+ * Align one block of deletions and additions, keeping order: a DP that
+ * either matches two similar lines or emits one side alone.
+ */
+function alignBlock(
+  deletions: DiffLine[],
+  additions: DiffLine[],
+): SplitRow[] {
+  const n = deletions.length;
+  const m = additions.length;
+  if (n === 0 || m === 0) return pairByIndex(deletions, additions);
+  if (n * m > MAX_ALIGN_CELLS) return pairByIndex(deletions, additions);
+
+  // score[i][j] = best similarity sum for deletions[i:] and additions[j:].
+  const width = m + 1;
+  const score = new Float64Array((n + 1) * width);
+  const similarity = new Float64Array(n * m);
+  for (let i = n - 1; i >= 0; i -= 1) {
+    const row = i * width;
+    for (let j = m - 1; j >= 0; j -= 1) {
+      const alike = lineSimilarity(deletions[i].text, additions[j].text);
+      similarity[i * m + j] = alike;
+      let best = Math.max(score[row + width + j], score[row + j + 1]);
+      if (alike >= MIN_PAIR_SIMILARITY) {
+        best = Math.max(best, score[row + width + j + 1] + alike);
+      }
+      score[row + j] = best;
+    }
+  }
+
+  const rows: SplitRow[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    const row = i * width;
+    const alike = similarity[i * m + j];
+    if (
+      alike >= MIN_PAIR_SIMILARITY &&
+      score[row + j] === score[row + width + j + 1] + alike
+    ) {
+      rows.push({ kind: "del", left: deletions[i], right: additions[j] });
+      i += 1;
+      j += 1;
+    } else if (score[row + width + j] >= score[row + j + 1]) {
+      rows.push({ kind: "del", left: deletions[i], right: null });
+      i += 1;
+    } else {
+      rows.push({ kind: "add", left: null, right: additions[j] });
+      j += 1;
+    }
+  }
+  while (i < n) rows.push({ kind: "del", left: deletions[i++], right: null });
+  while (j < m) rows.push({ kind: "add", left: null, right: additions[j++] });
   return rows;
 }
 

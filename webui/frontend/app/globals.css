@@ -2163,6 +2163,8 @@ button {
 :root[data-theme="dark"] {
   --diff-add-bg: rgba(134, 192, 139, 0.12);
   --diff-del-bg: rgba(248, 113, 113, 0.12);
+  --diff-add-word: rgba(134, 192, 139, 0.34);
+  --diff-del-word: rgba(248, 113, 113, 0.32);
   --diff-add-text: #a8d6ac;
   --diff-del-text: #f0a3a3;
   --lang-py: #7fb3c8;
@@ -2194,6 +2196,8 @@ button {
 :root[data-theme="light"] {
   --diff-add-bg: rgba(63, 122, 69, 0.1);
   --diff-del-bg: rgba(179, 64, 47, 0.1);
+  --diff-add-word: rgba(63, 122, 69, 0.28);
+  --diff-del-word: rgba(179, 64, 47, 0.26);
   --diff-add-text: #2f6436;
   --diff-del-text: #9d3527;
   --lang-py: #2f6d80;
@@ -2871,7 +2875,13 @@ button {
 .hljs-emphasis { font-style: italic; }
 .hljs-strong { font-weight: 700; }
 
-.diff-hunk { margin: 0; }
+.diff-hunk {
+  margin: 0;
+  /* Grow past the viewport for long lines so the row tint covers the
+     whole line while the preview body scrolls sideways. */
+  width: max-content;
+  min-width: 100%;
+}
 
 .diff-hunk-head {
   padding: 4px 12px;
@@ -2885,7 +2895,7 @@ button {
 
 .diff-line {
   display: grid;
-  grid-template-columns: 46px 46px 16px minmax(0, 1fr);
+  grid-template-columns: 46px 46px 16px auto;
   align-items: stretch;
   font-family: var(--font-mono);
   font-size: 12px;
@@ -2957,9 +2967,23 @@ button {
   color: var(--text);
 }
 
-.diff-split-row {
+/* One grid for the whole split diff, so the two code columns line up on
+   every row.  Wide screens keep the 50/50 split; narrow screens let a
+   column grow to its longest line instead of truncating with an ellipsis
+   (the preview body provides the horizontal scrollbar). */
+.diff-split {
   display: grid;
   grid-template-columns: 46px minmax(0, 1fr) 46px minmax(0, 1fr);
+  align-items: stretch;
+}
+
+.diff-split .diff-hunk,
+.diff-split .diff-split-row { display: contents; }
+
+.diff-split .diff-hunk-head,
+.diff-split .diff-line.kind-note { grid-column: 1 / -1; }
+
+.diff-split-row {
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 19px;
@@ -2987,6 +3011,11 @@ button {
   background: var(--surface-subtle);
   opacity: 0.45;
 }
+
+/* Intra-line word marks: the tokens that changed within a modified line. */
+.diff-word { border-radius: 2px; }
+.kind-add .diff-word { background: var(--diff-add-word); }
+.kind-del .diff-word { background: var(--diff-del-word); }
 
 .files-diff-foot {
   display: flex;
@@ -3023,6 +3052,17 @@ button {
   .files-body.is-narrow-open .files-view-pane { display: flex; }
   .files-body.is-narrow-open .files-back-btn { display: inline-flex; }
   .files-changes-summary { padding: 8px 10px; }
+  /* Split view: grow each side past the screen for long lines and let
+     the preview body scroll sideways instead of truncating. */
+  .diff-split {
+    grid-template-columns:
+      46px minmax(max-content, 1fr)
+      46px minmax(max-content, 1fr);
+  }
+  .diff-split .diff-cell {
+    overflow: visible;
+    text-overflow: clip;
+  }
 }
 
 /* ---------------------------------------------------------- files drawer */

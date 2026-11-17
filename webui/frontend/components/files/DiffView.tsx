@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { BackIcon, LockIcon } from "@/components/Icons";
 import StatusBadge from "@/components/files/StatusBadge";
+import { markRanges, markText } from "@/lib/diffMark";
 import { statusKey, toSplitRows } from "@/lib/files";
 import { highlightLanguage } from "@/lib/fileIcons";
 import { highlightLine } from "@/lib/highlight";
@@ -14,42 +15,99 @@ import type {
   DiffLine,
   WorkspaceDiff,
 } from "@/lib/types";
+import { wordDiff, type DiffRange } from "@/lib/wordDiff";
 
 export type DiffStyle = "unified" | "split";
 
 const MARK = { add: "+", del: "−", ctx: " ", note: "\\" } as const;
 
+/** Same ceiling as the async syntax highlighter. */
+const MAX_DECORATED_LINES = 2000;
+
+/** Token cells spent on intra-line word diffs per rendered change. */
+const WORD_DIFF_BUDGET = 400_000;
+
+/** Deleted and added line pairs of a hunk, in split-view order. */
+function pairedLines(
+  hunks: DiffHunk[],
+): Array<{ left: DiffLine; right: DiffLine }> {
+  const pairs: Array<{ left: DiffLine; right: DiffLine }> = [];
+  for (const hunk of hunks) {
+    for (const row of toSplitRows(hunk.lines)) {
+      if (
+        row.left &&
+        row.right &&
+        row.left !== row.right &&
+        row.left.kind === "del" &&
+        row.right.kind === "add"
+      ) {
+        pairs.push({ left: row.left, right: row.right });
+      }
+    }
+  }
+  return pairs;
+}
+
+/** Changed character ranges for every line that has a counterpart. */
+function collectWordMarks(hunks: DiffHunk[]): Map<DiffLine, DiffRange[]> {
+  const marks = new Map<DiffLine, DiffRange[]>();
+  let budget = WORD_DIFF_BUDGET;
+  for (const pair of pairedLines(hunks)) {
+    if (budget <= 0) break;
+    const outcome = wordDiff(pair.left.text, pair.right.text);
+    budget -= outcome.cost;
+    if (outcome.old && outcome.old.length > 0) {
+      marks.set(pair.left, outcome.old);
+    }
+    if (outcome.new && outcome.new.length > 0) {
+      marks.set(pair.right, outcome.new);
+    }
+  }
+  return marks;
+}
+
+/** A diff line's rendered HTML: highlighted, word-marked, or both. */
+function decoratedText(
+  line: DiffLine,
+  decorated: Map<DiffLine, string> | null,
+): string | null {
+  return decorated?.get(line) ?? null;
+}
+
 function UnifiedHunk({
   hunk,
-  html,
+  decorated,
 }: {
   hunk: DiffHunk;
-  html: string[] | null;
+  decorated: Map<DiffLine, string> | null;
 }) {
   return (
     <section className="diff-hunk">
       <div className="diff-hunk-head">{hunk.header}</div>
-      {hunk.lines.map((line, index) => (
-        <div className={`diff-line kind-${line.kind}`} key={index}>
-          {line.kind === "note" ? (
-            <span className="diff-note">{line.text}</span>
-          ) : (
-            <>
-              <span className="diff-no">{line.old ?? ""}</span>
-              <span className="diff-no">{line.new ?? ""}</span>
-              <span className="diff-mark">{MARK[line.kind]}</span>
-              {html?.[index] ? (
-                <span
-                  className="diff-text"
-                  dangerouslySetInnerHTML={{ __html: html[index] }}
-                />
-              ) : (
-                <span className="diff-text">{line.text || "\u00a0"}</span>
-              )}
-            </>
-          )}
-        </div>
-      ))}
+      {hunk.lines.map((line, index) => {
+        const html = decoratedText(line, decorated);
+        return (
+          <div className={`diff-line kind-${line.kind}`} key={index}>
+            {line.kind === "note" ? (
+              <span className="diff-note">{line.text}</span>
+            ) : (
+              <>
+                <span className="diff-no">{line.old ?? ""}</span>
+                <span className="diff-no">{line.new ?? ""}</span>
+                <span className="diff-mark">{MARK[line.kind]}</span>
+                {html !== null ? (
+                  <span
+                    className="diff-text"
+                    dangerouslySetInnerHTML={{ __html: html }}
+                  />
+                ) : (
+                  <span className="diff-text">{line.text || "\u00a0"}</span>
+                )}
+              </>
+            )}
+          </div>
+        );
+      })}
     </section>
   );
 }
@@ -84,10 +142,10 @@ function SplitSide({
 
 function SplitHunk({
   hunk,
-  htmlByText,
+  decorated,
 }: {
   hunk: DiffHunk;
-  htmlByText: Map<string, string>;
+  decorated: Map<DiffLine, string> | null;
 }) {
   const rows = toSplitRows(hunk.lines);
   return (
@@ -103,12 +161,20 @@ function SplitHunk({
             <SplitSide
               line={row.left}
               side="old"
-              html={row.left ? htmlByText.get(row.left.text) : undefined}
+              html={
+                row.left
+                  ? decoratedText(row.left, decorated) ?? undefined
+                  : undefined
+              }
             />
             <SplitSide
               line={row.right}
               side="new"
-              html={row.right ? htmlByText.get(row.right.text) : undefined}
+              html={
+                row.right
+                  ? decoratedText(row.right, decorated) ?? undefined
+                  : undefined
+              }
             />
           </div>
         ),
@@ -154,48 +220,47 @@ export default function DiffView({
 }) {
   const { t } = useI18n();
   const language = path ? highlightLanguage(path) : null;
-  const [highlighted, setHighlighted] = useState<string[][] | null>(null);
+  const [decorated, setDecorated] = useState<Map<DiffLine, string> | null>(null);
   const totalLines =
     data?.hunks.reduce((count, hunk) => count + hunk.lines.length, 0) ?? 0;
 
   useEffect(() => {
     let cancelled = false;
-    setHighlighted(null);
-    if (!data || data.binary || !language || totalLines > 2000) return;
+    setDecorated(null);
+    if (!data || data.binary || totalLines === 0) return;
+
+    const canHighlight = language !== null && totalLines <= MAX_DECORATED_LINES;
+    const marks =
+      totalLines <= MAX_DECORATED_LINES
+        ? collectWordMarks(data.hunks)
+        : new Map<DiffLine, DiffRange[]>();
 
     void (async () => {
-      const result: string[][] = [];
+      const result = new Map<DiffLine, string>();
       for (const hunk of data.hunks) {
-        const lines: string[] = [];
         for (const line of hunk.lines) {
-          if (line.kind === "note" || !line.text) {
-            lines.push("");
-            continue;
+          if (line.kind === "note" || !line.text) continue;
+          let html: string | null = null;
+          if (canHighlight && language) {
+            html = await highlightLine(line.text, language);
+            if (cancelled) return;
           }
-          const html = await highlightLine(line.text, language);
-          if (cancelled) return;
-          lines.push(html ?? "");
+          const ranges = marks.get(line);
+          if (ranges && ranges.length > 0) {
+            html = html
+              ? markRanges(html, ranges)
+              : markText(line.text, ranges);
+          }
+          if (html !== null) result.set(line, html);
         }
-        result.push(lines);
       }
-      if (!cancelled) setHighlighted(result);
+      if (!cancelled) setDecorated(result);
     })();
 
     return () => {
       cancelled = true;
     };
   }, [data, language, totalLines]);
-
-  const htmlByText = useMemo(() => {
-    const map = new Map<string, string>();
-    data?.hunks.forEach((hunk, hunkIndex) => {
-      hunk.lines.forEach((line, lineIndex) => {
-        const html = highlighted?.[hunkIndex]?.[lineIndex];
-        if (html) map.set(line.text, html);
-      });
-    });
-    return map;
-  }, [data, highlighted]);
 
   if (!path) {
     return (
@@ -322,16 +387,16 @@ export default function DiffView({
             {data && data.hunks.length === 0 && !data.binary ? (
               <div className="files-pane-message">{t("filesNoTextDiff")}</div>
             ) : null}
-            {data?.hunks.map((hunk, index) =>
-              style === "split" ? (
-                <SplitHunk hunk={hunk} htmlByText={htmlByText} key={index} />
-              ) : (
-                <UnifiedHunk
-                  hunk={hunk}
-                  html={highlighted?.[index] ?? null}
-                  key={index}
-                />
-              ),
+            {style === "split" ? (
+              <div className="diff-split">
+                {data?.hunks.map((hunk, index) => (
+                  <SplitHunk hunk={hunk} decorated={decorated} key={index} />
+                ))}
+              </div>
+            ) : (
+              data?.hunks.map((hunk, index) => (
+                <UnifiedHunk hunk={hunk} decorated={decorated} key={index} />
+              ))
             )}
             {expandError ? (
               <div className="files-note is-warning">
