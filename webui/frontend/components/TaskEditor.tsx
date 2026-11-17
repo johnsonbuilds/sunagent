@@ -289,9 +289,6 @@ export default function TaskEditor({
               </option>
             ))}
           </select>
-          {task?.session ? (
-            <span className="field-hint">{t("nextTurnHint")}</span>
-          ) : null}
         </div>
 
         <div className="field">

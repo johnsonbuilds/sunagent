@@ -32,7 +32,6 @@ const en = {
   harnessPickerTitle: "Select harness",
   harnessLockedHint:
     "The harness is fixed once the conversation starts. Open a new conversation to change it.",
-  nextTurnHint: "Applies from the next turn",
   composerPlaceholder: "Message SunAgent…",
   composerHint: "Enter sends · Shift+Enter adds a line",
   send: "Send",
@@ -237,7 +236,6 @@ const zh: Record<MessageKey, string> = {
   modelPickerTitle: "选择模型",
   harnessPickerTitle: "选择执行框架",
   harnessLockedHint: "会话开始后执行框架不可更改，如需更换请新建会话。",
-  nextTurnHint: "将在下一轮生效",
   composerPlaceholder: "给 SunAgent 发送消息…",
   composerHint: "Enter 发送 · Shift+Enter 换行",
   send: "发送",

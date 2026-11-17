@@ -193,9 +193,6 @@ export default function Composer() {
               ) : null}
             </div>
 
-            {busy ? (
-              <span className="picker-note">{t("nextTurnHint")}</span>
-            ) : null}
           </div>
           <div className="composer-right">
             <button
