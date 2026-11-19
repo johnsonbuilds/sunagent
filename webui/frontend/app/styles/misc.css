@@ -64,20 +64,40 @@
 
 /* ----------------------------------------------------------------- toast */
 
+/* The toast is a popover so it can sit in the top layer above modal dialogs;
+   these resets undo the user-agent popover box. z-index stays as the fallback
+   for the plain fixed element (older browsers, no popover support). */
 .toast {
   position: fixed;
-  left: 50%;
-  bottom: 96px;
+  inset: auto auto 96px 50%;
+  margin: 0;
+  width: fit-content;
+  height: auto;
+  overflow: hidden;
   transform: translateX(-50%);
   padding: 8px 14px;
   border-radius: var(--radius-md);
-  border: 1px solid var(--error);
-  background: color-mix(in srgb, var(--error) 16%, var(--bg));
   color: var(--text);
   font-size: var(--ui-size);
   box-shadow: 0 8px 24px var(--shadow);
-  z-index: 40;
+  z-index: 1000;
   max-width: 80vw;
+  border: 1px solid transparent;
+}
+
+.toast--info {
+  border-color: var(--info);
+  background: color-mix(in srgb, var(--info) 16%, var(--bg));
+}
+
+.toast--success {
+  border-color: var(--success);
+  background: color-mix(in srgb, var(--success) 16%, var(--bg));
+}
+
+.toast--error {
+  border-color: var(--error);
+  background: color-mix(in srgb, var(--error) 16%, var(--bg));
 }
 
 /* ------------------------------------------------------------ responsive */

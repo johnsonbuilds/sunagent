@@ -45,7 +45,7 @@ export function RuntimeConfigProvider({ children }: { children: ReactNode }) {
         setHarnesses(harnessList);
         setDefaultModel(config.default_model || modelList[0]?.id || "");
         setDefaultHarness(config.default_harness || harnessList[0]?.id || "");
-        if (config.error) showToast(config.error);
+        if (config.error) showToast(config.error, "error");
       } catch {
         if (cancelled) return;
         setModels([]);

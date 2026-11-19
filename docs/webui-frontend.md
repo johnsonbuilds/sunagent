@@ -261,7 +261,7 @@ ThemeProvider
 | Provider | 职责 | 生命周期 |
 |---|---|---|
 | `ThemeProvider` | `data-theme`、localStorage | 应用级 |
-| `ToastProvider` | toast 文案、计时器、渲染 toast 容器 | 应用级 |
+| `ToastProvider` | toast 文案 / 类型（info · success · error）、计时器、渲染 toast（popover，位于浏览器 top layer，盖住 modal 弹框） | 应用级 |
 | `RuntimeConfigProvider` | models / harnesses / defaults | 启动一次 |
 | `SessionsProvider` | 会话列表、active session、segments、busy、SSE、模型/harness | 跨路由常驻 |
 | `BoardProvider` | snapshot、filter、hideDone、mutation、editor/detail 弹窗状态 | 跨路由常驻 |

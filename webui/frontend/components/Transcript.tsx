@@ -42,7 +42,7 @@ function CopyButton({ content }: { content: string }) {
       aria-label={t("msgCopy")}
       onClick={() => {
         navigator.clipboard.writeText(content);
-        showToast(t("msgCopied"));
+        showToast(t("msgCopied"), "success");
       }}
     >
       <CopyIcon />

@@ -23,7 +23,7 @@ export function useRestart() {
       if (Date.now() > deadline) {
         setBusy(false);
         setOpen(false);
-        showToast(t("restartTimeoutToast"));
+        showToast(t("restartTimeoutToast"), "error");
         return;
       }
       fetch("/api/health", { cache: "no-store" })
@@ -43,13 +43,13 @@ export function useRestart() {
   const confirm = useCallback(async () => {
     if (busy) return;
     setBusy(true);
-    showToast(t("restartingToast"));
+    showToast(t("restartingToast"), "info");
     try {
       await api("/api/system/restart", { method: "POST", body: "{}" });
     } catch (error) {
       setBusy(false);
       setOpen(false);
-      showToast(errorMessage(error));
+      showToast(errorMessage(error), "error");
       return;
     }
     timerRef.current = window.setTimeout(() => {

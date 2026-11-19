@@ -206,7 +206,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
         detail = await api<SessionDetail>(`/api/sessions/${sessionId}`);
       } catch (error) {
         if (token !== selectionRef.current) return false;
-        showToast(errorMessage(error));
+        showToast(errorMessage(error), "error");
         return false;
       }
       if (token !== selectionRef.current) return false;
@@ -242,7 +242,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
       await selectSession(session.id);
       setFocusSeq((value) => value + 1);
     } catch (error) {
-      showToast(errorMessage(error));
+      showToast(errorMessage(error), "error");
     }
   }, [refreshSessions, selectSession, showToast]);
 
@@ -258,7 +258,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
         });
       } catch (error) {
         setActiveModel(previous);
-        showToast(errorMessage(error));
+        showToast(errorMessage(error), "error");
       }
     },
     [activeId, activeModel, showToast],
@@ -277,7 +277,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
         setHarnessLocked(false);
       } catch (error) {
         setActiveHarness(previous);
-        showToast(errorMessage(error));
+        showToast(errorMessage(error), "error");
       }
     },
     [activeHarness, activeId, showToast],
@@ -300,7 +300,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
           setTitle(value.trim() || session.title);
         }
       } catch (error) {
-        showToast(errorMessage(error));
+        showToast(errorMessage(error), "error");
       }
     },
     [activeId, refreshSessions, showToast, t],
@@ -327,7 +327,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
           else await newSession();
         }
       } catch (error) {
-        showToast(errorMessage(error));
+        showToast(errorMessage(error), "error");
       }
     },
     [
@@ -365,7 +365,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
         bumpBoardSync();
       } catch (error) {
         updateBusy(false);
-        showToast(errorMessage(error));
+        showToast(errorMessage(error), "error");
       }
     },
     [activeId, busy, bumpBoardSync, showToast, updateBusy],
@@ -379,7 +379,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
         body: "{}",
       });
     } catch (error) {
-      showToast(errorMessage(error));
+      showToast(errorMessage(error), "error");
     }
   }, [activeId, showToast]);
 
@@ -413,7 +413,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
       case "run.error":
         updateBusy(false);
         setStatus({ label: "statusError", kind: "error" });
-        showToast(frame.error || t("runFailed"));
+        showToast(frame.error || t("runFailed"), "error");
         void refreshSessions().catch(() => {});
         bumpBoardSync();
         break;
@@ -436,12 +436,12 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
         const known =
           requested !== null && list.some((item) => item.id === requested);
 
-        if (requested && !known) showToast(t("conversationNotFound"));
+        if (requested && !known) showToast(t("conversationNotFound"), "error");
         if (known && requested) await selectSession(requested);
         else if (list.length) await selectSession(list[0].id);
         else await newSession();
       } catch (error) {
-        showToast(errorMessage(error));
+        showToast(errorMessage(error), "error");
       }
     })();
   }, [

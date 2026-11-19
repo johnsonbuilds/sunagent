@@ -54,7 +54,11 @@ export function BoardProvider({
   children: ReactNode;
 }) {
   const { showToast } = useToast();
-  const board = useBoard({ onError: showToast, fastPoll });
+  const onBoardError = useCallback(
+    (message: string) => showToast(message, "error"),
+    [showToast],
+  );
+  const board = useBoard({ onError: onBoardError, fastPoll });
   const { boardSyncSeq, refreshSessions } = useSessions();
 
   const [editor, setEditor] = useState<EditorState>(null);
