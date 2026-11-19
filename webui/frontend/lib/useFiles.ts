@@ -40,11 +40,6 @@ export interface FileTreeState {
   refreshVisible: () => Promise<void>;
 }
 
-/**
- * One directory arrives per request and stays cached; expanding a
- * directory that already has entries does not fetch again.  Changing the
- * "show ignored" switch resets the cache, because every listing changes.
- */
 export function useFileTree(includeIgnored: boolean): FileTreeState {
   const [dirs, setDirs] = useState<Record<string, DirState>>({});
   const [expanded, setExpanded] = useState<string[]>([]);
@@ -70,9 +65,6 @@ export function useFileTree(includeIgnored: boolean): FileTreeState {
         return Promise.resolve(cached.entries);
       }
       if (!force) {
-        // A second caller (a deep link racing the initial root load) must
-        // wait for the same request instead of treating "loading" as an
-        // empty directory.
         const pending = inflight.current.get(path);
         if (pending) return pending;
       }
@@ -322,11 +314,6 @@ export interface FileDiffState {
   collapse: () => void;
 }
 
-/**
- * A compact diff loads with the selection.  Expanding fetches a second,
- * full-context diff once and keeps it until the file or refresh changes;
- * collapsing returns to the cached compact diff without a request.
- */
 export function useFileDiff(
   path: string | null,
   oldPath: string | null,

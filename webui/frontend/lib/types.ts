@@ -1,5 +1,3 @@
-/** Frame and transcript shapes shared by the client and the runtime. */
-
 export type BlockKind = "user" | "assistant" | "reasoning" | "tool";
 
 export type ToolStatus = "running" | "ok" | "error";
@@ -128,8 +126,7 @@ export interface TaskInput {
   status: TaskStatus;
   priority: TaskPriority;
   tags: string[];
-  /** Empty string means "use the service default". */
-  model: string;
+    model: string;
   harness: string;
 }
 

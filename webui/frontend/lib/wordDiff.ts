@@ -1,15 +1,3 @@
-/* Intra-line word diff for change lines.
- *
- * GitHub marks the tokens that actually changed inside a modified line,
- * on top of the usual line tint.  That is a word-level diff of the paired
- * deletion and addition: a longest-common-subsequence over tokens keeps
- * what both lines share and reports the gaps.
- *
- * Everything here is pure and bounded: long lines, very different lines,
- * and large token matrices fall back to the plain line highlight, so the
- * caller can spend a fixed work budget on a whole diff.
- */
-
 export interface DiffRange {
   /** Character offset of the first changed character, inclusive. */
   start: number;
@@ -77,10 +65,6 @@ function changedChars(ranges: DiffRange[]): number {
   return ranges.reduce((total, range) => total + range.end - range.start, 0);
 }
 
-/**
- * Word diff two lines, extending a common prefix and suffix so only the
- * differing middle goes through the LCS table.
- */
 export function wordDiff(oldText: string, newText: string): WordDiffOutcome {
   if (!oldText || !newText || oldText === newText) return NOTHING;
   if (oldText.length > MAX_LINE_LENGTH || newText.length > MAX_LINE_LENGTH) {

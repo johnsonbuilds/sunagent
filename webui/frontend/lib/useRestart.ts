@@ -11,10 +11,6 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/**
- * The restart flow: confirm, hand off to run.sh, then poll until the
- * replacement server answers and reload the page against it.
- */
 export function useRestart() {
   const { t } = useI18n();
   const { showToast } = useToast();
@@ -56,7 +52,6 @@ export function useRestart() {
       showToast(errorMessage(error));
       return;
     }
-    // The detached response returns before the old process exits.
     timerRef.current = window.setTimeout(() => {
       pollForRestart(Date.now() + 60000);
     }, 2000);

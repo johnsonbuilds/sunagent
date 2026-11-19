@@ -121,8 +121,6 @@ export default function BoardView({
     clearDrag();
     if (!taskId) return;
 
-    // A text filter hides cards, so DOM positions no longer map onto
-    // the persisted order; append instead of guessing.
     if (filtering) {
       void onMoveTask(taskId, status, Number.MAX_SAFE_INTEGER);
       return;

@@ -27,7 +27,6 @@ import type { StatusState } from "@/lib/ui";
 import { useRuntimeConfig } from "./runtime-config";
 import { useToast } from "./toast";
 
-/** The server's placeholder title for a session with no messages yet. */
 const NEW_SESSION_TITLE = "New conversation";
 
 function errorMessage(error: unknown): string {
@@ -92,9 +91,7 @@ export interface SessionsValue {
   activeModel: string;
   activeHarness: string;
   harnessLocked: boolean;
-  /** Bumped when the board should refresh now instead of on its timer. */
   boardSyncSeq: number;
-  /** Bumped when a new conversation should focus the composer. */
   focusSeq: number;
   refreshSessions: () => Promise<SessionSummary[]>;
   /** Resolves false when the session is gone or the request lost a race. */
@@ -139,7 +136,6 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
   const streamRef = useRef<EventSource | null>(null);
   const lastSeqRef = useRef(0);
   const bootedRef = useRef(false);
-  /** Only the newest selection may apply its response. */
   const selectionRef = useRef(0);
   const handleFrameRef = useRef<(frame: Frame) => void>(() => {});
 
@@ -213,7 +209,6 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
         showToast(errorMessage(error));
         return false;
       }
-      // A newer click or URL change took over while this request ran.
       if (token !== selectionRef.current) return false;
 
       setTitle(detail.title || NEW_SESSION_TITLE);
@@ -366,10 +361,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
           body: JSON.stringify({ message: value }),
         });
         updateBusy(true);
-        // The first message fixes the harness for this conversation.
         setHarnessLocked(true);
-        // A linked card should switch to its "running" indicator now,
-        // not on the next poll.
         bumpBoardSync();
       } catch (error) {
         updateBusy(false);

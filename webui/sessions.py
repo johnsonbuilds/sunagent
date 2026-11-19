@@ -1,15 +1,8 @@
 """Persistent multi-session state for the web UI.
 
-A web UI session owns two things that the runtime cares about:
-
-* the visible transcript (user bubbles, assistant prose, thinking
-  blocks, tool cards), which is what the browser replays on reload, and
-* the :class:`~agent_runtime.agent.Conversation` handed to
-  :func:`~agent_runtime.agent.run_turn`, which is what keeps the agent's
-  own context alive between turns.
-
-Both are persisted as one JSON document per session so a restart of the
-server does not lose the conversation.
+A session owns the visible transcript and the agent conversation, both
+persisted as one JSON document per session so a server restart does not
+lose the conversation.
 """
 
 from __future__ import annotations
@@ -31,19 +24,11 @@ from agent_runtime.agent import Conversation
 logger = logging.getLogger(__name__)
 
 
-# Sentinel pushed into a subscriber queue to tell the stream to finish.
-# It never reaches a browser: the stream stops before it is rendered.
 STREAM_STOP: Any = object()
 
 
 def default_sessions_root() -> Path:
-    """Where sessions live when ``AGENT_RUNTIME_WEBUI_SESSIONS_DIR`` is unset.
-
-    The default is the runtime home's ``sessions/`` directory — the one
-    place the project persists anything (see
-    :mod:`agent_runtime.storage`).  The env var still wins, so an
-    existing deployment keeps its files where they are.
-    """
+    """Where sessions live when ``AGENT_RUNTIME_WEBUI_SESSIONS_DIR`` is unset."""
     raw = os.getenv("AGENT_RUNTIME_WEBUI_SESSIONS_DIR")
     if raw:
         return Path(raw).expanduser()
@@ -53,9 +38,8 @@ def default_sessions_root() -> Path:
 class FrameBus:
     """Fan out web UI frames to every browser watching a session.
 
-    Frames carry a monotonic ``seq``. The bus keeps a short replay
-    buffer so a browser that reconnects (or opens a session late) can
-    catch up on what it missed instead of starting from a blank
+    Frames carry a monotonic ``seq`` and a short replay buffer lets a
+    reconnecting browser catch up instead of starting from a blank
     transcript.
     """
 
@@ -95,12 +79,7 @@ class FrameBus:
         return [frame for frame in self._history if frame.get("seq", 0) > after]
 
     def stop(self) -> None:
-        """Close every open stream.
-
-        Server-sent events never end on their own, so a browser that is
-        still connected would keep uvicorn waiting during shutdown.
-        The sentinel tells the stream to finish.
-        """
+        """Close every open stream."""
         for queue in list(self._subscribers):
             try:
                 queue.put_nowait(STREAM_STOP)
@@ -130,14 +109,7 @@ class Session:
 
     @property
     def is_empty(self) -> bool:
-        """Whether this session has never held a conversation.
-
-        A session is created empty and only becomes real once the first
-        message arrives.  Empty sessions are kept in memory (the browser
-        needs one to type into) but are never persisted and never listed:
-        otherwise every "new chat" click would leave a stub file behind
-        and the sidebar would fill up with blank conversations.
-        """
+        """Whether this session has never held a conversation."""
         return not self.segments and not self.messages
 
     def append_segment(self, segment: dict[str, Any]) -> None:
@@ -160,12 +132,7 @@ class Session:
 
     @property
     def harness_locked(self) -> bool:
-        """Whether the harness choice is frozen for this session.
-
-        The harness shapes the system prompt and the tool set, so it may
-        only be picked while the session is still empty — before the
-        first turn. After that only the model can change.
-        """
+        """Whether the harness choice is frozen for this session."""
         return not self.is_empty
 
     def summary(self) -> dict[str, Any]:
@@ -198,13 +165,7 @@ class SessionStore:
         return self._root
 
     def load(self) -> None:
-        """Read every persisted session from disk.
-
-        Records that never held a conversation are skipped: they are
-        leftovers from an older build that wrote a file per "new chat"
-        click, and loading them would resurrect the empty conversations
-        the sidebar is meant to hide.
-        """
+        """Read every persisted session from disk."""
         if not self._root.is_dir():
             return
         for path in sorted(self._root.glob("*.json")):
@@ -223,23 +184,13 @@ class SessionStore:
             self._sessions[session.id] = session
 
     def list(self) -> list[Session]:
-        """The sessions worth showing, newest first.
-
-        Empty sessions are excluded: they exist only so the browser has
-        somewhere to type, and listing them would fill the sidebar with
-        blank conversations.
-        """
+        """The sessions worth showing, newest first."""
         return sorted((session for session in self._sessions.values()
                        if not session.is_empty),
                       key=lambda session: session.updated_at, reverse=True)
 
     def shutdown(self) -> None:
-        """Close every event stream and stop every running turn.
-
-        Called when the server is asked to exit: the event streams are
-        long-lived by design, so they have to be closed explicitly or
-        the process waits for them forever.
-        """
+        """Close every event stream and stop every running turn."""
         for session in self._sessions.values():
             session.bus.stop()
             task = session.task
@@ -252,11 +203,7 @@ class SessionStore:
     def create(self, title: str | None = None, *,
                model: str | None = None,
                harness: str | None = None) -> Session:
-        """Start a session in memory.
-
-        Nothing is written to disk yet: the session earns its file the
-        moment it holds a conversation (see :meth:`save`).
-        """
+        """Start a session in memory."""
         now = time.time()
         session = Session(
             id="sess-" + time.strftime("%Y%m%d-%H%M%S", time.localtime(now)),
@@ -291,12 +238,7 @@ class SessionStore:
         return session
 
     def save(self, session: Session) -> None:
-        """Persist one session, ignoring filesystem failures.
-
-        An empty session is not persisted at all.  It has no history
-        worth keeping, and writing it would litter the sessions
-        directory with one stub file per "new chat" click.
-        """
+        """Persist one session, ignoring filesystem failures."""
         session.sync_messages()
         if session.is_empty:
             return

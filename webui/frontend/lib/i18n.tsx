@@ -12,7 +12,6 @@ import {
 
 export type Locale = "en" | "zh";
 
-/** "auto" follows the browser; a concrete locale is an explicit choice. */
 export type LocalePreference = "auto" | Locale;
 
 export const LOCALE_STORAGE_KEY = "sunagent-locale";
@@ -413,7 +412,6 @@ const zh: Record<MessageKey, string> = {
 
 const dictionaries: Record<Locale, Record<MessageKey, string>> = { en, zh };
 
-/** Resolve the browser's preferred language to a supported locale. */
 export function detectLocale(): Locale {
   if (typeof navigator === "undefined") return "en";
   const languages =

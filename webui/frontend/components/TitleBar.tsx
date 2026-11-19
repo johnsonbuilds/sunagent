@@ -72,7 +72,7 @@ export default function TitleBar({
         </button>
         {onNewChat ? (
           <button
-            className="icon-btn primary"
+            className="icon-btn"
             id="btnNewChat"
             title={t(newActionTitle ?? "newConversationShortcut")}
             aria-label={t(newActionLabel ?? "newConversation")}

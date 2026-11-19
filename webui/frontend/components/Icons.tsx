@@ -1,5 +1,3 @@
-/* Inline icons, kept identical to the original dependency-free client. */
-
 export function MenuIcon() {
   return (
     <svg

@@ -1,8 +1,6 @@
 import type { MessageKey } from "@/lib/i18n";
 import type { ChangeEntry, ChangeStatus, DiffLine } from "@/lib/types";
 
-/** Path helpers for POSIX-style workspace paths (never native separators). */
-
 export function dirname(path: string): string {
   const index = path.lastIndexOf("/");
   return index === -1 ? "" : path.slice(0, index);
@@ -17,7 +15,6 @@ export function joinPath(dir: string, name: string): string {
   return dir ? `${dir}/${name}` : name;
 }
 
-/** Ancestor directories of a path, shallow to deep, without the path itself. */
 export function ancestorDirs(path: string): string[] {
   const result: string[] = [];
   let current = dirname(path);
@@ -94,12 +91,6 @@ export interface ChangeNode {
   children: ChangeNode[];
 }
 
-/**
- * Group the flat change list into a directory tree.
- *
- * Directories are created as needed and sorted before files; both are
- * ordered by name so the tree does not depend on git's output order.
- */
 export function buildChangeTree(entries: ChangeEntry[]): ChangeNode[] {
   const root: ChangeNode = {
     name: "",
@@ -162,17 +153,6 @@ export interface SplitRow {
   note?: string;
 }
 
-/**
- * Pair a unified hunk's deletions and additions into side-by-side rows.
- *
- * Lines inside one change block are aligned by similarity (a shared
- * prefix/suffix), the way GitHub lines up a modified file: an unrelated
- * deletion keeps its own row with an empty addition cell instead of
- * being forced next to a line it has nothing in common with.  Very large
- * blocks fall back to index pairing to keep the table small.
- *
- * Context and note lines flush the pair buffer.
- */
 export function toSplitRows(lines: DiffLine[]): SplitRow[] {
   const rows: SplitRow[] = [];
   let deletions: DiffLine[] = [];
@@ -239,10 +219,6 @@ function pairByIndex(deletions: DiffLine[], additions: DiffLine[]): SplitRow[] {
   return rows;
 }
 
-/**
- * Align one block of deletions and additions, keeping order: a DP that
- * either matches two similar lines or emits one side alone.
- */
 function alignBlock(
   deletions: DiffLine[],
   additions: DiffLine[],
@@ -314,7 +290,6 @@ export interface ChangeIndex {
   dirStatus: Map<string, ChangeStatus>;
 }
 
-/** Index a flat change list for the file tree's colours and counts. */
 export function indexChanges(entries: ChangeEntry[]): ChangeIndex {
   const byPath = new Map<string, ChangeEntry>();
   const dirCount = new Map<string, number>();
@@ -337,7 +312,6 @@ export function indexChanges(entries: ChangeEntry[]): ChangeIndex {
   return { byPath, dirCount, dirStatus };
 }
 
-/** Every directory path in a change tree, for "expand all". */
 export function changeTreeDirs(nodes: ChangeNode[]): string[] {
   const result: string[] = [];
   const walk = (items: ChangeNode[]) => {

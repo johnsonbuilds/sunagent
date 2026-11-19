@@ -8,10 +8,6 @@ import ObservabilityPage from "@/views/ObservabilityPage";
 import SchedulesPage from "@/views/SchedulesPage";
 import SettingsPage from "@/views/SettingsPage";
 
-/**
- * The only place a route id is turned into a view. A missing entry is a
- * compile error, so the rail can never link to a route without a page.
- */
 export const VIEWS: Record<RouteId, ComponentType> = {
   chat: ChatView,
   board: BoardPage,

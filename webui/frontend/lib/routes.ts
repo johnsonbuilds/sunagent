@@ -1,11 +1,5 @@
 import type { MessageKey } from "@/lib/i18n";
 
-/**
- * The console's destination table. Keep this module free of component
- * imports: `app/(console)/[...slug]/page.tsx` calls `generateStaticParams`
- * from it while running on the server.
- */
-
 export type RouteId =
   | "chat"
   | "board"
@@ -16,10 +10,7 @@ export type RouteId =
 
 export type NavIconId = RouteId;
 
-/** The sidebar body that belongs to a destination, if any. */
 export type PanelId = "sessions" | "board" | null;
-
-/** The title-bar shortcut a destination offers. */
 export type RoutePrimary = "newChat" | "newTask";
 
 export interface RouteDef {
@@ -77,7 +68,6 @@ export const ROUTES: RouteDef[] = [
   },
 ];
 
-/** `/board/` and `/board` are the same destination. */
 function normalizePath(path: string): string {
   return path.length > 1 ? path.replace(/\/+$/, "") : path;
 }
@@ -93,10 +83,6 @@ export function routeById(id: RouteId): RouteDef {
   return route;
 }
 
-/**
- * Chat links carry the selected conversation, so returning from another
- * page keeps the same conversation open.
- */
 export function navHref(route: RouteDef, sessionId: string | null): string {
   if (route.id === "chat" && sessionId) {
     return `${route.path}?session=${encodeURIComponent(sessionId)}`;

@@ -19,7 +19,6 @@ interface RuntimeConfigValue {
   harnesses: HarnessOption[];
   defaultModel: string;
   defaultHarness: string;
-  /** True once the request finished, successfully or not. */
   loaded: boolean;
 }
 

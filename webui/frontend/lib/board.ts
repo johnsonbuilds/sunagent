@@ -1,5 +1,3 @@
-/** Shared board vocabulary: order, labels, and display weights. */
-
 import type { MessageKey, TFunction } from "@/lib/i18n";
 import type {
   BoardSnapshot,
@@ -8,7 +6,6 @@ import type {
   TaskStatus,
 } from "@/lib/types";
 
-/** Human-readable age, matching the conversation list's wording. */
 export function relativeTime(epochSeconds: number, t: TFunction): string {
   const delta = Date.now() / 1000 - epochSeconds;
   if (delta < 60) return t("timeNow");
@@ -58,7 +55,6 @@ export const PRIORITY_WEIGHT: Record<TaskPriority, number> = {
   urgent: 3,
 };
 
-/** Tasks that moved from Doing into Review between two snapshots. */
 export function tasksEnteredReview(
   before: BoardSnapshot | null,
   after: BoardSnapshot,
@@ -70,7 +66,6 @@ export function tasksEnteredReview(
   );
 }
 
-/** Execution order of explicitly queued Todo cards. */
 export function queueOrder(tasks: BoardTask[]): Map<string, number> {
   const queued = tasks
     .filter((task) => task.status === "todo" && task.queued_at != null)

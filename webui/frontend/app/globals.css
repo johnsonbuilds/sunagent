@@ -1,63 +1,19 @@
-/* SunAgent web UI — style entry point.
- *
- * The stylesheet is split by UI area under ./styles/. The import order is
- * the cascade order, so append new partials at the end (or next to the
- * area they extend) instead of reordering the list.
- */
-
-/* Design tokens, themes and the base element reset. */
 @import "./styles/tokens.css";
-
-/* App frame, titlebar and shared icon buttons. */
 @import "./styles/shell.css";
-
-/* Shell layout: sidebar, icon rail and the main content column. */
 @import "./styles/layout.css";
-
-/* Chat: empty state, message bubbles and rendered markdown. */
 @import "./styles/chat.css";
-
-/* Transcript cards: thinking and tool-call disclosures. */
 @import "./styles/transcript-cards.css";
-
-/* Composer and its model / harness pickers. */
 @import "./styles/composer.css";
-
-/* Board page and its columns. */
 @import "./styles/board.css";
-
-/* Board task cards, tag chips and per-card actions. */
 @import "./styles/task-card.css";
-
-/* Board sidebar panel: toggles, counts and footer. */
 @import "./styles/board-sidebar.css";
-
-/* Form fields and the task detail view. */
 @import "./styles/task-detail.css";
-
-/* Modal dialog and shared buttons. */
 @import "./styles/dialog.css";
-
-/* Settings page. */
 @import "./styles/settings.css";
-
-/* Placeholder / not-found pages, toast, responsive shell rules. */
 @import "./styles/misc.css";
-
-/* Files page shell: header, tabs, toolbar and panes. */
 @import "./styles/files.css";
-
-/* Files tree: rows, language badges and change summary. */
 @import "./styles/files-tree.css";
-
-/* File preview: header and code lines. */
 @import "./styles/files-preview.css";
-
-/* highlight.js token colours. */
 @import "./styles/files-syntax.css";
-
-/* Unified / split diff views. */
 @import "./styles/files-diff.css";
-
-/* Files drawer overlay. */
 @import "./styles/files-drawer.css";

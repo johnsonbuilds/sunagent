@@ -5,10 +5,6 @@ import Link from "next/link";
 import { EmptyMark } from "@/components/Icons";
 import { useI18n } from "@/lib/i18n";
 
-/**
- * The static export's 404 page, and the view Next renders for a dynamic
- * path outside `generateStaticParams` in development.
- */
 export default function NotFound() {
   const { t } = useI18n();
 

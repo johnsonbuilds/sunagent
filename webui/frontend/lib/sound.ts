@@ -1,12 +1,3 @@
-/**
- * Notification chime for board transitions.
- *
- * Browsers keep an `AudioContext` suspended until the page has seen a user
- * gesture, so the context is created lazily, unlocked on the first gesture,
- * and reused: a transition found by polling must not be dropped just because
- * it happened outside a click.
- */
-
 let context: AudioContext | null = null;
 let primed = false;
 
@@ -32,7 +23,6 @@ function ensureContext(): AudioContext | null {
   return context;
 }
 
-/** Unlock audio on the first user gesture; safe to call on every mount. */
 export function primeNotificationSound(): void {
   if (primed || typeof window === "undefined") return;
   primed = true;
@@ -44,7 +34,6 @@ export function primeNotificationSound(): void {
   window.addEventListener("keydown", unlock, { passive: true });
 }
 
-/** Play a short two-note chime. Best-effort: any failure stays silent. */
 export function playNotificationChime(): void {
   const ctx = ensureContext();
   if (!ctx) return;

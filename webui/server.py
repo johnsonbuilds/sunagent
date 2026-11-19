@@ -1,39 +1,8 @@
 """FastAPI application that serves the SunAgent web UI.
 
-The web UI is a channel, not a second runtime: the server owns the
-session bookkeeping and the HTTP plumbing, while
-:class:`~agent_runtime.channels.webui.WebUIChannel` owns the
-translation of agent events into browser frames. The two meet at a
-single injected sink that forwards frames to the session's frame bus.
-
-Endpoints:
-
-    GET    /                          the Next.js static export (index.html)
-    GET    /api/health                liveness probe
-    GET    /api/config                model catalog, harnesses, tool defaults
-    GET    /api/sessions              list sessions, newest first
-    POST   /api/sessions              create a session (model/harness optional)
-    GET    /api/sessions/{id}         one session with its transcript
-    PATCH  /api/sessions/{id}         rename, switch model, pick harness
-    DELETE /api/sessions/{id}         delete a session
-    POST   /api/sessions/{id}/messages  send a message, start a turn
-    POST   /api/sessions/{id}/cancel    stop the running turn
-    GET    /api/sessions/{id}/events    SSE stream of frames
-    GET    /api/board                   the task board snapshot
-    POST   /api/board/tasks             create a task
-    GET    /api/board/tasks/{id}        one task with its comment/run history
-    PATCH  /api/board/tasks/{id}        edit or move a task
-    DELETE /api/board/tasks/{id}        delete a task
-    POST   /api/board/tasks/{id}/session  create or reuse its conversation
-    POST   /api/board/tasks/{id}/comments  leave feedback and re-queue
-    GET    /api/workspace/tree          one directory level, lazily
-    GET    /api/workspace/file          read a text file for preview
-    GET    /api/workspace/changes       uncommitted changes (git status)
-    GET    /api/workspace/diff          one file's diff versus HEAD
-    POST   /api/system/restart          restart the server via ./run.sh restart
-
-Every route sits behind HTTP basic authentication when a user name and
-a password are configured (see :mod:`webui.auth`).
+The server owns session bookkeeping and HTTP plumbing; the agent
+channel translates runtime events into browser frames. Every route sits
+behind HTTP basic authentication when credentials are configured.
 """
 
 from __future__ import annotations
@@ -90,9 +59,6 @@ from .workspace import WorkspaceBrowser, WorkspaceError
 
 logger = logging.getLogger(__name__)
 
-# ``npm run build`` in webui/frontend emits a static Next.js export here.
-# FastAPI serves it, which keeps the page, the API, and the event stream
-# on one origin (and therefore behind the same basic-auth challenge).
 FRONTEND_ROOT = Path(__file__).resolve().parent / "frontend" / "out"
 
 _BUILD_HINT = """<!DOCTYPE html>
@@ -126,22 +92,13 @@ _BUILD_HINT = """<!DOCTYPE html>
 
 _KEEPALIVE_SECONDS = 15.0
 
-# Delay before the detached restart command runs, giving the HTTP
-# response time to reach the browser.
 _RESTART_DELAY_SECONDS = 0.5
 
-# Every application built in this process, so the shutdown path can
-# reach the session store no matter how the app was started.
 _APPS: "weakref.WeakSet[FastAPI]" = weakref.WeakSet()
 
 
 def shutdown_active_sessions() -> None:
-    """Close the event streams and stop the running turns of every app.
-
-    Server-sent events never end on their own, and uvicorn waits for
-    open connections before it finishes shutting down. Closing them
-    here is what makes Ctrl+C return immediately.
-    """
+    """Close event streams and stop running turns of every app."""
     for app in list(_APPS):
         executor = getattr(app.state, "executor", None)
         if executor is not None:
@@ -152,13 +109,7 @@ def shutdown_active_sessions() -> None:
 
 
 def _install_exit_handlers() -> None:
-    """Close the event streams when the process is asked to stop.
-
-    The handler runs before the server's own: it closes the streams and
-    then hands the signal on, so the normal graceful shutdown still
-    happens. Installing it from the application (rather than from the
-    entry point) covers every way the server can be started.
-    """
+    """Close event streams when the process is asked to stop."""
     previous: dict[int, Any] = {}
 
     def handle(signum: int, frame: Any) -> None:
@@ -224,13 +175,7 @@ class ExecutorStateRequest(BaseModel):
 
 
 class AgentRunner:
-    """Defaults shared by every web UI session.
-
-    The model catalog and the harness list are read once at startup.
-    Per-turn objects are built by :func:`webui.turn_context.resolve_turn`
-    when a turn starts, so a session can switch models without touching
-    a turn that is already running.
-    """
+    """Defaults shared by every web UI session."""
 
     def __init__(self, runtime: RuntimeConfig | None = None) -> None:
         self.runtime = runtime if runtime is not None else RuntimeConfig.from_env()
@@ -238,8 +183,6 @@ class AgentRunner:
         self.harness: HarnessSpec = self._resolve_harness()
         listed = list_harnesses()
         if not any(spec.id == self.harness.id for spec in listed):
-            # The default may come from a path outside ``harnesses/``; it
-            # still belongs in the picker so the current value is visible.
             listed = [self.harness, *listed]
         self.harnesses: list[HarnessSpec] = listed
         self.stream = self.runtime.streaming
@@ -253,7 +196,7 @@ class AgentRunner:
             return resolve_harness(None)
 
     def status(self) -> dict[str, Any]:
-        """The browser-safe startup view: ids and labels, never secrets."""
+        """Browser-safe startup view: ids and labels, never secrets."""
         default_entry = self.catalog.default_entry
         return {
             "model": default_entry.model_id,
@@ -269,12 +212,7 @@ class AgentRunner:
 
 
 def _session_sink(session: Session) -> Callable[[dict[str, Any]], None]:
-    """Build the sink that feeds one session's frame bus.
-
-    Segment frames are the persistable form of a block, so they are
-    appended to the transcript here, before the frame reaches the
-    browser.
-    """
+    """Build the sink that feeds one session's frame bus."""
 
     def sink(frame: dict[str, Any]) -> None:
         if frame.get("type") == "segment":
@@ -296,24 +234,8 @@ def create_app(store: SessionStore | None = None,
                board: BoardStore | None = None, *,
                workspace: WorkspaceBrowser | None = None,
                enable_executor: bool = True) -> FastAPI:
-    """Build the web UI application.
-
-    ``enable_executor`` is for tests: the API and board routes are fully
-    wired, but the serial worker is not started, so a test can inspect
-    Todo transitions without launching a real model turn.
-
-    ``workspace`` pins the read-only browser to a directory.  Tests pass
-    a temporary repository; production resolves the root from the
-    environment on every request.
-    """
-    # The CLI loads .env in its entry point. The server loads it here so
-    # every launch path -- the console script, `python -m webui`, and
-    # `uvicorn webui.server:create_app --factory` -- sees the same
-    # provider configuration.
+    """Build the web UI FastAPI app."""
     load_dotenv(override=True)
-    # The web UI can run shell commands, so it is worth a password.
-    # Authentication is on when the user name and the password are
-    # configured, and off -- with a warning -- when they are not.
     credentials = credentials_from_env()
     sessions = store if store is not None else SessionStore()
     sessions.load()
@@ -420,20 +342,13 @@ def create_app(store: SessionStore | None = None,
 
     @app.post("/api/system/restart")
     async def restart_system() -> dict[str, Any]:
-        """Run ``./run.sh restart`` in the current directory.
-
-        The task is detached from the server's process group and starts
-        after a short delay, so this response reaches the browser before
-        ``run.sh`` stops the server it is talking to.
-        """
+        """Run ``./run.sh restart`` in the current directory."""
         script = Path.cwd() / "run.sh"
         if not script.is_file():
             raise HTTPException(status_code=500,
                                 detail="run.sh not found in the current directory")
 
         try:
-            # The detached shell outlives the server and waits briefly
-            # so this response is flushed before run.sh stops it.
             await asyncio.create_subprocess_exec(
                 "bash", "-c",
                 f"sleep {_RESTART_DELAY_SECONDS}; exec ./run.sh restart",
@@ -463,8 +378,6 @@ def create_app(store: SessionStore | None = None,
             _require_model(runner.catalog, model)
         if harness:
             _require_harness(harness)
-        # New sessions always carry explicit ids, so the browser does not
-        # have to guess the defaults and the first turn needs no backfill.
         session = sessions.create(
             title or None,
             model=model or runner.catalog.default,
@@ -482,14 +395,9 @@ def create_app(store: SessionStore | None = None,
         session = _require_session(sessions, session_id)
         harness_changed = bool(
             payload.harness and payload.harness != session.harness)
-        # Validate everything before mutating, so a rejected request
-        # leaves the session untouched.
         if payload.model:
             _require_model(runner.catalog, payload.model)
         if harness_changed:
-            # The harness owns the system prompt and tool set, so it is
-            # only pickable before the first turn. The model can change
-            # at any time; it takes effect on the next turn.
             if session.harness_locked:
                 raise HTTPException(
                     status_code=409,
@@ -518,8 +426,6 @@ def create_app(store: SessionStore | None = None,
         try:
             tasks.unlink_session(session_id)
         except BoardStorageError:
-            # The conversation is already gone; a stale link is better
-            # than failing the delete the user asked for.
             logger.warning("webui.board.unlink_failed session=%s", session_id)
         return {"ok": True}
 
@@ -533,9 +439,6 @@ def create_app(store: SessionStore | None = None,
         if session.busy:
             raise HTTPException(status_code=409, detail="session is busy")
 
-        # Resolve the session's ids into an immutable snapshot before the
-        # user message is recorded: a bad catalog entry is a 4xx, not a
-        # dangling empty turn. The snapshot is all the turn will see.
         session.model = session.model or runner.catalog.default
         session.harness = session.harness or runner.harness.id
         snapshot = _resolve_snapshot(session, runner)
@@ -546,8 +449,6 @@ def create_app(store: SessionStore | None = None,
             _execute_turn(session, message, snapshot, trace, events,
                           channel, sessions))
         session.task = task
-        # A queued board task may be waiting for this conversation to
-        # become idle; let the executor re-check once the turn ends.
         task.add_done_callback(lambda _: executor.wake())
         return {"run_id": run_id}
 
@@ -623,8 +524,6 @@ def create_app(store: SessionStore | None = None,
         before = tasks.get(task_id)
         if before is None:
             raise HTTPException(status_code=404, detail="task not found")
-        # ``exclude_unset`` keeps "field omitted" distinct from "field set
-        # to null"; null is dropped so it can never erase a real value.
         patch = {key: value for key, value in
                  payload.model_dump(exclude_unset=True).items()
                  if value is not None}
@@ -650,9 +549,6 @@ def create_app(store: SessionStore | None = None,
         after = tasks.get(task_id)
         assert after is not None
         if linked is not None:
-            # Keep the card and its conversation in agreement. The model
-            # may change at any time, including back to the default; the
-            # harness only while the conversation is still empty.
             changed = False
             if "model" in patch and linked.model != after.model:
                 linked.model = after.model
@@ -665,8 +561,6 @@ def create_app(store: SessionStore | None = None,
                 linked.updated_at = time.time()
                 sessions.save(linked)
         if before.status == "doing" and after.status != "doing":
-            # The human changed the card while the executor owned it:
-            # cancel the run; finish_run will not overwrite their status.
             executor.cancel_task(task_id)
         if after.status == "todo":
             executor.wake()
@@ -764,14 +658,7 @@ def create_app(store: SessionStore | None = None,
     @app.api_route("/{path:path}", methods=["GET", "HEAD"],
                    include_in_schema=False)
     async def frontend_file(path: str) -> FileResponse:
-        """Serve remaining files from the static Next.js export.
-
-        The export is a directory of plain files (``index.txt``,
-        ``404.html``, icons and so on). Only paths that stay inside the
-        export root are served. A path without an extension also tries
-        the page forms Next writes (``board.html``, ``board/index.html``),
-        so deep links and refreshes work without an SPA fallback.
-        """
+        """Serve remaining files from the static Next.js export."""
         root = FRONTEND_ROOT.resolve()
 
         def resolve_inside(relative: str) -> Path | None:
@@ -821,17 +708,7 @@ async def _execute_turn(session: Session, message: str,
                         snapshot: TurnSnapshot, trace: RunTrace,
                         events: EventEmitter, channel: WebUIChannel,
                         store: SessionStore) -> TurnOutcome:
-    """Run one agent turn and report whether it completed cleanly.
-
-    ``snapshot`` is captured when the turn starts; nothing here reads the
-    session's current model or harness, so a switch made while the turn
-    is running cannot affect it.
-
-    ``AgentTurn`` serialises some runtime failures into the returned
-    text, so the event stream is watched for ``runtime.error`` as well as
-    the usual exception path.  Without that, a failed task would look
-    completed and move to Review.
-    """
+    """Run one agent turn and report whether it completed cleanly."""
     errors: list[str] = []
 
     def collect_error(event: Any) -> None:
@@ -927,8 +804,6 @@ def _resolve_snapshot(session: Session, runner: AgentRunner) -> TurnSnapshot:
     except (ModelCatalogError, HarnessError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        # The exception text may carry endpoint details; log only the
-        # type and keep the browser message generic.
         logger.warning("webui.snapshot.failed session=%s model=%s error=%s",
                        session.id, session.model, type(exc).__name__)
         raise HTTPException(
@@ -953,11 +828,7 @@ def _last_event_id(request: Request) -> int:
 
 
 def _trace_path(run_id: str) -> Path:
-    """Where the trace of one turn is written.
-
-    Traces are a sibling of the sessions, not a child of them: both
-    live under the runtime home (see :mod:`agent_runtime.storage`).
-    """
+    """Where the trace of one turn is written."""
     return storage.trace_path(run_id)
 
 

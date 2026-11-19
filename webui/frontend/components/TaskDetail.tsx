@@ -79,9 +79,6 @@ export default function TaskDetail({
       });
   }, [open, task?.id, task?.updated_at, onFetch]);
 
-  // Opening a card lands on the newest activity. Wait for the first detail
-  // payload so the jump covers the real content, and jump only once per
-  // opening so a background refresh never yanks the reader away.
   useLayoutEffect(() => {
     if (!open) {
       jumpedRef.current = false;
@@ -115,8 +112,6 @@ export default function TaskDetail({
       await onComment(task.id, text);
       setFailure("");
       setBody("");
-      // The store already applied the refreshed board snapshot, so the
-      // dialog has nothing left to show: close it on success.
       onClose();
     } catch (error) {
       setFailure(errorMessage(error));

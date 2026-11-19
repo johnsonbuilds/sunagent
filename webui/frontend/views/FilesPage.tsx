@@ -42,19 +42,6 @@ function filesUrl(tab: FilesTabId, path: string): string {
   return query ? `${window.location.pathname}?${query}` : window.location.pathname;
 }
 
-/**
- * Update the address bar without asking Next to navigate.
- *
- * `router.replace` on a static export fetches the RSC payload for the new
- * URL and only then re-renders the same page.  When that fetch cannot be
- * completed (a stale tab whose build id no longer matches, a static host
- * that does not publish `.txt` payloads, a mobile browser that aborts it),
- * the router falls back to a plain browser navigation: the document
- * reloads, the file tree starts empty and re-fetches the root, and the
- * user sees a bare "Loading…" flash.  This page already reads the URL on
- * mount and on `popstate`, so writing history directly keeps the address
- * bar in step with no navigation at all.
- */
 function writeHistory(
   mode: "push" | "replace",
   nextTab: FilesTabId,
@@ -177,14 +164,10 @@ export default function FilesPage() {
     return () => window.removeEventListener("popstate", onPopState);
   }, [openFilesPath]);
 
-  // A protected file has no diff to fetch; the change list is what tells
-  // a deep link that the selected entry is protected.
   useEffect(() => {
     if (changeEntry?.protected) setDiffProtected(changeEntry.path);
   }, [changeEntry]);
 
-  // A deep link to a changed file should reveal its ancestor directories;
-  // once the change list arrives, keep the URL selection expanded.
   useEffect(() => {
     if (tab !== "changes" || !changesPath || !changes.data) return;
     setChangeExpanded((current) => {
@@ -208,8 +191,6 @@ export default function FilesPage() {
     setFilesPath(path);
     setSelectedFile("");
     setProtectedPath("");
-    // Keep the URL pointing at the directory, open or closed: a reload
-    // reopens it instead of forgetting where the user was.
     writeHistory("replace", "files", path);
   };
 
@@ -218,7 +199,6 @@ export default function FilesPage() {
     setProtectedPath(entry.protected ? entry.path : "");
     setSelectedFile(entry.protected ? "" : entry.path);
     if (!entry.protected && selectedFile === entry.path) {
-      // Re-selecting the open file is the cheap way to pick up an edit.
       setPreviewVersion((value) => value + 1);
     }
     writeHistory("replace", "files", entry.path);

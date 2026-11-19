@@ -14,10 +14,6 @@ from .auth import DEFAULT_USER, PASSWORD_ENV, USER_ENV, auth_warning
 from .server import create_app
 
 
-# Uvicorn waits for open connections before it gives up on a graceful
-# shutdown. The event streams never end on their own, so the
-# application closes them when the process is asked to stop; this
-# timeout is only the backstop for the paths that do not run the app.
 _GRACEFUL_TIMEOUT = 10
 
 
@@ -26,8 +22,6 @@ async def _serve(app: Any, host: str, port: int, log_level: str,
     import uvicorn
 
     if reload:
-        # Reload needs an import string: the child process builds the
-        # app itself and installs its own exit handlers.
         config = uvicorn.Config("webui.server:create_app", factory=True,
                                 host=host, port=port, log_level=log_level,
                                 timeout_graceful_shutdown=_GRACEFUL_TIMEOUT)
@@ -75,9 +69,6 @@ def main() -> None:
     except ImportError as exc:  # pragma: no cover - dependency guard
         raise SystemExit("The web UI needs uvicorn: pip install fastapi uvicorn") from exc
 
-    # An open web UI is an open shell. Say so, without stopping the
-    # server: the web UI is a local tool first, and the password is
-    # there for the day it is reachable from somewhere else.
     load_dotenv(override=True)
     warning = auth_warning()
     if warning is None:
@@ -88,17 +79,12 @@ def main() -> None:
               f"and {PASSWORD_ENV} in .env to lock it down.",
               file=sys.stderr)
 
-    # With --reload the child process builds the app from the import
-    # string, so the parent does not need one.
     app = None if args.reload else create_app()
 
     try:
         asyncio.run(_serve(app, args.host, args.port, args.log_level,
                            args.reload))
     except KeyboardInterrupt:
-        # Uvicorn re-raises the interrupt once it has finished shutting
-        # down. The server is already stopped, so exit quietly instead
-        # of printing a traceback.
         raise SystemExit(130)
 
 

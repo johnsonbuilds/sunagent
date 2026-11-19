@@ -1,23 +1,9 @@
-/* Merge intra-line word ranges into highlight.js HTML.
- *
- * The highlighter returns HTML with its own `<span>`s; the ranges are
- * character offsets into the plain line.  This walker inserts a marker
- * span at every range boundary and closes/reopens it at tag boundaries,
- * so the output is always correctly nested — a range may start inside
- * one syntax token and end inside the next.
- */
-
 import { escapeHtml } from "@/lib/markdown";
 import type { DiffRange } from "@/lib/wordDiff";
 
 const MARK_CLASS = "diff-word";
 const ENTITY = /^&(?:#\d+|#x[0-9a-fA-F]+|[a-zA-Z]+);/;
 
-/**
- * Map decoded character offsets of one text node to raw offsets, so a
- * range boundary that falls on `&amp;` never splits the entity.
- * Returns null when the text has no entities and raw offsets are equal.
- */
 function rawOffsets(raw: string): number[] | null {
   if (!raw.includes("&")) return null;
   const offsets: number[] = [0];
@@ -46,7 +32,6 @@ function slice(
   return offsets ? raw.slice(offsets[from], offsets[to]) : raw.slice(from, to);
 }
 
-/** Wrap the given character ranges in `diff-word` spans. */
 export function markRanges(html: string, ranges: DiffRange[]): string {
   if (!html || ranges.length === 0) return html;
 
@@ -113,7 +98,6 @@ export function markRanges(html: string, ranges: DiffRange[]): string {
   return out.join("");
 }
 
-/** Same marker for a plain, unhighlighted line. */
 export function markText(text: string, ranges: DiffRange[]): string {
   return markRanges(escapeHtml(text), ranges);
 }

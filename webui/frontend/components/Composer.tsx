@@ -49,8 +49,8 @@ export default function Composer() {
     element.style.height = `${Math.min(element.scrollHeight, 220)}px`;
   }, [draft]);
 
-  // Close on outside click / Escape. The menu floats over the transcript,
-  // so it must not depend on the button keeping focus.
+  // The menu floats over the transcript, so it must not depend on the
+  // button keeping focus.
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (event: PointerEvent) => {

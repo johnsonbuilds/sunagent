@@ -43,11 +43,6 @@ function chatHref(sessionId: string | null): string {
   return sessionId ? `/?session=${encodeURIComponent(sessionId)}` : "/";
 }
 
-/**
- * The persistent frame: title bar, rail, sidebar and main area. The
- * current route is passed as children, so switching pages never rebuilds
- * the shell or the providers above it.
- */
 export default function AppShell({ children }: { children: ReactNode }) {
   const { t } = useI18n();
   const { toggle: toggleTheme } = useTheme();
@@ -62,8 +57,6 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   const toggleFilesDrawer = () => setFilesDrawerOpen((prev) => !prev);
 
-  // The drawer covers the rail, so a hamburger click while it is open only
-  // dismisses the drawer; the sidebar state is left alone.
   const toggleSidebar = useCallback(() => {
     if (filesDrawerOpen) {
       setFilesDrawerOpen(false);
@@ -99,9 +92,6 @@ export default function AppShell({ children }: { children: ReactNode }) {
     onPrimary = () => board.openCreateTask("backlog");
   }
 
-  // Same rule as the hamburger button: while the files drawer is open, a
-  // title-bar action only dismisses it. Ctrl/Cmd+K keeps running the action
-  // directly, since the shortcut is not a click on that button.
   const primary = onPrimary;
   const primaryClick = primary
     ? () => {
@@ -113,8 +103,6 @@ export default function AppShell({ children }: { children: ReactNode }) {
       }
     : undefined;
 
-  // URL <-> selected conversation. The router owns page navigation; this
-  // only keeps `?session=` in step with the active conversation.
   const activeIdRef = useRef(sessions.activeId);
   activeIdRef.current = sessions.activeId;
   const pathnameRef = useRef(pathname);
@@ -174,7 +162,6 @@ export default function AppShell({ children }: { children: ReactNode }) {
     return () => document.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  // Entering the chat page with a conversation in the URL selects it.
   useEffect(() => {
     if (lastPathRef.current === pathname) return;
     lastPathRef.current = pathname;
@@ -189,8 +176,6 @@ export default function AppShell({ children }: { children: ReactNode }) {
     });
   }, [pathname, sessions.selectSession, recoverSelection]);
 
-  // Selecting a conversation rewrites the query without adding history
-  // entries, so the back button does not walk through every session.
   useEffect(() => {
     if (pathname !== "/" || !sessions.activeId) return;
     if (skipUrlSyncRef.current) {
@@ -201,8 +186,6 @@ export default function AppShell({ children }: { children: ReactNode }) {
     router.replace(chatHref(sessions.activeId), { scroll: false });
   }, [pathname, sessions.activeId, router]);
 
-  // Browser back/forward between two chat URLs changes only the query, so
-  // the pathname effect above does not run.
   useEffect(() => {
     const onPopState = () => {
       if (pathnameRef.current !== "/") return;

@@ -1,10 +1,7 @@
 """SunAgent web UI: a browser front end for the agent runtime.
 
-The web UI is a channel: it consumes the same user-facing agent events
-as the CLI and renders them in a browser. This package holds the HTTP
-server and the session store; the Next.js front end lives in
-``webui/frontend`` and the event-to-frame translation lives in
-:mod:`agent_runtime.channels.webui`.
+This package holds the HTTP server and the session store; the Next.js
+front end lives in ``webui/frontend``.
 """
 
 from __future__ import annotations

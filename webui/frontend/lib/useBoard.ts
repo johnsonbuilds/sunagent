@@ -24,7 +24,6 @@ import type {
   TaskStatus,
 } from "@/lib/types";
 
-/** The board polls faster while it is on screen, but never stops. */
 const POLL_FAST_MS = 5000;
 const POLL_SLOW_MS = 25000;
 
@@ -37,7 +36,6 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Apply a move locally so the card follows the pointer immediately. */
 function moveOptimistic(
   snapshot: BoardSnapshot,
   taskId: string,
@@ -100,8 +98,6 @@ export function useBoard({ onError, fastPoll = false }: UseBoardOptions) {
     loadedRef.current = true;
   }, []);
 
-  // A task landing in Review needs a human look, whether the executor put
-  // it there or a person dragged the card.
   const notifyReview = useCallback(
     (before: BoardSnapshot | null, after: BoardSnapshot) => {
       if (tasksEnteredReview(before, after).length > 0) {
@@ -112,19 +108,13 @@ export function useBoard({ onError, fastPoll = false }: UseBoardOptions) {
   );
 
   const refresh = useCallback(async (force = false) => {
-    // A mutation in flight is the source of truth until it returns.
     if (!force && pendingRef.current > 0) return;
     if (!loadedRef.current) setLoading(true);
     const epoch = epochRef.current;
     try {
       const next = await api<BoardSnapshot>("/api/board");
-      // A poll that started before a mutation must not overwrite the
-      // newer snapshot the mutation already applied.
       if (pendingRef.current > 0 || epochRef.current !== epoch) return;
       const current = snapshotRef.current;
-      // ``updated_at`` only tracks board edits; a linked conversation
-      // can start or stop running without touching it, so compare the
-      // whole payload to pick up the derived session status too.
       if (!current || JSON.stringify(current) !== JSON.stringify(next)) {
         snapshotRef.current = next;
         setSnapshot(next);

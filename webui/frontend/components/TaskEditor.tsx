@@ -62,7 +62,6 @@ export default function TaskEditor({
   const [tagsText, setTagsText] = useState("");
   const [titleError, setTitleError] = useState("");
 
-  /** Quick-pick tags offered as clickable chips below the tags input. */
   const DEFAULT_TAG_CHIPS = ["bugfix", "feature"];
 
   const toggleTag = (tag: string) => {
@@ -94,8 +93,6 @@ export default function TaskEditor({
       lastResetKey.current = "";
       return;
     }
-    // Polling replaces the task object every few seconds. Reset only
-    // when a different card (or a fresh "new task") opens.
     if (lastResetKey.current === resetKey) return;
     lastResetKey.current = resetKey;
     setTitle(task?.title ?? "");
@@ -141,7 +138,6 @@ export default function TaskEditor({
         harness,
       });
     } catch {
-      // The parent already reported the failure; keep the dialog open.
     } finally {
       setSaving(false);
     }

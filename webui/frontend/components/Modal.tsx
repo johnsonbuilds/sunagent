@@ -16,11 +16,7 @@ interface ModalProps {
   wide?: boolean;
 }
 
-/**
- * Generic dialog shell built on the native <dialog> element, so focus
- * management, Esc handling and the backdrop come from the browser.
- * Put `data-autofocus` on the element that should receive focus.
- */
+/** Native <dialog> shell: focus, Esc and the backdrop come from the browser. */
 export default function Modal({
   open,
   title,

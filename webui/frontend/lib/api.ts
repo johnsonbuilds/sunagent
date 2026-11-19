@@ -1,4 +1,3 @@
-/** Thin wrapper over fetch with the error handling the UI expects. */
 export async function api<T>(
   path: string,
   options: RequestInit = {},

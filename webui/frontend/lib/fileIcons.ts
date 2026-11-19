@@ -1,10 +1,3 @@
-/**
- * Language hints for the tree, the preview header and the highlighter.
- *
- * The tree uses a compact coloured label instead of a full icon per
- * language: the label is legible at 15px, needs no extra assets, and
- * carries the same information. `highlight` is the highlight.js id.
- */
 export interface FileLanguage {
   id: string;
   label: string;

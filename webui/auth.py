@@ -1,17 +1,11 @@
 """Access control for the web UI.
 
-The web UI drives an agent that can run shell commands, so anything
-that reaches the port can drive it too. A reverse proxy would be the
-usual answer, but the app also has to be usable straight from a
-terminal, so the check lives inside the app.
+One username, one shared secret, checked on every request with a
+constant-time comparison. The browser shows its own prompt and caches
+the credentials, so the static page, the JSON API, and the SSE stream
+all work without the client knowing anything about auth.
 
-The scheme is the simplest one that still holds up: one username, one
-shared secret, checked on every request with a constant-time
-comparison. The browser shows its own prompt and caches the
-credentials for the origin, so the static page, the JSON API, and the
-SSE stream all work without the client knowing anything about auth.
-
-Authentication is optional, and off by default: the web UI is a local
+Authentication is optional and off by default: the web UI is a local
 tool, and a tool that asks for a password on every start is a tool
 people leave running without one. When it is off, the launcher says so,
 because the web UI can run shell commands and "only on localhost" is
@@ -46,12 +40,8 @@ class Credentials(NamedTuple):
 def credentials_from_env() -> Credentials | None:
     """Read the credentials from the environment.
 
-    Both variables are needed, and the user name is the switch: set
-    ``AGENT_RUNTIME_WEBUI_AUTH_USER`` to ``admin`` (or any other
-    name) together with a password, and every request has to carry
-    them. Leave the user name out and the web UI is open.
-
-    The password is read verbatim: no trimming, no defaults, and a
+    Both variables are needed; the user name is the switch. The
+    password is read verbatim: no trimming, no defaults, and a
     password that is only whitespace still counts as a password.
     """
     user = os.getenv(USER_ENV, "").strip()
@@ -62,12 +52,7 @@ def credentials_from_env() -> Credentials | None:
 
 
 def auth_warning() -> str | None:
-    """Why the web UI is served without a password, or ``None``.
-
-    The launcher prints this so that an open web UI is never a silent
-    accident: it can run shell commands, so everyone who can reach the
-    port can drive the agent.
-    """
+    """Why the web UI is served without a password, or ``None``."""
     if credentials_from_env() is not None:
         return None
     user = os.getenv(USER_ENV, "").strip()
@@ -82,10 +67,9 @@ def auth_warning() -> str | None:
 class BasicAuthMiddleware:
     """Require the right credentials on every request.
 
-    This is written as plain ASGI rather than as a FastAPI dependency
-    so that it also covers the mounted static files, and so that it
-    does not wrap the event stream: the SSE response must reach the
-    browser as one long-lived response, not as a buffered one.
+    Written as plain ASGI so it also covers the mounted static files,
+    and so it does not wrap the event stream: the SSE response must
+    reach the browser as one long-lived response, not a buffered one.
     """
 
     def __init__(self, app: ASGIApp, credentials: Credentials,

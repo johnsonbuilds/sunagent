@@ -39,7 +39,6 @@ interface BoardActions {
   confirmDeleteTask: () => Promise<void>;
   cancelDeleteTask: () => void;
   saveTask: (input: TaskInput) => Promise<void>;
-  /** Ensures the task has a conversation and returns its id for navigation. */
   openTaskConversation: (task: BoardTask) => Promise<string | null>;
 }
 
@@ -63,8 +62,6 @@ export function BoardProvider({
   const [deleteTarget, setDeleteTarget] = useState<BoardTask | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  // Chat activity and session deletion ask the board to refresh sooner
-  // than the poll timer would.
   useEffect(() => {
     if (boardSyncSeq === 0) return;
     void board.refresh(true);
@@ -88,8 +85,6 @@ export function BoardProvider({
   const closeDetail = useCallback(() => setDetailTaskId(null), []);
 
   const requestDeleteTask = useCallback((task: BoardTask) => {
-    // The editor and the confirm dialog are both native modals, so
-    // only one can be open at a time.
     setEditor(null);
     setDetailTaskId(null);
     setDeleteTarget(task);
@@ -106,7 +101,6 @@ export function BoardProvider({
       await board.deleteTask(deleteTarget.id);
       setDeleteTarget(null);
     } catch {
-      // The board hook already showed the error.
     } finally {
       setDeleting(false);
     }
@@ -174,7 +168,6 @@ export function BoardProvider({
         await refreshSessions();
         return sessionId;
       } catch {
-        // The board hook already showed the error.
         return null;
       }
     },
@@ -182,8 +175,6 @@ export function BoardProvider({
   );
 
   useEffect(() => {
-    // A card can disappear because another tab deleted it, or because
-    // this tab deleted it while a dialog was open.
     if (!board.snapshot) return;
     const ids = new Set(board.snapshot.tasks.map((task) => task.id));
     if (editor?.mode === "edit" && !ids.has(editor.taskId)) {

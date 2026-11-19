@@ -14,8 +14,6 @@ interface ThemeContextValue {
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
-/** The document attribute is the source of truth; the inline script in
- * `app/layout.tsx` applies the stored value before hydration. */
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const toggle = useCallback(() => {
     const current = document.documentElement.getAttribute("data-theme");

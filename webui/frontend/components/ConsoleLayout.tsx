@@ -11,15 +11,8 @@ import { SessionsProvider } from "@/lib/stores/sessions";
 import { ThemeProvider } from "@/lib/stores/theme";
 import { ToastProvider } from "@/lib/stores/toast";
 
-/**
- * Providers and the frame live in the console layout, so navigating
- * between pages keeps the event stream, board snapshot and sidebar state.
- * Only the route page below `AppShell` is swapped.
- */
 export default function ConsoleLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  // The board polls every 5s while it is visible, and backs off to 25s
-  // on other pages without ever stopping.
   const fastPoll = matchRoute(pathname)?.id === "board";
 
   return (

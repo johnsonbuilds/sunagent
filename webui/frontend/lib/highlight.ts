@@ -1,15 +1,5 @@
 import type { HLJSApi } from "highlight.js";
 
-/**
- * Lazy syntax highlighting.
- *
- * Only the core and the language modules a user actually opens are
- * loaded, so the first page view carries no grammar.  Output is HTML from
- * highlight.js (which escapes the source text); callers may inject it,
- * but must never pass file content through `dangerouslySetInnerHTML`
- * without this function.
- */
-
 export const MAX_HIGHLIGHT_BYTES = 256 * 1024;
 export const MAX_HIGHLIGHT_LINES = 2000;
 
@@ -107,7 +97,6 @@ function highlightWith(
   }
 }
 
-/** Highlight a whole file for the preview. `cacheKey` is path + mtime. */
 export async function highlightCode(
   code: string,
   language: string | null,
@@ -134,7 +123,6 @@ export async function highlightCode(
   return result;
 }
 
-/** Highlight one diff line. Identical lines share a cache entry. */
 export async function highlightLine(
   text: string,
   language: string | null,

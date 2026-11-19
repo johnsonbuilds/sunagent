@@ -32,10 +32,6 @@ interface IconRailProps {
   onNavigate: () => void;
 }
 
-/**
- * Top-level destinations. Links are real URLs, so middle-click, new tabs
- * and the back button all work; the active item comes from the path.
- */
 export default function IconRail({ onNavigate }: IconRailProps) {
   const { t } = useI18n();
   const pathname = usePathname();

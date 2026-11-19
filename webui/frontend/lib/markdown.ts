@@ -1,12 +1,3 @@
-/* A small Markdown renderer for assistant messages.
- *
- * It is deliberately self-contained: the web UI must work offline, so
- * no CDN and no bundler-level plugin is involved. The supported subset
- * covers what models actually emit in chat: paragraphs, headings,
- * lists, quotes, fenced code, inline code, emphasis, links, rules, and
- * tables. This is a direct port of the original dependency-free client.
- */
-
 export function escapeHtml(text: unknown): string {
   return String(text)
     .replace(/&/g, "&amp;")

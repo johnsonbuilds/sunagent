@@ -10,7 +10,6 @@ interface PlaceholderPageProps {
   Icon: () => ReactElement;
 }
 
-/** Shared empty state for destinations whose data layer is not wired up. */
 export default function PlaceholderPage({
   titleKey,
   descriptionKey,

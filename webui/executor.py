@@ -1,14 +1,12 @@
 """Serial task execution for the web UI board.
 
-The board's ``todo`` column is the queue.  A single asyncio worker claims
-the highest-priority queued task, runs one turn for its conversation,
-and then moves the card to ``review``.  There is deliberately no worker
-pool: the board is a single-user tool, and serial execution keeps file
-and command side effects predictable.
+A single asyncio worker claims the highest-priority queued task, runs
+one turn for its conversation, and moves the card to ``review``. Serial
+execution keeps file and command side effects predictable.
 
-Only tasks that were explicitly queued (``queued_at``) are executed.
-That lets a board created before this feature keep its old ``todo``
-cards without suddenly launching them on startup.
+Only tasks that were explicitly queued (``queued_at``) are executed,
+so a board created before this feature keeps its old ``todo`` cards
+without suddenly launching them on startup.
 """
 
 from __future__ import annotations
@@ -55,15 +53,7 @@ class _CurrentRun:
 
 
 def _task_prompt(task: BoardTask, *, resuming: bool = False) -> str:
-    """The user message for this run.
-
-    An interrupted run continues the existing conversation instead of
-    resending the description.  A first run otherwise includes the
-    description so a fresh session has the task context; any feedback
-    waiting for that run is appended.  Later runs send only the feedback
-    that queued the card; a manual re-run with no new comment falls back
-    to the description.
-    """
+    """The user message for this run."""
     feedback = [
         str(comment.get("body") or "")
         for comment in task.comments
@@ -154,9 +144,9 @@ class BoardExecutor:
         if loop is not None:
             try:
                 await loop
-            except asyncio.CancelledError:  # pragma: no cover - shutdown path
+            except asyncio.CancelledError:
                 pass
-            except Exception:  # pragma: no cover - defensive shutdown
+            except Exception:
                 logger.exception("webui.board.executor.stop_failed")
 
     async def _loop(self) -> None:
@@ -247,8 +237,6 @@ class BoardExecutor:
                         task.id, task.run_id,
                         error="Interrupted by server shutdown", resume=True)
                 else:
-                    # A user moving the card out of Doing wins the race
-                    # because finish_run only touches a still-Doing card.
                     self.board.finish_run(
                         task.id, task.run_id, status="review",
                         error="Run cancelled", result="cancelled")
@@ -296,7 +284,7 @@ class BoardExecutor:
             self.board.finish_run(task.id, task.run_id,
                                   status=status, error=error,
                                   response=response, result=result)
-        except Exception:  # pragma: no cover - board write failure
+        except Exception:
             logger.exception("webui.board.executor.finish_failed task=%s",
                              task.id)
 

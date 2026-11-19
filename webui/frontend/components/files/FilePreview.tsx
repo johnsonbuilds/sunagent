@@ -162,7 +162,6 @@ export default function FilePreview({
             </div>
             <pre
               className="files-code-hl hljs"
-              // highlight.js escapes the source before adding its spans.
               dangerouslySetInnerHTML={{ __html: highlighted }}
             />
           </div>
