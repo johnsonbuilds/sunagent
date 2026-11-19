@@ -198,6 +198,46 @@ class BoardExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.calls,
                          ["description for Reuse", "description for Reuse"])
 
+    async def test_first_run_includes_description_and_pending_comment(
+            self) -> None:
+        task = self._task("Commented")
+        updated, deferred = self.board.add_comment(
+            task["id"], "Please cover the timeout case")
+        self.assertFalse(deferred)
+        self.assertEqual(updated["status"], "todo")
+
+        self._start()
+        await self._wait_until(
+            lambda: self.board.get(task["id"]).status == "review")
+
+        self.assertEqual(self.calls, [
+            "description for Commented\n\nPlease cover the timeout case",
+        ])
+        self.assertEqual(len(self.board.get(task["id"]).runs), 1)
+
+    async def test_restart_resends_pending_comment_with_description(
+            self) -> None:
+        task = self._task("Restarted")
+        claimed = self.board.claim_next_todo()
+        self.assertIsNotNone(claimed)
+        _, deferred = self.board.add_comment(
+            task["id"], "Please retry with a timeout")
+        self.assertTrue(deferred)
+
+        self.assertEqual(self.board.recover_interrupted(), 1)
+        stored = self.board.get(task["id"])
+        self.assertEqual(stored.status, "todo")
+        self.assertIsNone(stored.comments[0]["run_id"])
+
+        self._start()
+        await self._wait_until(
+            lambda: self.board.get(task["id"]).status == "review")
+
+        self.assertEqual(self.calls, [
+            "description for Restarted\n\nPlease retry with a timeout",
+        ])
+        self.assertEqual(len(self.board.get(task["id"]).runs), 1)
+
     async def test_priority_change_while_running_does_not_preempt(self) -> None:
         gate = asyncio.Event()
         started = asyncio.Event()

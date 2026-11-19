@@ -52,19 +52,20 @@ class _CurrentRun:
 def _task_prompt(task: BoardTask) -> str:
     """The user message for this run.
 
-    The first run always sends the description verbatim.  Later runs send
-    the feedback that queued the card; a manual re-run with no new
-    comment falls back to the description.
+    The first run always includes the description so a fresh session has
+    the task context; any feedback waiting for that run is appended.
+    Later runs send only the feedback that queued the card; a manual
+    re-run with no new comment falls back to the description.
     """
-    if not task.runs:
-        return task.description
     feedback = [
         str(comment.get("body") or "")
         for comment in task.comments
         if task.run_id and comment.get("run_id") == task.run_id
     ]
     feedback = [body for body in feedback if body]
-    return "\n\n".join(feedback) if feedback else task.description
+    parts = [task.description] if not task.runs else []
+    parts.extend(feedback)
+    return "\n\n".join(parts) if parts else task.description
 
 
 class BoardExecutor:

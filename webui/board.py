@@ -718,13 +718,14 @@ class BoardStore:
             target.started_at = now
             target.finished_at = None
             target.last_error = None
-            if target.runs:
-                # The first run always sends the description verbatim.
-                # Later runs carry the feedback that queued this card;
-                # mark it as consumed by this run before it starts.
-                for comment in target.comments:
-                    if comment.get("run_id") is None:
-                        comment["run_id"] = target.run_id
+            # Mark any pending comments as consumed by this run before it
+            # starts.  The first run sends them alongside the description so
+            # a fresh session still gets the task context; later runs carry
+            # only the feedback.  Pending comments also exist when a previous
+            # run was interrupted (e.g. by a restart) before it consumed them.
+            for comment in target.comments:
+                if comment.get("run_id") is None:
+                    comment["run_id"] = target.run_id
             target.position = doing_count
             target.updated_at = now
             self._commit(tasks, now)
@@ -742,8 +743,7 @@ class BoardStore:
         """Finish one executor run, but only if it still owns the card.
 
         The run's final answer is appended to the task history.  If new
-        comments arrived while it was running (or were already waiting
-        before the first description run), the card returns to Todo
+        comments arrived while it was running, the card returns to Todo
         instead of Review so the executor sends the feedback next.
         """
         now = time.time()

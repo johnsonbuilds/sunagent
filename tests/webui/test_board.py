@@ -257,7 +257,7 @@ class BoardStoreTests(unittest.TestCase):
             self.assertEqual(session.model, "task-model")
             self.assertEqual(session.harness, "task-harness")
 
-    def test_comment_requeues_and_records_run_history(self) -> None:
+    def test_comment_consumed_by_first_run(self) -> None:
         with TemporaryDirectory() as root:
             board = self._board(root)
             task = self._create(board, "Feedback", status="review")
@@ -272,34 +272,25 @@ class BoardStoreTests(unittest.TestCase):
             self.assertEqual(comment["body"], "Please add a timeout test")
             self.assertIsNone(comment["run_id"])
 
-            # The first run sends the description and leaves the pre-run
-            # comment pending, so finishing it queues a follow-up.
+            # A pre-run comment is consumed by the first run: it is marked
+            # with the run's id at claim time, so the first run sends the
+            # feedback alongside the description and the task goes to
+            # review without requeueing.
             first = board.claim_next_todo()
-            self.assertIsNone(board.get(task["id"]).comments[0]["run_id"])
+            self.assertIsNotNone(first)
+            self.assertEqual(board.get(task["id"]).comments[0]["run_id"],
+                             first.run_id)
             self.assertTrue(board.finish_run(first.id, first.run_id,
                                              response="first answer"))
-            waited = board.get(task["id"])
-            self.assertEqual(waited.status, "todo")
-            self.assertEqual(len(waited.runs), 1)
-            self.assertEqual(waited.runs[0]["response"], "first answer")
-
-            # The follow-up consumes the comment and records its answer.
-            second = board.claim_next_todo()
-            self.assertEqual(board.get(task["id"]).comments[0]["run_id"],
-                             second.run_id)
-            self.assertTrue(board.finish_run(second.id, second.run_id,
-                                             response="second answer"))
             stored = board.get(task["id"])
             self.assertEqual(stored.status, "review")
-            self.assertEqual([run["response"] for run in stored.runs],
-                             ["first answer", "second answer"])
-            self.assertEqual([run["status"] for run in stored.runs],
-                             ["completed", "completed"])
+            self.assertEqual(len(stored.runs), 1)
+            self.assertEqual(stored.runs[0]["response"], "first answer")
 
             reloaded = self._board(root)
             persisted = reloaded.get(task["id"])
             self.assertEqual(len(persisted.comments), 1)
-            self.assertEqual(len(persisted.runs), 2)
+            self.assertEqual(len(persisted.runs), 1)
 
     def test_comment_while_doing_waits_for_the_current_run(self) -> None:
         with TemporaryDirectory() as root:

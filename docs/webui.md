@@ -245,9 +245,10 @@ backlog ──(human)──> todo ──(worker)──> doing ──(completed)�
 
 * Order is `urgent > high > normal > low`, then the card's position in
   the Todo column. A running task is never preempted by a new urgent one.
-* The first run always sends the card description verbatim. Comments left
-  on a later card become the next run's user message; several waiting
-  comments are sent together as one message.
+* The first run always includes the card description, together with any
+  comments that were waiting before it started. Comments left on a later
+  card become the next run's user message; several waiting comments are
+  sent together as one message.
 * Leaving a comment returns the card to `todo`. If it is already running,
   the current turn is not interrupted: the comment waits and the card
   returns to `todo` when that run finishes.
