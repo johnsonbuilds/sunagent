@@ -71,6 +71,8 @@ export interface BoardTask {
   started_at: number | null;
   finished_at: number | null;
   last_error: string | null;
+  resume_pending: boolean;
+  prompt_started: boolean;
   created_at: number;
   updated_at: number;
   comment_count: number;

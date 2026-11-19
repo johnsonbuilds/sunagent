@@ -249,6 +249,11 @@ backlog ──(human)──> todo ──(worker)──> doing ──(completed)�
   comments that were waiting before it started. Comments left on a later
   card become the next run's user message; several waiting comments are
   sent together as one message.
+* A run interrupted by a restart keeps its conversation and resumes from
+  where it stopped instead of resending the description. If the turn had
+  not started yet, the next run sends the description normally.
+* A recovered task returns to the front of its own priority band in Todo;
+  it never jumps ahead of a higher-priority card.
 * Leaving a comment returns the card to `todo`. If it is already running,
   the current turn is not interrupted: the comment waits and the card
   returns to `todo` when that run finishes.
@@ -408,8 +413,8 @@ connections before it finishes shutting down, so the application closes
 every stream itself when the process is asked to stop — and then hands
 the signal on so the normal graceful shutdown still happens. Running
 turns are cancelled at the same time and their sessions are saved; a
-board task interrupted this way goes back to `todo` and resumes on the
-next start.
+board task interrupted this way goes back to `todo` and resumes its
+conversation on the next start.
 
 ## 7. The Frontend
 

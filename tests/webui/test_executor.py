@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).parents[2]))
 sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
 
 from webui.board import BoardStore
-from webui.executor import BoardExecutor, TurnOutcome
+from webui.executor import BoardExecutor, TurnOutcome, _RESUME_PROMPT
 from webui.sessions import SessionStore
 
 
@@ -215,11 +215,18 @@ class BoardExecutorTests(unittest.IsolatedAsyncioTestCase):
         ])
         self.assertEqual(len(self.board.get(task["id"]).runs), 1)
 
-    async def test_restart_resends_pending_comment_with_description(
-            self) -> None:
+    async def test_restart_resumes_pending_comment(self) -> None:
         task = self._task("Restarted")
+        session_id = self._ensure_session(task["id"])
+        session = self.sessions.get(session_id)
+        session.conversation.messages.append(
+            {"role": "user", "content": "description for Restarted"})
+        self.sessions.save(session)
+
         claimed = self.board.claim_next_todo()
         self.assertIsNotNone(claimed)
+        self.assertTrue(
+            self.board.mark_prompt_started(claimed.id, claimed.run_id))
         _, deferred = self.board.add_comment(
             task["id"], "Please retry with a timeout")
         self.assertTrue(deferred)
@@ -228,15 +235,66 @@ class BoardExecutorTests(unittest.IsolatedAsyncioTestCase):
         stored = self.board.get(task["id"])
         self.assertEqual(stored.status, "todo")
         self.assertIsNone(stored.comments[0]["run_id"])
+        self.assertTrue(stored.resume_pending)
+        self.assertTrue(stored.prompt_started)
 
         self._start()
         await self._wait_until(
             lambda: self.board.get(task["id"]).status == "review")
 
         self.assertEqual(self.calls, [
-            "description for Restarted\n\nPlease retry with a timeout",
+            f"{_RESUME_PROMPT}\n\nPlease retry with a timeout",
         ])
         self.assertEqual(len(self.board.get(task["id"]).runs), 1)
+        self.assertFalse(self.board.get(task["id"]).resume_pending)
+
+    async def test_restart_resumes_instead_of_resending_description(
+            self) -> None:
+        task = self._task("Resumed")
+        session_id = self._ensure_session(task["id"])
+        session = self.sessions.get(session_id)
+        session.conversation.messages.append(
+            {"role": "user", "content": "description for Resumed"})
+        self.sessions.save(session)
+
+        claimed = self.board.claim_next_todo()
+        self.assertIsNotNone(claimed)
+        self.assertTrue(
+            self.board.mark_prompt_started(claimed.id, claimed.run_id))
+        self.assertEqual(self.board.recover_interrupted(), 1)
+        stored = self.board.get(task["id"])
+        self.assertTrue(stored.resume_pending)
+        self.assertTrue(stored.prompt_started)
+
+        self._start()
+        await self._wait_until(
+            lambda: self.board.get(task["id"]).status == "review")
+
+        self.assertEqual(self.calls, [_RESUME_PROMPT])
+        self.assertFalse(self.board.get(task["id"]).resume_pending)
+        self.assertFalse(self.board.get(task["id"]).prompt_started)
+
+    async def test_restart_before_turn_starts_resends_description(
+            self) -> None:
+        task = self._task("Cold restart")
+        session_id = self._ensure_session(task["id"])
+        session = self.sessions.get(session_id)
+        session.conversation.messages.append(
+            {"role": "user", "content": "description for Cold restart"})
+        self.sessions.save(session)
+
+        claimed = self.board.claim_next_todo()
+        self.assertIsNotNone(claimed)
+        self.assertEqual(self.board.recover_interrupted(), 1)
+        stored = self.board.get(task["id"])
+        self.assertTrue(stored.resume_pending)
+        self.assertFalse(stored.prompt_started)
+
+        self._start()
+        await self._wait_until(
+            lambda: self.board.get(task["id"]).status == "review")
+
+        self.assertEqual(self.calls, ["description for Cold restart"])
 
     async def test_priority_change_while_running_does_not_preempt(self) -> None:
         gate = asyncio.Event()

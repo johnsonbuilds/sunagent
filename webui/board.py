@@ -273,6 +273,12 @@ class BoardTask:
     started_at: float | None = None
     finished_at: float | None = None
     last_error: str | None = None
+    # A run was interrupted after the turn started; the next claimed run
+    # should continue the conversation instead of resending the description.
+    resume_pending: bool = False
+    # Whether the most recent claimed run actually reached its turn.  Kept
+    # separate from session history so recovery does not guess from content.
+    prompt_started: bool = False
     created_at: float = 0.0
     updated_at: float = 0.0
 
@@ -295,6 +301,8 @@ class BoardTask:
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "last_error": self.last_error,
+            "resume_pending": self.resume_pending,
+            "prompt_started": self.prompt_started,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -355,6 +363,8 @@ class BoardTask:
                    started_at=_as_optional_float(record.get("started_at")),
                    finished_at=_as_optional_float(record.get("finished_at")),
                    last_error=_as_optional_text(record.get("last_error")),
+                   resume_pending=record.get("resume_pending") is True,
+                   prompt_started=record.get("prompt_started") is True,
                    created_at=created_at, updated_at=updated_at)
 
 
@@ -379,10 +389,11 @@ def _release_comments(task: BoardTask, run_id: str) -> None:
             comment["run_id"] = None
 
 
-def _queue_key(task: BoardTask) -> tuple[int, int, float, str]:
-    """Priority first, then the column order, then age."""
-    return (-PRIORITY_WEIGHT[task.priority], task.position,
-            task.created_at, task.id)
+def _queue_key(task: BoardTask) -> tuple[int, int, int, float, str]:
+    """Priority first, then resumed cards within their own priority band."""
+    return (-PRIORITY_WEIGHT[task.priority],
+            0 if task.resume_pending else 1,
+            task.position, task.created_at, task.id)
 
 
 def _queue_candidates(tasks: list[BoardTask]) -> list[BoardTask]:
@@ -567,6 +578,8 @@ class BoardStore:
                         target.started_at = None
                         target.finished_at = None
                         target.last_error = None
+                        target.resume_pending = False
+                        target.prompt_started = False
                     if new_status == "done":
                         target.last_error = None
             elif target.status == "todo" and target.queued_at is None:
@@ -580,8 +593,12 @@ class BoardStore:
                     and current.run_id):
                 # The human moved the card while the executor owned it.
                 # The run is cancelled, so any comments it consumed are
-                # still waiting for an answer.
+                # still waiting for an answer.  A manual move is not an
+                # automatic interruption, so it starts from the normal
+                # prompt next time.
                 _release_comments(target, current.run_id)
+                target.resume_pending = False
+                target.prompt_started = False
 
             # Mirrors the HTTP contract: a supplied status means "move",
             # even when it names the current column, so an explicit move
@@ -718,6 +735,11 @@ class BoardStore:
             target.started_at = now
             target.finished_at = None
             target.last_error = None
+            # Decide once, at claim time, whether this run continues the
+            # previous conversation and reset the marker for the new turn.
+            resuming = target.resume_pending and target.prompt_started
+            target.resume_pending = resuming
+            target.prompt_started = resuming
             # Mark any pending comments as consumed by this run before it
             # starts.  The first run sends them alongside the description so
             # a fresh session still gets the task context; later runs carry
@@ -734,6 +756,30 @@ class BoardStore:
             logger.debug("webui.board.task_claimed id=%s run=%s",
                          claimed.id, claimed.run_id)
             return _copy(claimed)
+
+    def mark_prompt_started(self, task_id: str, run_id: str) -> bool:
+        """Record that the claimed run reached its turn.
+
+        Recovery uses this instead of inspecting the session so a fresh
+        run that is interrupted before its prompt is sent still gets the
+        description next time.
+        """
+        now = time.time()
+        with self._lock:
+            task = self._find(task_id)
+            if task is None or task.status != "doing" or task.run_id != run_id:
+                return False
+            if task.prompt_started:
+                return True
+            tasks = [_copy(current) for current in self._tasks]
+            target = next(current for current in tasks
+                          if current.id == task_id)
+            target.prompt_started = True
+            target.updated_at = now
+            self._commit(tasks, now)
+            logger.debug("webui.board.prompt_started id=%s run=%s",
+                         task_id, run_id)
+            return True
 
     def finish_run(self, task_id: str, run_id: str, *,
                    status: str = "review",
@@ -788,6 +834,8 @@ class BoardStore:
                 target.finished_at = now
                 target.last_error = _clean_error(error)
                 target.position = column_count
+            target.resume_pending = False
+            target.prompt_started = False
             target.updated_at = now
             self._commit(tasks, now)
             logger.debug("webui.board.task_finished id=%s status=%s "
@@ -796,8 +844,14 @@ class BoardStore:
             return True
 
     def requeue_run(self, task_id: str, run_id: str, *,
-                    error: str | None = None) -> bool:
-        """Put an interrupted run back at the end of Todo."""
+                    error: str | None = None,
+                    resume: bool = False) -> bool:
+        """Put an interrupted run back at the end of Todo.
+
+        ``resume`` marks the interruption as one that should continue the
+        existing conversation; a requeue caused by, say, a busy session
+        leaves the card on its normal prompt path.
+        """
         now = time.time()
         with self._lock:
             task = self._find(task_id)
@@ -815,6 +869,8 @@ class BoardStore:
             target.started_at = None
             target.finished_at = None
             target.last_error = _clean_error(error)
+            if resume:
+                target.resume_pending = True
             target.position = column_count
             target.updated_at = now
             _release_comments(target, run_id)
@@ -838,6 +894,7 @@ class BoardStore:
                     task.started_at = None
                     task.finished_at = None
                     task.last_error = "Interrupted by server restart"
+                    task.resume_pending = True
                     task.position = todo_count
                     task.updated_at = now
                     todo_count += 1

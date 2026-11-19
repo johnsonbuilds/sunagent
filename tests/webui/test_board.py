@@ -538,12 +538,13 @@ class BoardStoreTests(unittest.TestCase):
             claimed = board.claim_next_todo()
 
             self.assertTrue(board.requeue_run(claimed.id, claimed.run_id,
-                                              error="boom"))
+                                              error="boom", resume=True))
             stored = board.get(claimed.id)
             self.assertEqual(stored.status, "todo")
             self.assertIsNotNone(stored.queued_at)
             self.assertIsNone(stored.run_id)
             self.assertEqual(stored.last_error, "boom")
+            self.assertTrue(stored.resume_pending)
 
     def test_recover_interrupted_returns_doing_to_todo(self) -> None:
         with TemporaryDirectory() as root:
@@ -558,6 +559,8 @@ class BoardStoreTests(unittest.TestCase):
             self.assertIsNotNone(stored.queued_at)
             self.assertIsNone(stored.run_id)
             self.assertIn("restart", stored.last_error or "")
+            self.assertTrue(stored.resume_pending)
+            self.assertTrue(self._board(root).get(task["id"]).resume_pending)
             self.assertEqual(claimed.id, task["id"])
 
     def test_manual_doing_is_not_recovered(self) -> None:
@@ -571,6 +574,54 @@ class BoardStoreTests(unittest.TestCase):
             stored = reloaded.get(task["id"])
             self.assertEqual(stored.status, "doing")
             self.assertIsNone(stored.run_id)
+
+    def test_prompt_started_survives_recovery_and_clears_on_finish(self) -> None:
+        with TemporaryDirectory() as root:
+            board = self._board(root)
+            task = self._create(board, "Run me", status="todo")
+            claimed = board.claim_next_todo()
+            self.assertTrue(
+                board.mark_prompt_started(claimed.id, claimed.run_id))
+
+            reloaded = self._board(root)
+            self.assertEqual(reloaded.recover_interrupted(), 1)
+            stored = reloaded.get(task["id"])
+            self.assertTrue(stored.resume_pending)
+            self.assertTrue(stored.prompt_started)
+
+            resumed = reloaded.claim_next_todo()
+            self.assertTrue(resumed.resume_pending)
+            self.assertTrue(resumed.prompt_started)
+            self.assertTrue(reloaded.finish_run(resumed.id, resumed.run_id))
+
+            stored = reloaded.get(task["id"])
+            self.assertFalse(stored.resume_pending)
+            self.assertFalse(stored.prompt_started)
+
+    def test_recovered_task_moves_to_front_of_its_priority_band(self) -> None:
+        with TemporaryDirectory() as root:
+            board = self._board(root)
+            resumed = self._create(board, "Resumed", status="todo")
+            claimed = board.claim_next_todo()
+            self.assertEqual(claimed.id, resumed["id"])
+            self._create(board, "Front", status="todo")
+
+            self.assertEqual(board.recover_interrupted(), 1)
+            self.assertEqual(board.next_todo().id, resumed["id"])
+            self.assertEqual(board.claim_next_todo().id, resumed["id"])
+
+    def test_recovered_task_does_not_precede_higher_priority(self) -> None:
+        with TemporaryDirectory() as root:
+            board = self._board(root)
+            resumed = self._create(board, "Resumed", status="todo")
+            claimed = board.claim_next_todo()
+            self.assertEqual(claimed.id, resumed["id"])
+            urgent = self._create(board, "Urgent", status="todo",
+                                  priority="urgent")
+
+            self.assertEqual(board.recover_interrupted(), 1)
+            self.assertEqual(board.next_todo().id, urgent["id"])
+            self.assertEqual(board.claim_next_todo().id, urgent["id"])
 
     def test_old_todo_without_queued_at_is_not_claimed(self) -> None:
         with TemporaryDirectory() as root:

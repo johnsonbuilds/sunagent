@@ -77,6 +77,7 @@ export function queueOrder(tasks: BoardTask[]): Map<string, number> {
     .slice()
     .sort((a, b) => (
       PRIORITY_WEIGHT[b.priority] - PRIORITY_WEIGHT[a.priority]
+      || Number(b.resume_pending) - Number(a.resume_pending)
       || a.position - b.position
       || a.created_at - b.created_at
     ));

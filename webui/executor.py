@@ -27,6 +27,11 @@ logger = logging.getLogger(__name__)
 
 TurnStatus = Literal["completed", "error", "cancelled", "busy"]
 
+_RESUME_PROMPT = (
+    "The previous run was interrupted before it finished. Continue the task "
+    "from where you left off; do not restart from the beginning."
+)
+
 
 @dataclass(frozen=True)
 class TurnOutcome:
@@ -49,13 +54,15 @@ class _CurrentRun:
     session_id: str | None = None
 
 
-def _task_prompt(task: BoardTask) -> str:
+def _task_prompt(task: BoardTask, *, resuming: bool = False) -> str:
     """The user message for this run.
 
-    The first run always includes the description so a fresh session has
-    the task context; any feedback waiting for that run is appended.
-    Later runs send only the feedback that queued the card; a manual
-    re-run with no new comment falls back to the description.
+    An interrupted run continues the existing conversation instead of
+    resending the description.  A first run otherwise includes the
+    description so a fresh session has the task context; any feedback
+    waiting for that run is appended.  Later runs send only the feedback
+    that queued the card; a manual re-run with no new comment falls back
+    to the description.
     """
     feedback = [
         str(comment.get("body") or "")
@@ -63,7 +70,10 @@ def _task_prompt(task: BoardTask) -> str:
         if task.run_id and comment.get("run_id") == task.run_id
     ]
     feedback = [body for body in feedback if body]
-    parts = [task.description] if not task.runs else []
+    if resuming:
+        parts = [_RESUME_PROMPT]
+    else:
+        parts = [task.description] if not task.runs else []
     parts.extend(feedback)
     return "\n\n".join(parts) if parts else task.description
 
@@ -201,6 +211,11 @@ class BoardExecutor:
             if session is None:
                 self._finish(task, "review", "Session not found")
                 return
+            resuming = bool(task.resume_pending)
+            if resuming and session.is_empty:
+                # The session link survived but its history did not; fall
+                # back to the description rather than continuing nothing.
+                resuming = False
             latest = self.board.get(task.id)
             if (latest is None or latest.status != "doing"
                     or latest.run_id != task.run_id):
@@ -213,11 +228,13 @@ class BoardExecutor:
             if self._stopping:
                 self.board.requeue_run(
                     task.id, task.run_id,
-                    error="Interrupted by server shutdown")
+                    error="Interrupted by server shutdown", resume=True)
                 return
 
+            if not self.board.mark_prompt_started(task.id, task.run_id):
+                return
             self._turn_task = asyncio.create_task(
-                self._run_turn(session, _task_prompt(task)),
+                self._run_turn(session, _task_prompt(task, resuming=resuming)),
                 name=f"board-task-{task.id}",
             )
             session.task = self._turn_task
@@ -228,7 +245,7 @@ class BoardExecutor:
                 if self._stopping:
                     self.board.requeue_run(
                         task.id, task.run_id,
-                        error="Interrupted by server shutdown")
+                        error="Interrupted by server shutdown", resume=True)
                 else:
                     # A user moving the card out of Doing wins the race
                     # because finish_run only touches a still-Doing card.
