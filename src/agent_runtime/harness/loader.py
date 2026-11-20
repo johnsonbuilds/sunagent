@@ -472,10 +472,15 @@ def resolve_harness(value: str | None) -> HarnessSpec:
     direct = Path(value)
     if direct.is_file():
         return load_harness(direct)
-    try:
-        return load_named_harness(value)
-    except HarnessError as exc:
-        raise HarnessError(
-            f"harness {value!r} not found as a file or as "
-            f"{Path('harnesses') / f'{value}.yaml'}") from exc
+    # Search the same places as load_named_harness, but let a manifest that
+    # exists yet fails validation report its own error: wrapping every
+    # HarnessError as "not found" sends people looking for a missing file
+    # when the real problem is the contents.
+    candidates = manifest_candidates(value)
+    for path in candidates:
+        if path.is_file():
+            return load_harness(path)
+    raise HarnessError(
+        f"harness {value!r} not found as a file or as "
+        + " or as ".join(str(path) for path in candidates))
 

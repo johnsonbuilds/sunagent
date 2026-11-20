@@ -1,4 +1,5 @@
 import asyncio
+import os
 import sys
 import json
 import tempfile
@@ -251,6 +252,29 @@ class HarnessValidationTests(unittest.TestCase):
     def test_unresolvable_reference_lists_candidates(self) -> None:
         with self.assertRaisesRegex(HarnessError, "no-such-harness"):
             resolve_harness("no-such-harness")
+
+    def test_invalid_manifest_reports_its_own_error(self) -> None:
+        # A manifest that exists but fails validation must not be reported
+        # as "not found": the two problems need different fixes.
+        with tempfile.TemporaryDirectory() as directory:
+            harnesses = Path(directory) / "harnesses"
+            harnesses.mkdir()
+            (harnesses / "broken.yaml").write_text(dedent("""
+                id: broken
+                recovery:
+                  llm_errors:
+                    nope:
+                      retries: 1
+                """))
+            previous = Path.cwd()
+            os.chdir(directory)
+            try:
+                with self.assertRaises(HarnessError) as caught:
+                    resolve_harness("broken")
+            finally:
+                os.chdir(previous)
+            self.assertIn("llm_errors", str(caught.exception))
+            self.assertNotIn("not found", str(caught.exception))
 
 class TraceHarnessHeaderTests(unittest.TestCase):
     def test_jsonl_leads_with_harness_header_then_events(self) -> None:
