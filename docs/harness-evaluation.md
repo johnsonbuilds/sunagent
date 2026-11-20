@@ -312,15 +312,15 @@ Tab: 总览 | 有效性 | 过程 | 效率 | 可靠性 | 任务 | 基准 | 诊断
 | GET | `/api/evaluation/tasks?...&origin=` | 任务行、分页、排序 |
 | GET | `/api/evaluation/tasks/{task_id}` | 生命周期、runs、证据摘要 |
 | GET | `/api/evaluation/runs/{run_id}` | run.metrics + trace digest |
-| POST | `/api/evaluation/diagnose` | `{target, force?:false}` → 写 bundle → 建会话；返回 `{session_id, bundle_hash, remaining}` |
+| POST | `/api/evaluation/diagnose` | `{target, force?:false}` → 写 bundle → 建会话；返回 `{session_id, bundle_hash}` |
 | GET | `/api/evaluation/diagnoses?task_id=` | 该任务的诊断会话列表（读 `Session.target`） |
 | POST | `/api/evaluation/refresh` | 重建内存索引（可选） |
 
 `/diagnose` 契约：
 
-- `force=false` 且命中同 `target + bundle_hash`：不新建会话，返回 `{duplicate:true, existing_session_id, bundle_hash, remaining}`；
-- `force=true`：新建会话，返回 `{session_id, bundle_hash, remaining}`；
-- `remaining` 是当日剩余诊断次数；超限 429；
+- `force=false` 且命中同 `target + bundle_hash`：不新建会话，返回 `{duplicate:true, existing_session_id, bundle_hash}`；
+- `force=true`：新建会话，返回 `{session_id, bundle_hash}`；
+- 不做每日配额：不返回 `remaining`，也不因配额返回 429；
 - 首轮报告生成后，在 turn 完成回调里把最后一个 `type=="assistant"` segment id 写入 `session.report_segment_id`（仅当为 `None` 时写），再持久化。
 
 后端用 `EvaluationStore`：
@@ -519,13 +519,14 @@ cohort 时 `task` 为空，`runs` 换成 `cases`，每个 case 一张紧凑卡�
 - 不写 `diagnosis_cache.jsonl`：结果就是诊断会话首轮报告；`Session.report_segment_id` 指向它，追问不覆盖报告。
 - `Session` 同时记录 `target` 和 `bundle_hash`；相同 `target + bundle_hash` 已有诊断时，UI 提示“已有诊断，打开 / 重新诊断”。
 - `AGENT_RUNTIME_DIAGNOSIS_MODEL` 填 catalog `id`，用 `catalog.require()` 解析完整 endpoint/key，不能复用主模型的 endpoint。
-- 预算旋钮：
+- 成本边界：
   1. **范围**：task / run / cohort；cohort 最多 20 个 case。
   2. **单次成本**：模型选择、bundle 大小、输出上限。
-  3. **总量**：`RuntimeConfig.diagnosis_daily_limit`；`/diagnose` 返回 `remaining`，超限 429。
+  3. **并发**：单飞锁，同时只允许一个诊断。
+- 成本保护 = 手动触发 + `bundle_hash` 去重 + 单飞锁 + `max_output_tokens`；不做每日配额。
 - 默认建议：`max_iterations: 6`，`bundle.json` ≤ 1 MB，`max_output_tokens ≤ 4k`，cohort ≤ 20 个 case。
 - 主循环目前没有 `max_tokens` 控制；诊断请求单独加 `max_output_tokens`，不改全局 agent 默认。
-- 失败/超预算：会话里明确报错，不返回伪诊断；可手动重试。
+- 失败/超输出上限：会话里明确报错，不返回伪诊断；可手动重试。
 
 ## 5.7 改进建议如何落地
 
@@ -606,7 +607,7 @@ cohort 时 `task` 为空，`runs` 换成 `cases`，每个 case 一张紧凑卡�
 | 诊断会话编排 | `webui/evaluation.py` | 写 bundle → 建会话（`origin/target`）→ 发首条消息 → 返回 `session_id`；turn 完成后写 `report_segment_id` |
 | 诊断模型配置 | `runtime_config.py`、`model.json` | `AGENT_RUNTIME_DIAGNOSIS_MODEL` 填 catalog id，用 `catalog.require()` 解析 |
 | 证据标注（best-effort） | `webui/evaluation.py` | 未验证 `event_id` 在 UI 标注，不拒绝诊断 |
-| API | `webui/evaluation.py` | `/diagnose` 支持 task/run/cohort + `force`/`remaining`；无后台触发 |
+| API | `webui/evaluation.py` | `/diagnose` 支持 task/run/cohort + `force`；无后台触发 |
 | 前端诊断面板 | `DiagnosisPanel.tsx`、`MarkdownAnswer.tsx` | 手动按钮；展示 `report_segment_id` 报告；可打开会话 |
 | 测试 | `tests/test_diagnosis.py` | mock 模型覆盖正常/标题缺失/伪造证据/超预算 |
 
@@ -737,14 +738,14 @@ cohort 时 `task` 为空，`runs` 换成 `cases`，每个 case 一张紧凑卡�
 | usage 丢缓存 token | `_usage_dict` / `_consume_stream` 只留两项 | 透传 `cached_tokens` / `prompt_cache_hit_tokens` |
 | `finish_reason` 丢失 | `_consume_stream` 未放进 response | 放进 response，`llm.end` 记录 |
 
-## 9.6 诊断会话的元数据与配额
+## 9.6 诊断会话的元数据与成本边界
 
 - `Session` 增加 `origin`、`target`、`report_segment_id`、`bundle_hash`、`diagnosis_id`；
 - 追问后评测页只读 `report_segment_id` 指向的首轮报告，不读“最后一条”；
 - 追问走普通 `POST /api/sessions/{id}/messages` → `_prepare_turn()`；trace 的 `origin` 必须从 `session.origin` 继承（默认 `webui`，诊断会话 `diagnosis`），不能按路由硬编码，否则追问 run 会混进 webui 指标；`max_output_tokens` 也按 `session.origin == "diagnosis"` 生效；
-- 配额计数：统计 `SessionStore` 中当天创建的 `origin == "diagnosis"` 会话数（本地自然日或 UTC，二选一写死）；`/diagnose` 内加锁保证“判重 + 查配额 + 建会话”原子执行；`duplicate: true` 不扣配额；
+- 不做每日配额：手动触发 + `bundle_hash` 去重 + 单飞锁 + `diagnosis_max_output_tokens` 已足够；不返回 `remaining`，不因配额 429；
 - `AGENT_RUNTIME_DIAGNOSIS_MODEL` 填 catalog `id`，用 `catalog.require()` 解析完整 endpoint/key；
-- 配额：`RuntimeConfig` 增加 `diagnosis_daily_limit`、`diagnosis_max_output_tokens`；`/diagnose` 返回 `remaining`，超限 429；
+- `RuntimeConfig` 只加 `diagnosis_max_output_tokens`，不加 `diagnosis_daily_limit`；
 - 主循环目前没有 `max_tokens` 控制；诊断请求单独加 `max_output_tokens`，不改全局 agent 默认。
 
 ## 9.7 Board 指标边界
