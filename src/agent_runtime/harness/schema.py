@@ -53,11 +53,15 @@ TOOL_ERROR_STRATEGIES: dict[str, ToolErrorStrategy] = {
 # the hard gate: the provider rejected the request for exceeding the
 # context window.  Retrying it in place can never succeed, so the loop
 # refreshes (further compacts) the request view before resending.
+# ``invalid_request`` is the other deterministic rejection (malformed
+# body, unknown endpoint): replaying it only burns time, so a harness has
+# to opt in explicitly, and every harness gets zero retries by default.
 LLM_RETRY_CATEGORIES = (
     "stream_idle_timeout",
     "stream_truncated",
     "stream_empty",
     "provider_error",
+    "invalid_request",
     "context_window",
 )
 

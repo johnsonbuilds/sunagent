@@ -76,18 +76,53 @@ class StreamEmpty(RuntimeError):
     llm_category = "stream_empty"
 
 
-def _llm_error_category(exc: BaseException) -> str | None:
+# Statuses that say "this request can never succeed as written": the
+# provider parsed it and refused the payload itself. Replaying them is
+# pure waste (one incident spent 126s on six replays of a rejected
+# request before the 400 reached the user).
+_DETERMINISTIC_REJECTION_STATUSES = frozenset({400, 404, 422})
+
+
+def _status_code(exc: BaseException) -> int | None:
+    """HTTP status on a provider error, duck-typed so the optional SDK
+    never enters this module (openai's ``APIStatusError`` exposes it)."""
+    code = getattr(exc, "status_code", None)
+    if isinstance(code, bool) or not isinstance(code, int):
+        return None
+    return code
+
+
+def _retry_4xx_enabled(runtime: RuntimeConfig | None = None) -> bool:
+    """Opt-out for gateways that report transient failures as 4xx.
+
+    Explicit config wins; env is the legacy fallback (same pattern as
+    the stream/reasoning knobs above).
+    """
+    if runtime is not None:
+        return runtime.retry_4xx
+    raw = os.getenv("AGENT_RUNTIME_RETRY_4XX", "")
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _llm_error_category(exc: BaseException,
+                        runtime: RuntimeConfig | None = None) -> str | None:
     """Map an LLM-call failure to its ``recovery.llm_errors`` category.
 
     Returns ``None`` when the failure has dedicated handling elsewhere and
     must never be retried here (the reasoning-budget nudge continues the
-    loop by itself); everything unrecognized counts as ``provider_error``.
+    loop by itself).  A deterministic rejection (malformed request,
+    unknown endpoint) is ``invalid_request``; everything else is
+    ``provider_error``, whose policy owns the transient cases (5xx,
+    connection drops, rate limits).
     """
     category = getattr(exc, "llm_category", None)
     if isinstance(category, str):
         return category
     if isinstance(exc, ReasoningBudgetExceeded):
         return None
+    if (_status_code(exc) in _DETERMINISTIC_REJECTION_STATUSES
+            and not _retry_4xx_enabled(runtime)):
+        return "invalid_request"
     return "provider_error"
 
 
@@ -313,7 +348,7 @@ async def chat_with_recovery(llm: ChatModel, messages: list[dict[str, Any]],
                                         stream=stream, trace=trace, events=events,
                                         runtime=runtime)
         except Exception as exc:
-            category = _llm_error_category(exc)
+            category = _llm_error_category(exc, runtime)
             if category is None:
                 raise
             policy = harness.recovery.llm_errors.get(category)

@@ -72,6 +72,7 @@ class RuntimeConfig:
     streaming: bool = True
     stream_idle_timeout: float | None = 120.0
     max_reasoning_chars: int | None = 50_000
+    retry_4xx: bool = False
     summary_model: str | None = None
 
     @classmethod
@@ -151,6 +152,13 @@ class RuntimeConfig:
                      if streaming_override is None
                      else bool(streaming_override))
 
+        # Escape hatch: a few gateways report transient failures as 400.
+        # Off by default so a rejected request fails on the first attempt.
+        retry_4xx_override = overrides.get("retry_4xx", None)
+        retry_4xx = (_env_flag("AGENT_RUNTIME_RETRY_4XX", False)
+                     if retry_4xx_override is None
+                     else bool(retry_4xx_override))
+
         return cls(
             model=pick("model", _env_str("MODEL_ID", DEFAULT_MODEL)),
             base_url=pick("base_url", _env_optional_str("LLM_BASE_URL")),
@@ -162,6 +170,7 @@ class RuntimeConfig:
             streaming=streaming,
             stream_idle_timeout=timeout,
             max_reasoning_chars=budget,
+            retry_4xx=retry_4xx,
             summary_model=pick("summary_model",
                                _env_optional_str("AGENT_RUNTIME_SUMMARY_MODEL")),
         )

@@ -64,6 +64,9 @@ recovery:
       max_retries: 3
       backoff: exponential
       base_delay: 0.5
+    # Replaying a refused request (400/404/422) can only burn the clock.
+    invalid_request:
+      max_retries: 0
     context_window:
       max_retries: 2
       backoff: none
