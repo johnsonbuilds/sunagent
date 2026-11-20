@@ -320,7 +320,6 @@ Tab: 总览 | 有效性 | 过程 | 效率 | 可靠性 | 任务 | 基准 | 诊断
 
 - `force=false` 且命中同 `target + bundle_hash`：不新建会话，返回 `{duplicate:true, existing_session_id, bundle_hash}`；
 - `force=true`：新建会话，返回 `{session_id, bundle_hash}`；
-- 不做每日配额：不返回 `remaining`，也不因配额返回 429；
 - 首轮报告生成后，在 turn 完成回调里把最后一个 `type=="assistant"` segment id 写入 `session.report_segment_id`（仅当为 `None` 时写），再持久化。
 
 后端用 `EvaluationStore`：
@@ -519,14 +518,13 @@ cohort 时 `task` 为空，`runs` 换成 `cases`，每个 case 一张紧凑卡�
 - 不写 `diagnosis_cache.jsonl`：结果就是诊断会话首轮报告；`Session.report_segment_id` 指向它，追问不覆盖报告。
 - `Session` 同时记录 `target` 和 `bundle_hash`；相同 `target + bundle_hash` 已有诊断时，UI 提示“已有诊断，打开 / 重新诊断”。
 - `AGENT_RUNTIME_DIAGNOSIS_MODEL` 填 catalog `id`，用 `catalog.require()` 解析完整 endpoint/key，不能复用主模型的 endpoint。
-- 成本边界：
+- 运行边界：
   1. **范围**：task / run / cohort；cohort 最多 20 个 case。
-  2. **单次成本**：模型选择、bundle 大小、输出上限。
+  2. **迭代**：`max_iterations: 6`。
   3. **并发**：单飞锁，同时只允许一个诊断。
-- 成本保护 = 手动触发 + `bundle_hash` 去重 + 单飞锁 + `max_output_tokens`；不做每日配额。
-- 默认建议：`max_iterations: 6`，`bundle.json` ≤ 1 MB，`max_output_tokens ≤ 4k`，cohort ≤ 20 个 case。
-- 主循环目前没有 `max_tokens` 控制；诊断请求单独加 `max_output_tokens`，不改全局 agent 默认。
-- 失败/超输出上限：会话里明确报错，不返回伪诊断；可手动重试。
+  4. **去重**：`bundle_hash` 命中已有诊断时提示打开 / 重新诊断。
+- 输入：`bundle.json` ≤ 1 MB；超出截断并标 `truncated_input`。
+- 失败：会话里明确报错，不返回伪诊断；可手动重试。
 
 ## 5.7 改进建议如何落地
 
@@ -602,7 +600,6 @@ cohort 时 `task` 为空，`runs` 换成 `cases`，每个 case 一张紧凑卡�
 | trace 只读工具 | `src/agent_runtime/diagnosis.py` | `read_trace` / `search_trace` / `read_diagnosis` 直读 `storage`，绕开 sandbox 限制 |
 | `internal` 标记与过滤 | `harness/schema.py`、`harness/loader.py` | `evaluation-v1` 不出现在 `/api/config` |
 | 注入专用工具 | `webui/turn_context.py`、`tools/tools.py` | `extra_specs` 注册 `read_trace` / `search_trace` / `read_diagnosis` |
-| 诊断输出上限 | `agent/loop.py`、`agent/chat.py` | 诊断请求支持 `max_output_tokens`，不影响全局默认 |
 | `harnesses/evaluation-v1.yaml` | `harnesses/` | 只读工具、诊断 prompt、Markdown 约定 |
 | 诊断会话编排 | `webui/evaluation.py` | 写 bundle → 建会话（`origin/target`）→ 发首条消息 → 返回 `session_id`；turn 完成后写 `report_segment_id` |
 | 诊断模型配置 | `runtime_config.py`、`model.json` | `AGENT_RUNTIME_DIAGNOSIS_MODEL` 填 catalog id，用 `catalog.require()` 解析 |
@@ -654,7 +651,7 @@ cohort 时 `task` 为空，`runs` 换成 `cases`，每个 case 一张紧凑卡�
 | 指标被“拖卡片”游戏 | TSR 以人工验收为准，但要求产物证据（`edited_files` / `submit_result`）；定期抽样审计 |
 | 用户忘记更新状态 | 记录 stale review；指标页显示数据质量提示 |
 | 模型诊断幻觉 | 只读工具自行核实；引用不到标“未验证”；标注置信度；允许人工覆盖；不自动改 harness |
-| 诊断成本 | 仅手动触发；`max_iterations` 限制；bundle/输出上限；cohort 限制 case 数 |
+| 诊断成本 | 仅手动触发；`max_iterations` 限制；bundle 大小；cohort 限制 case 数 |
 | 诊断会话污染指标 | `origin` 切片；Run 级不绑 `task_id`；Board 与 Harbor outcome 分视图 |
 | Markdown 解析失败 | 四个标题为约定，解析失败原样渲染，不影响阅读 |
 | 内存索引增长 | 按月轮转；超过阈值再评估 SQLite |
@@ -738,15 +735,13 @@ cohort 时 `task` 为空，`runs` 换成 `cases`，每个 case 一张紧凑卡�
 | usage 丢缓存 token | `_usage_dict` / `_consume_stream` 只留两项 | 透传 `cached_tokens` / `prompt_cache_hit_tokens` |
 | `finish_reason` 丢失 | `_consume_stream` 未放进 response | 放进 response，`llm.end` 记录 |
 
-## 9.6 诊断会话的元数据与成本边界
+## 9.6 诊断会话的元数据
 
 - `Session` 增加 `origin`、`target`、`report_segment_id`、`bundle_hash`、`diagnosis_id`；
 - 追问后评测页只读 `report_segment_id` 指向的首轮报告，不读“最后一条”；
-- 追问走普通 `POST /api/sessions/{id}/messages` → `_prepare_turn()`；trace 的 `origin` 必须从 `session.origin` 继承（默认 `webui`，诊断会话 `diagnosis`），不能按路由硬编码，否则追问 run 会混进 webui 指标；`max_output_tokens` 也按 `session.origin == "diagnosis"` 生效；
-- 不做每日配额：手动触发 + `bundle_hash` 去重 + 单飞锁 + `diagnosis_max_output_tokens` 已足够；不返回 `remaining`，不因配额 429；
+- 追问走普通 `POST /api/sessions/{id}/messages` → `_prepare_turn()`；trace 的 `origin` 必须从 `session.origin` 继承（默认 `webui`，诊断会话 `diagnosis`），不能按路由硬编码，否则追问 run 会混进 webui 指标；
 - `AGENT_RUNTIME_DIAGNOSIS_MODEL` 填 catalog `id`，用 `catalog.require()` 解析完整 endpoint/key；
-- `RuntimeConfig` 只加 `diagnosis_max_output_tokens`，不加 `diagnosis_daily_limit`；
-- 主循环目前没有 `max_tokens` 控制；诊断请求单独加 `max_output_tokens`，不改全局 agent 默认。
+- `RuntimeConfig` 不需要新增诊断专属字段；诊断复用 harness 的 `max_iterations` 和 context budget。
 
 ## 9.7 Board 指标边界
 
