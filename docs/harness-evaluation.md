@@ -96,7 +96,7 @@ genes_hash
 model
 ```
 
-`origin` 是**切片维度，不是排除**：诊断/改进 run 全量保留在 `runs.jsonl`；默认 harness 指标只聚合 `task_id != null` 的 run，另设“评测自身开销”视图看诊断/改进的 tokens、延迟、错误率。
+`origin` 是**切片维度，不是排除**：诊断/改进 run 全量保留在 `runs.jsonl`；默认 harness 指标只聚合 `task_id != null` 的 run。
 
 Board 增加 append-only 事件流 `workspace/board_events.jsonl`（只记录 board 生命周期，不记录诊断）：
 
@@ -121,7 +121,7 @@ workspace/
     └── runs.jsonl                    # 一行一个 run.metrics，评测主数据源
 ```
 
-- 评测服务启动时只读 `runs.jsonl` + `board_events.jsonl`，并从 `SessionStore` 读取诊断会话的 `origin/target`；不扫 trace。
+- 评测服务启动时只读 `runs.jsonl` + `board_events.jsonl`，并从 `SessionStore` 读取诊断会话的 `origin/target`。
 - 详情页按 `run_id` 读对应 trace，带 mtime 缓存。
 - 诊断结果不单独缓存：结果就是诊断会话的最后一条 assistant 消息。
 - 不做 SQLite；数据量到“几十万 run、查询 >10 秒”再考虑。
