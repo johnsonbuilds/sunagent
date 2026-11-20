@@ -14,6 +14,7 @@
 | 诊断触发 | 仅手动触发；不自动、不轮询、不进 board 执行队列 |
 | 诊断输出 | Markdown + 固定标题（结论 / 根因 / 证据 / Top 5 改进建议），不强制 JSON |
 | 诊断链接 | 链接记录在 session 元数据（`origin` + `target`），不写入 `board_events.jsonl` |
+| 诊断入口 | 一个 `POST /api/evaluation/diagnose`；task / run / cohort 只改 `target` |
 | 交付物 | 评测 / 诊断 / 改进三大块 + WebUI 评测页 |
 
 ---
@@ -256,7 +257,7 @@ Tab: 总览 | 有效性 | 过程 | 效率 | 可靠性 | 任务 | 诊断与建议
 - 「开始诊断」（手动）→ 新建诊断会话 → 模型用只读工具核实 → 输出 Markdown（结论 / 根因 / 证据 / Top 5）
 - 诊断会话与普通会话同等：出现在会话列表、可继续追问、可换模型重跑
 - 任务详情显示「历史诊断」列表，来自 `Session.target`
-- 「生成 Top 5 改进建议」→ 新建改进会话，输入为多条诊断会话摘要 + 聚合指标
+- cohort 诊断走同一入口，`target.type=cohort`：bundle 带 N 个 case 的紧凑摘要 + 聚合指标，仍在同一个会话里给 Top 5
 - 不自动运行：页面加载、轮询、任务完成都不会触发诊断
 
 ## 4.3 前端组件
@@ -293,8 +294,7 @@ Tab: 总览 | 有效性 | 过程 | 效率 | 可靠性 | 任务 | 诊断与建议
 | GET | `/api/evaluation/tasks?...` | 任务行、分页、排序 |
 | GET | `/api/evaluation/tasks/{task_id}` | 生命周期、runs、证据摘要 |
 | GET | `/api/evaluation/runs/{run_id}` | run.metrics + trace digest |
-| POST | `/api/evaluation/diagnose` | 手动触发：写 bundle → 新建诊断会话 → 返回 `{session_id}` |
-| POST | `/api/evaluation/improvements` | 手动触发：新建改进会话，输入多条诊断会话 + 聚合指标，返回 `{session_id}` |
+| POST | `/api/evaluation/diagnose` | 手动触发：`{target:{type:"task"|"run"|"cohort", id?, filters?}}` → 写 bundle → 建会话 → 返回 `{session_id}` |
 | GET | `/api/evaluation/diagnoses?task_id=` | 该任务的诊断会话列表（读 `Session.target`） |
 | POST | `/api/evaluation/refresh` | 重建内存索引（可选） |
 
@@ -309,16 +309,18 @@ Tab: 总览 | 有效性 | 过程 | 效率 | 可靠性 | 任务 | 诊断与建议
 
 诊断接口只负责建会话并发消息，立即返回 `session_id`；前端订阅该会话的事件流，或轮询 `GET /api/sessions/{id}`。
 
-## 4.5 手动诊断交互（唯一触发点）
+## 4.5 手动诊断交互（唯一入口）
 
 1. 用户在任务详情、run 详情或 cohort 页点击「开始诊断」。
-2. `POST /api/evaluation/diagnose`。
-3. 后端构建 evidence bundle，写 `workspace/diagnosis/<id>/bundle.json` 和 `summary.md`。
+2. `POST /api/evaluation/diagnose`，只传 `target`；task / run / cohort 走同一个入口。
+3. 后端构建 evidence bundle，写 `workspace/diagnosis/<id>/bundle.json` 和 `summary.md`；cohort 额外带上 N 个 case 的紧凑摘要（不是要求先跑 N 次诊断）和聚合指标。
 4. 新建会话：`harness=evaluation-v1`、`origin=diagnosis`、`target={type,id}`、标题「诊断: xxx」。
 5. 发出第一条消息：短指令 + bundle 路径。模型用只读工具（`read_file` / `grep_search` / `find_files` / `list_dir`）核实细节。
 6. `run_turn` 返回 Markdown，按约定标题输出：结论 / 根因 / 证据 / Top 5 改进建议。
 7. 会话出现在会话列表；评测页嵌入最后一条 assistant 消息，并提供「打开会话」。
 8. 任务详情通过 `Session.target` 显示历史诊断，不写 `board_events.jsonl`。
+
+**不是两次接口调用**：同一个会话、同一份 Markdown 里先给根因、再给 Top 5；cohort 只是 `target` 不同。
 
 **不会自动运行**：页面加载、轮询、任务完成、run 结束都不触发诊断；只有按钮点击会新建会话并发出消息。
 
@@ -398,6 +400,29 @@ Bundle 规则：
 - cohort 改进先读多条诊断会话的结论，再汇总，不把所有 trace 塞进一次请求。
 - 单文件建议 ≤ 5 MB；超出时按“失败 run > 返工 run > 通过 run”排序并截断，同时标 `truncated_input`。
 
+cohort 时 `task` 为空，`runs` 换成 `cases`，每个 case 一张紧凑卡片：
+
+```json
+{
+  "target": {"type": "cohort", "filters": {"range": "7d", "status": "review"}},
+  "cases": [
+    {
+      "task_id": "task-...",
+      "status": "review",
+      "runs": 2,
+      "metrics": {"tsr": 0, "tokens": 0, "tool_errors": 3},
+      "top_signal": "apply_patch: old_text not found (x3)",
+      "evidence": ["evt-...", "evt-..."]
+    }
+  ],
+  "aggregate": {"cohort_size": 20, "tsr": 0.4, "rework_rate": 0.35}
+}
+```
+
+- 卡片由 metrics + trace digest 现场生成，不塞完整 trace；
+- 已有诊断会话时直接复用其结论，避免重复分析；
+- 模型看到的是“群体”，输出共同根因 + 对群体收益最大的 Top 5。
+
 ## 5.3 输出格式：Markdown + 固定标题
 
 诊断和改进都用 Markdown 输出，标题固定、顺序固定：
@@ -430,7 +455,7 @@ Bundle 规则：
 - `类别` 是一组建议词表，方便聚合，**不是规则表**；模型可用 `other` + 自由文本。
 - `Top 5 改进建议` 固定 5 条；不足 5 条时必须说明原因。
 - 排序依据：预期收益 × 影响面 / 成本；这是假设，不是结论。
-- case 级 Top 5 随诊断会话返回；cohort 级 Top 5 由改进会话汇总多条诊断后生成。
+- case 和 cohort 都在同一个会话里输出：`target` 不同，模板相同；cohort 的 bundle 里带 N 个 case 摘要 + 聚合指标。
 
 ## 5.4 Prompt 约束
 
@@ -465,7 +490,7 @@ Bundle 规则：
 - 只手动触发；没有后台任务、没有轮询触发、不进 board 执行队列。
 - harness `evaluation-v1` 决定 prompt、只读工具、`max_iterations` 和上下文预算。
 - 模型仍从 `model.json` 的 catalog 选，可用 `AGENT_RUNTIME_DIAGNOSIS_MODEL` 单独指定。
-- 单次诊断 = 一个会话；cohort 改进 = 读多条诊断会话后再开一个汇总会话。
+- 单次诊断 = 一个会话；cohort 只是 `target.type=cohort`，仍是一个会话、一次调用。
 - 不写 `diagnosis_cache.jsonl`：结果就是会话的最后一条 assistant 消息；相同 `target + bundle_hash` 已有诊断时，UI 提示“已有诊断，打开 / 重新诊断”。
 - 预算旋钮：
   1. **范围**：task / run / cohort；cohort 最多 20 个 case。
@@ -542,7 +567,7 @@ Bundle 规则：
 | 诊断会话编排 | `webui/evaluation.py` | 写 bundle → 建会话（`origin/target`）→ 发首条消息 → 返回 `session_id` |
 | 诊断模型配置 | `runtime_config.py`、`model.json` | 默认 catalog，可用 `AGENT_RUNTIME_DIAGNOSIS_MODEL` 覆盖 |
 | 证据标注（best-effort） | `webui/evaluation.py` | 未验证 `event_id` 在 UI 标注，不拒绝诊断 |
-| API | `webui/evaluation.py` | `/diagnose` `/improvements` 可用；无后台触发 |
+| API | `webui/evaluation.py` | `/diagnose` 支持 task/run/cohort；无后台触发 |
 | 前端诊断面板 | `DiagnosisPanel.tsx`、`MarkdownAnswer.tsx` | 手动按钮；展示会话最后一条消息；可打开会话 |
 | 测试 | `tests/test_diagnosis.py` | mock 模型覆盖正常/标题缺失/伪造证据/超预算 |
 
@@ -571,7 +596,7 @@ Bundle 规则：
 8. 诊断会话用只读工具核实证据，输出 Markdown，包含 `## 结论` / `## 根因` / `## 证据` / `## Top 5 改进建议`。
 9. 任务详情能通过 `Session.target` 列出历史诊断；诊断不写 `board_events.jsonl`，不进 TSR 分母。
 10. 诊断/改进 run 在 `runs.jsonl` 中按 `origin` 可切片；默认 harness 指标不混入它们。
-11. cohort 改进能输出 Top 5 建议，每条绑定指标、影响面、成本和验证方式。
+11. cohort 诊断（`target.type=cohort`）在同一会话里输出 Top 5 建议，每条绑定指标、影响面、成本和验证方式。
 12. 无 SQLite；删除 `metrics/` 后可由 trace 重建。
 13. `pytest` 与 `npm run build` 全绿。
 
