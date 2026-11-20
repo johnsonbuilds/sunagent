@@ -117,6 +117,9 @@ class ChatModel(Protocol):
                tools: list[dict[str, Any]] | None = None) -> AsyncIterator[dict[str, Any]]: ...
 
 
+_STREAM_CALL_KEYS = frozenset({"index", "id", "function"})
+
+
 def _merge_stream_tool_call(calls: list[dict[str, Any]], delta: Mapping[str, Any]) -> None:
     index = delta.get("index", len(calls))
     if not isinstance(index, int):
@@ -134,6 +137,14 @@ def _merge_stream_tool_call(calls: list[dict[str, Any]], delta: Mapping[str, Any
             target_function["name"] += function["name"]
         if isinstance(function.get("arguments"), str):
             target_function["arguments"] += function["arguments"]
+    # Provider-specific fields stay opaque: carried verbatim onto the
+    # assembled call so history can echo them back unchanged (Gemini
+    # rejects the next request when a functionCall's thought_signature is
+    # missing). ``index`` is a stream-position artifact, not part of the
+    # call, so it is never kept.
+    for key, value in delta.items():
+        if key not in _STREAM_CALL_KEYS:
+            target[key] = value
 
 
 async def _consume_stream(llm: ChatModel, messages: list[dict[str, Any]],

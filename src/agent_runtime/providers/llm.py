@@ -430,15 +430,12 @@ class OpenAICompatibleLLM:
                                     "reasoning_content": reasoning}
             calls = []
             for call in (delta.tool_calls or []):
-                function = call.function
-                calls.append({
-                    "index": call.index,
-                    "id": call.id,
-                    "function": {
-                        "name": function.name,
-                        "arguments": function.arguments or "",
-                    },
-                })
+                # Serialize the whole SDK object instead of rebuilding a
+                # known-fields dict: some providers attach per-call extras
+                # (Gemini's ``extra_content.google.thought_signature``) that
+                # must be echoed back on the next request or the call is
+                # rejected as malformed.
+                calls.append(call.model_dump(exclude_none=True))
             if calls:
                 data["tool_calls"] = calls
             if data["content"] or calls or reasoning:

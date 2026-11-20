@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from agent_runtime.agent.runtime_message import runtime_user_message
@@ -16,13 +16,25 @@ from agent_runtime.tools.schema_gate import matches_type, nested_problem
 from agent_runtime.trace import RunTrace
 
 
+# Wire keys the runtime itself owns; everything else on a tool call is a
+# provider-specific field kept opaque for replay.
+_RUNTIME_CALL_KEYS = frozenset({"id", "type", "function", "index"})
+
+
 @dataclass(frozen=True)
 class ValidatedToolCall:
-    """A tool call that is safe to pass to the executor."""
+    """A tool call that is safe to pass to the executor.
+
+    ``extras`` holds provider-specific per-call fields (e.g. Gemini's
+    ``extra_content.google.thought_signature``) exactly as received. The
+    runtime never reads them; they ride along so the conversation history
+    can echo them back on the next request, which some providers require.
+    """
 
     id: str
     name: str
     arguments: dict[str, Any]
+    extras: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -132,7 +144,14 @@ def validate_tool_call(tool_call: Any, schemas: list[dict[str, Any]]) -> Validat
     if problem:
         raise ValueError(problem)
 
-    return ValidatedToolCall(call_id, name, arguments)
+    return ValidatedToolCall(call_id, name, arguments,
+                             _provider_extras(tool_call))
+
+
+def _provider_extras(tool_call: Mapping[str, Any]) -> dict[str, Any]:
+    """Provider-specific call fields, carried verbatim and never interpreted."""
+    return {key: value for key, value in tool_call.items()
+            if key not in _RUNTIME_CALL_KEYS}
 
 
 def classify_tool_calls(tool_calls: list[Any],
@@ -151,9 +170,11 @@ def classify_tool_calls(tool_calls: list[Any],
 
 def _canonical_tool_call(validated: ValidatedToolCall) -> dict[str, Any]:
     """Serialize a validated call so history only ever holds valid JSON."""
-    return {"id": validated.id, "type": "function",
+    call = {"id": validated.id, "type": "function",
             "function": {"name": validated.name,
                          "arguments": json.dumps(validated.arguments)}}
+    call.update(validated.extras)
+    return call
 
 
 def canonical_tool_calls(outcomes: list[ToolCallOutcome]) -> list[dict[str, Any]]:

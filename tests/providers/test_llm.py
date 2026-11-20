@@ -1,9 +1,20 @@
+import json
 import os
 import sys
 import unittest
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
+
+import httpx
+from openai.types.chat.chat_completion_chunk import (
+    ChoiceDeltaToolCall,
+    ChoiceDeltaToolCallFunction,
+)
+from openai.types.chat.chat_completion_message_tool_call import (
+    ChatCompletionMessageToolCall,
+    Function,
+)
 
 
 sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
@@ -482,6 +493,117 @@ class ProviderReasoningTests(unittest.IsolatedAsyncioTestCase):
         result = await llm.chat([])
 
         self.assertEqual(result["reasoning_content"], "thinking out loud")
+
+
+class _ToolCallChunk:
+    """A stream chunk carrying one provider delta tool call."""
+
+    def __init__(self, tool_call: Any,
+                 finish_reason: str | None = None) -> None:
+        delta = unittest.mock.MagicMock()
+        delta.content = ""
+        delta.reasoning_content = ""
+        delta.reasoning = ""
+        delta.reasoning_details = []
+        delta.tool_calls = [tool_call]
+        self.choices = [unittest.mock.MagicMock(delta=delta,
+                                                finish_reason=finish_reason)]
+
+
+def _delta_tool_call(call_id: str, arguments: str,
+                     signature: dict | None = None) -> Any:
+    """Build a loosely-parsed delta call, as the SDK does for SSE data."""
+    extra = {"extra_content": signature} if signature else {}
+    return ChoiceDeltaToolCall.model_construct(
+        index=0, id=call_id,
+        function=ChoiceDeltaToolCallFunction.model_construct(
+            name="read_file", arguments=arguments),
+        **extra)
+
+
+class ProviderToolCallExtrasTests(unittest.IsolatedAsyncioTestCase):
+    """Per-call provider extras (Gemini thought_signature) must survive."""
+
+    def _llm(self, completions: Any) -> OpenAICompatibleLLM:
+        llm = OpenAICompatibleLLM(api_key="test-key",
+                                  base_url="https://api.example.com/v1",
+                                  model="gemini-4-neon")
+        llm.client = unittest.mock.MagicMock()
+        llm.client.chat.completions = completions
+        return llm
+
+    async def test_stream_yields_the_whole_provider_delta(self) -> None:
+        signature = {"google": {"thought_signature": "SIG"}}
+
+        async def _chunks() -> Any:
+            yield _ToolCallChunk(_delta_tool_call("call_1", "{}", signature))
+            yield _Chunk("", "tool_calls")
+
+        completions = unittest.mock.MagicMock()
+        completions.create = unittest.mock.AsyncMock(return_value=_chunks())
+
+        chunks = [chunk async for chunk in self._llm(completions).stream([])]
+
+        delta = chunks[0]["tool_calls"][0]
+        self.assertEqual(delta["extra_content"], signature)
+        self.assertEqual(delta["id"], "call_1")
+        self.assertEqual(delta["function"]["name"], "read_file")
+        self.assertEqual(delta["index"], 0)
+
+    async def test_chat_keeps_the_provider_extras(self) -> None:
+        signature = {"google": {"thought_signature": "SIG"}}
+        tool_call = ChatCompletionMessageToolCall.model_construct(
+            id="call_1", type="function",
+            function=Function.model_construct(name="read_file",
+                                              arguments="{}"),
+            extra_content=signature)
+        message = _FakeMessage()
+        message.tool_calls = [tool_call]
+        response = unittest.mock.MagicMock(usage=None)
+        response.choices = [unittest.mock.MagicMock(message=message,
+                                                    finish_reason="tool_calls")]
+        completions = unittest.mock.MagicMock()
+        completions.create = unittest.mock.AsyncMock(return_value=response)
+
+        result = await self._llm(completions).chat([])
+
+        self.assertEqual(result["tool_calls"][0]["extra_content"], signature)
+
+    async def test_history_extras_reach_the_request_body(self) -> None:
+        """The SDK must not filter unknown keys off a tool call."""
+        signature = {"google": {"thought_signature": "SIG"}}
+        sent: dict[str, Any] = {}
+
+        def handler(request: Any) -> Any:
+            sent.update(json.loads(request.content))
+            return httpx.Response(200, json={
+                "id": "x", "object": "chat.completion", "created": 0,
+                "model": "gemini-4-neon",
+                "choices": [{"index": 0, "finish_reason": "stop",
+                              "message": {"role": "assistant",
+                                          "content": "ok"}}],
+            })
+
+        http_client = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler))
+        self.addAsyncCleanup(http_client.aclose)
+        llm = OpenAICompatibleLLM(api_key="test-key",
+                                  base_url="https://api.example.com/v1",
+                                  model="gemini-4-neon",
+                                  http_client=http_client)
+        history = [
+            {"role": "user", "content": "go"},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "call_1", "type": "function",
+                 "function": {"name": "read_file", "arguments": "{}"},
+                 "extra_content": signature}]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "{}"},
+        ]
+
+        await llm.chat(history)
+
+        echoed = sent["messages"][1]["tool_calls"][0]
+        self.assertEqual(echoed["extra_content"], signature)
 
 
 if __name__ == "__main__":
