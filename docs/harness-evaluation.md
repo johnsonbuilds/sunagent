@@ -517,14 +517,8 @@ cohort 时 `task` 为空，`runs` 换成 `cases`，每个 case 一张紧凑卡�
 - 单次诊断 = 一个会话；cohort 只是 `target.type=cohort`，仍是一个会话、一次调用。
 - 不写 `diagnosis_cache.jsonl`：结果就是诊断会话首轮报告；`Session.report_segment_id` 指向它，追问不覆盖报告。
 - `Session` 同时记录 `target` 和 `bundle_hash`；相同 `target + bundle_hash` 已有诊断时，UI 提示“已有诊断，打开 / 重新诊断”。
-- `AGENT_RUNTIME_DIAGNOSIS_MODEL` 填 catalog `id`，用 `catalog.require()` 解析完整 endpoint/key，不能复用主模型的 endpoint。
-- 运行边界：
-  1. **范围**：task / run / cohort；cohort 最多 20 个 case。
-  2. **迭代**：`max_iterations: 6`。
-  3. **并发**：单飞锁，同时只允许一个诊断。
-  4. **去重**：`bundle_hash` 命中已有诊断时提示打开 / 重新诊断。
-- 输入：`bundle.json` ≤ 1 MB；超出截断并标 `truncated_input`。
-- 失败：会话里明确报错，不返回伪诊断；可手动重试。
+- `AGENT_RUNTIME_DIAGNOSIS_MODEL` 填 catalog `id`，用 `catalog.require()` 解析完整 endpoint/key。
+- 范围：task / run / cohort；cohort 最多 20 个 case。
 
 ## 5.7 改进建议如何落地
 
@@ -651,7 +645,6 @@ cohort 时 `task` 为空，`runs` 换成 `cases`，每个 case 一张紧凑卡�
 | 指标被“拖卡片”游戏 | TSR 以人工验收为准，但要求产物证据（`edited_files` / `submit_result`）；定期抽样审计 |
 | 用户忘记更新状态 | 记录 stale review；指标页显示数据质量提示 |
 | 模型诊断幻觉 | 只读工具自行核实；引用不到标“未验证”；标注置信度；允许人工覆盖；不自动改 harness |
-| 诊断成本 | 仅手动触发；`max_iterations` 限制；bundle 大小；cohort 限制 case 数 |
 | 诊断会话污染指标 | `origin` 切片；Run 级不绑 `task_id`；Board 与 Harbor outcome 分视图 |
 | Markdown 解析失败 | 四个标题为约定，解析失败原样渲染，不影响阅读 |
 | 内存索引增长 | 按月轮转；超过阈值再评估 SQLite |
@@ -741,7 +734,7 @@ cohort 时 `task` 为空，`runs` 换成 `cases`，每个 case 一张紧凑卡�
 - 追问后评测页只读 `report_segment_id` 指向的首轮报告，不读“最后一条”；
 - 追问走普通 `POST /api/sessions/{id}/messages` → `_prepare_turn()`；trace 的 `origin` 必须从 `session.origin` 继承（默认 `webui`，诊断会话 `diagnosis`），不能按路由硬编码，否则追问 run 会混进 webui 指标；
 - `AGENT_RUNTIME_DIAGNOSIS_MODEL` 填 catalog `id`，用 `catalog.require()` 解析完整 endpoint/key；
-- `RuntimeConfig` 不需要新增诊断专属字段；诊断复用 harness 的 `max_iterations` 和 context budget。
+- `RuntimeConfig` 不需要新增诊断专属字段；
 
 ## 9.7 Board 指标边界
 
