@@ -766,6 +766,3 @@ cohort 时 `task` 为空，`runs` 换成 `cases`，每个 case 一张紧凑卡�
 - `src/agent_runtime/integrations/harbor.py`（sink 裁剪）
 - `webui/executor.py` / `webui/server.py`（run_id 贯穿）
 
----
-
-这版方案已经按你的决定收敛：**不做快照、不做后验 verify、不做 SQLite、不做安全边界、不做满意度；保留全量 messages、只关 chunk；评测页直接替换现有 Observability 占位页；诊断是用户手动触发的一次普通 run turn + 普通会话，只读工具核实证据，输出带固定标题的 Markdown（结论 / 根因 / 证据 / Top 5 改进建议），不自动执行、不写 board_events、不单独缓存。**
