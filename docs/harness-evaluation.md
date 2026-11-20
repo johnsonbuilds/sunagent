@@ -60,7 +60,7 @@
 | `llm.start` | **完整 `messages`** + `request_chars` / `request_hash` / `prefix_hash` | 每 LLM 请求一条 |
 | `llm.end` | **拼装后的 response**：`content` / `reasoning_content` / `tool_calls` / `usage` / `ttft_ms` / `duration_ms` / `finish_reason` | 每 LLM 请求一条 |
 | `llm.chunk` | **默认关闭** | 需要时 `--trace-chunks on` |
-| `tool.end` | 参数、结果（超限落 spill）、`exit_code`、`queue_ms` / `exec_ms` | 每工具调用一条 |
+| `tool.end` | 参数、结果（超限落 spill）、`status`、`error_kind`、`exit_code`、`edited_files`、`exec_ms` | 每工具调用一条 |
 | `context.*` | 触发原因、压缩前后大小、summary invalid、成本 | 每次压缩 |
 | `verification.*` | 结果、缺失项、rerun 成本 | 每次验证 |
 | `run.metrics` | 运行级指标汇总，不含 final answer | 每 run 一条 |
@@ -70,15 +70,16 @@
 - `messages` **只写一次**，放在 `llm.start`；`llm.end` 不再重复。
 - final answer 不重复存：WebUI 在 `session.segments` / board `runs[].response`；CLI/Harbor 在 `agent.end` 带一份。
 - 全量 messages 保留后，`run.config` 才是“可复现”的另一半；没有它，模型参数、tool schema、runtime 条件仍然对不上。
+- `llm.start` / `llm.end` 下沉到单次真实 attempt（`_chat_response`），重试另发 `llm.retry`；`llm.start` 只带请求 `messages`，`llm.end` 只带响应/usage/timing，避免同一份 meta 写两次。
 
 ## 2.2 内存与写入
 
 - `RunTrace.events` 增加 `retain_events = all | control | none`：
   - 测试：`all`
   - WebUI / Harbor：`control`（只留控制事件；payload 事件不常驻）
-- Harbor 不再依赖 `trace.events` 全量，改用 `trace.agent_error()` / `trace.event_count`。
+- Harbor 不再依赖 `trace.events` 全量，改用 `trace.agent_error()` / `trace.event_count`；sink 的 `last_event` 不再塞全量 `messages`。
 - `EventEmitter` 不再常驻每个 `assistant.delta`；实时消费靠订阅，历史靠 session segment。
-- 写入仍走异步 writer；队列加 `maxsize` 和 `trace.dropped` 计数。
+- 写入仍走异步 writer；只有 `llm.chunk` 可丢并计 `trace.dropped`，关键事件（`run.config` / `run.metrics` / `agent.end`）永不丢；`flush()` 用 `await queue.put(_STOP)`。
 - 序列化用 `ensure_ascii=False, separators=(",", ":")`，减少体积和 CPU。
 - 不做 gzip、不做快照；只记录 `trace_bytes`，超过阈值告警。
 
@@ -97,7 +98,7 @@ genes_hash
 model
 ```
 
-`origin` 是**切片维度，不是排除**：诊断/改进 run 全量保留在 `runs.jsonl`；默认 harness 指标只聚合 `task_id != null` 的 run。
+`origin` 是**切片维度，不是排除**：诊断/改进 run 全量保留在 `runs.jsonl`；Run 级指标聚合 `origin in {webui, cli, harbor}`，按 `origin/harness/model/day` 切片，不绑 `task_id != null`；Board outcome 与 Harbor outcome 分开算（见 9.4）。
 
 Board 增加 append-only 事件流 `workspace/board_events.jsonl`（只记录 board 生命周期，不记录诊断）：
 
@@ -107,12 +108,14 @@ Board 增加 append-only 事件流 `workspace/board_events.jsonl`（只记录 bo
 {"task_id":"task-...","at":...,"type":"run_finished","run_id":"...","status":"completed"}
 ```
 
+事件至少覆盖：`task_created`、`task_deleted`、`status_changed`、`comment_added`、`run_claimed`（带 `queued_at` / `queue_wait_ms`）、`run_requeued`、`run_finished`。
+
 `board.json` 仍是当前状态权威；事件流只用于历史与指标，丢了可以降级，不影响运行。
 
 ## 2.4 存储：纯文件 + 内存索引
 
 ```
-workspace/
+runtime_home/  (默认 workspace/)
 ├── traces/run-*.jsonl                # 权威，完整可回放
 ├── sessions/*.json                   # 权威
 ├── board.json                        # 当前状态权威
@@ -124,7 +127,7 @@ workspace/
 
 - 评测服务启动时只读 `runs.jsonl` + `board_events.jsonl`，并从 `SessionStore` 读取诊断会话的 `origin/target`。
 - 详情页按 `run_id` 读对应 trace，带 mtime 缓存。
-- 诊断结果不单独缓存：结果就是诊断会话的最后一条 assistant 消息。
+- 诊断结果不单独缓存：结果就是诊断会话首轮报告，`Session.report_segment_id` 指向它。
 - 不做 SQLite；数据量到“几十万 run、查询 >10 秒”再考虑。
 - `runs.jsonl` 按月轮转即可，当前不需要。
 
@@ -136,12 +139,12 @@ workspace/
 
 | 维度 | 指标 | 定义 | 数据源 | 判定 | 优先级 |
 |---|---|---|---|---|---|
-| **有效性** | **TSR** | `done` 任务 / 进入执行的任务 | board events | 人工验收 | P0 |
-| | **First-pass acceptance** | 首次 run 后直接 `done` / 进入执行 | board events | 人工验收 | P0 |
-| | **Rework rate** | `review → todo/doing` 或带反馈 comment / 进入 review | board events | 规则 | P0 |
+| **有效性** | **TSR** | 进入过执行且当前/验收为 `done` / 进入过执行 | board events | 人工验收 | P0 |
+| | **First-pass acceptance** | 首次 run 后直接 `done` / 进入过执行 | board events | 人工验收 | P0 |
+| | **Rework rate** | 完成过至少一次 run 后，`review → todo/doing` 或 doing/review 期间追加评论触发下一轮 / 进入 review | board events | 规则 | P0 |
 | | **TCR** | 正常结束 run / 发起 run | run.metrics | 规则 | P0 |
-| | **VCR** | 正常结束 + 非空答复 + 有产物/diff + 无策略拦截 / 发起 run | run.metrics + diff | 规则 | P0 |
-| | **Hallucinated completion** | 声称完成但无产物/diff，且被退回 | board + diff | 规则 | P0 |
+| | **VCR** | 正常结束 + 非空答复 + 有产物证据 + 无策略拦截 / 发起 run（仅声明需要产物的任务） | run.metrics + tool.end | 规则 | P0 |
+| | **Hallucinated completion** | 声称完成但无产物证据，且被退回（仅声明需要产物的任务） | board + tool.end | 规则 | P0 |
 | | Partial progress | 勾选 acceptance 项 / 总项（仅当 description 有 checklist） | description + board | 解析 | P1 |
 | | Answer correctness | 0/1 或 0–1 | 人工 / 模型判定 | 人工优先 | P1 |
 | | Groundedness | 有证据支撑的结论 / 结论总数 | answer + trace | 模型判定（按需） | P2 |
@@ -156,7 +159,7 @@ workspace/
 | | **Latency p50/p95** | 端到端 + 分阶段 | run.metrics | 规则 | P0 |
 | | TTFT | 首 token 延迟 | trace | 规则 | P1 |
 | | Queue wait | `started_at − queued_at` | board events | 规则 | P1 |
-| | Cost / success | 估算成本 / 验收通过数 | run.metrics + 模型价 | 规则 | P1 |
+| | Cost / success | 估算成本 / 验收通过数 | run.metrics + pricing | 规则 | P2（需先加 pricing） |
 | **可靠性** | **Error / timeout / retry rate** | 分阶段、分 provider | run.metrics | 规则 | P0 |
 | | Summary invalid rate | invalid / attempts | run.metrics | 规则 | P1 |
 | | Consistency | 同一任务 N 次 pass^k / 方差 | 重复运行 | 实验 | P1 |
@@ -174,6 +177,9 @@ workspace/
 - `Partial progress` 不强制用户写 acceptance；没有 checklist 就是 `null`，不臆造。
 - `Groundedness` / `Trajectory quality` 依赖模型判定或人工，默认不自动评分。
 - `Consistency` / `Rephrase robustness` 属于实验，不是日常观测。
+- 产物证据 = 成功的 `write_file` / `edit_file` / `apply_patch` 产生的 `edited_files` 非空，或存在有效 `submit_result`；不依赖事后 git diff。
+- 没有产物语义的任务（调研、问答、只读）VCR / Hallucinated completion 记 `null`，不判失败。
+- TSR 分子必须约束“进入过执行”，否则 backlog 直接拖到 done 会让 TSR > 100%。
 
 ## 3.2 不算的指标
 
@@ -195,6 +201,8 @@ workspace/
 | `IconRail.tsx` | 复用 `ObservabilityIcon`，或新增 `EvaluationIcon` |
 | `i18n.tsx` | 中英文 `navEvaluation` / `eval*` 文案 |
 | 删除 | `views/ObservabilityPage.tsx` 占位页 |
+
+`evaluation-v1` 建议加 `internal: true`，在 `/api/config` 的 harness 列表里过滤；不加也能跑，只是会出现在普通聊天和看板任务的下拉里。
 
 ## 4.2 页面信息架构
 
@@ -278,7 +286,7 @@ Tab: 总览 | 有效性 | 过程 | 效率 | 可靠性 | 任务 | 诊断与建议
 | `RunTimeline.tsx` | iteration 时间线 |
 | `DiagnosisPanel.tsx` | 诊断触发、展示诊断会话最后一条消息、打开会话 |
 | `DiagnosisHistory.tsx` | 某任务的历史诊断会话列表（`Session.target`） |
-| `MarkdownAnswer.tsx` | 渲染约定标题的 Markdown；解析失败时原样展示 |
+| `MarkdownAnswer.tsx` | 复用现有 `components/Markdown.tsx`，外层做标题分段和证据标注 |
 | `SuggestionList.tsx` | 从 Markdown 中提取 Top 5 建议（best-effort） |
 | `useEvaluation.ts` | 数据获取、轮询、筛选状态 |
 
@@ -313,11 +321,11 @@ Tab: 总览 | 有效性 | 过程 | 效率 | 可靠性 | 任务 | 诊断与建议
 
 1. 用户在任务详情、run 详情或 cohort 页点击「开始诊断」。
 2. `POST /api/evaluation/diagnose`，只传 `target`；task / run / cohort 走同一个入口。
-3. 后端构建 evidence bundle，写 `workspace/diagnosis/<id>/bundle.json` 和 `summary.md`；cohort 额外带上 N 个 case 的紧凑摘要（不是要求先跑 N 次诊断）和聚合指标。
-4. 新建会话：`harness=evaluation-v1`、`origin=diagnosis`、`target={type,id}`、标题「诊断: xxx」。
-5. 发出第一条消息：短指令 + bundle 路径。模型用只读工具（`read_file` / `grep_search` / `find_files` / `list_dir`）核实细节。
+3. 后端构建 evidence bundle，写 `runtime_home/diagnosis/<id>/bundle.json` 和 `summary.md`；cohort 额外带上 N 个 case 的紧凑摘要（不是要求先跑 N 次诊断）和聚合指标。
+4. 新建会话：`harness=evaluation-v1`、`origin=diagnosis`、`target={type,id|filters}`、标题「诊断: xxx」。
+5. 发出第一条消息：短指令 + bundle 路径。模型用只读工具核实：`read_trace` / `search_trace` 查 trace，`read_file` / `list_dir` 查 bundle。
 6. `run_turn` 返回 Markdown，按约定标题输出：结论 / 根因 / 证据 / Top 5 改进建议。
-7. 会话出现在会话列表；评测页嵌入最后一条 assistant 消息，并提供「打开会话」。
+7. 会话出现在会话列表；评测页嵌入 `report_segment_id` 指向的首轮报告，并提供「打开会话」。
 8. 任务详情通过 `Session.target` 显示历史诊断，不写 `board_events.jsonl`。
 
 **不是两次接口调用**：同一个会话、同一份 Markdown 里先给根因、再给 Top 5；cohort 只是 `target` 不同。
@@ -334,7 +342,7 @@ Tab: 总览 | 有效性 | 过程 | 效率 | 可靠性 | 任务 | 诊断与建议
 - **只在用户点击时触发一次**；页面加载、轮询、任务完成、run 结束都不自动诊断。
 - **诊断就是一次普通 run turn + 一个普通会话**：与 board task 会话同等对待，可查看、追问、换模型重跑、看 trace。
 - **不是 board task**：没有验收语义，不进 TSR 分母，不写 `board_events.jsonl`。
-- 模型用只读工具自行核实证据（`read_file` / `grep_search` / `find_files` / `list_dir`），不直接相信 bundle 摘要。
+- 模型用只读工具自行核实证据（`read_trace` / `search_trace` + `read_file` / `list_dir`），不直接相信 bundle 摘要。
 - 输出 Markdown，带固定标题约定；不强制 JSON。
 - 每次诊断输出：根因 + 证据 + **Top 5 改进建议**。
 - 建议必须绑定：影响指标、影响面、成本、验证方式；模型不自动改 harness。
@@ -386,19 +394,19 @@ Tab: 总览 | 有效性 | 过程 | 效率 | 可靠性 | 任务 | 诊断与建议
 文件布局：
 
 ```
-<workspace>/diagnosis/<id>/
-├── bundle.json     # 结构化证据
+<runtime_home>/diagnosis/<id>/
+├── bundle.json     # 结构化证据（目标 ≤ 1 MB）
 └── summary.md      # 指标口径与聚合结果，便于模型快速定位
 ```
 
-路径一律用 workspace 相对路径（`LocalWorkspace.root`），不要硬编码 `workspace/...`；`AGENT_RUNTIME_WORKSPACE` 可能改变根目录。
+诊断产物归属 `storage.runtime_home()`（`AGENT_RUNTIME_HOME`），不是 `LocalWorkspace.root`（`AGENT_RUNTIME_WORKSPACE`）。两者在代码里是分开的；`AGENT_RUNTIME_WORKSPACE` 指向子目录时，sandbox 读不到 runtime home。模型通过专用只读工具 `read_trace` / `search_trace` 读取，不靠通用 `grep_search`（它跳过 > 1 MB 文件和 `workspace/` 目录）。
 
 Bundle 规则：
 
 - 每条证据带 `event_id`；模型应引用它，后端做 best-effort 校验。
 - 大结果只给摘要/尾部 + spill 路径，避免一次读入过多。
-- cohort 改进先读多条诊断会话的结论，再汇总，不把所有 trace 塞进一次请求。
-- 单文件建议 ≤ 5 MB；超出时按“失败 run > 返工 run > 通过 run”排序并截断，同时标 `truncated_input`。
+- cohort 诊断先读多条诊断会话的结论，再汇总，不把所有 trace 塞进一次请求。
+- 单文件建议 ≤ 1 MB；超出时按“失败 run > 返工 run > 通过 run”排序并截断，同时标 `truncated_input`。
 
 cohort 时 `task` 为空，`runs` 换成 `cases`，每个 case 一张紧凑卡片：
 
@@ -462,7 +470,7 @@ cohort 时 `task` 为空，`runs` 换成 `cases`，每个 case 一张紧凑卡�
 `harnesses/evaluation-v1.yaml` 的 system prompt 要点：
 
 - 你是 harness 评测诊断器，不是任务 agent；可以读文件核实，但不修改、不执行、不提交。
-- 先读 `bundle.json` / `summary.md`，再按需用 `read_file` / `grep_search` / `find_files` / `list_dir` 核实细节。
+- 先读 `bundle.json` / `summary.md`，再用 `read_trace` / `search_trace` 查原始 trace，必要时 `read_file` / `list_dir` 核实细节。
 - 每条结论尽量引用 `run_id` / `iteration` / `event_id`；引用不到就明说是推断。
 - 区分“事实”和“推断”；推断要标置信度。
 - 不要因为 TSR 低就直接归因模型；先检查契约、工具、上下文、runtime、验证。
@@ -491,12 +499,15 @@ cohort 时 `task` 为空，`runs` 换成 `cases`，每个 case 一张紧凑卡�
 - harness `evaluation-v1` 决定 prompt、只读工具、`max_iterations` 和上下文预算。
 - 模型仍从 `model.json` 的 catalog 选，可用 `AGENT_RUNTIME_DIAGNOSIS_MODEL` 单独指定。
 - 单次诊断 = 一个会话；cohort 只是 `target.type=cohort`，仍是一个会话、一次调用。
-- 不写 `diagnosis_cache.jsonl`：结果就是会话的最后一条 assistant 消息；相同 `target + bundle_hash` 已有诊断时，UI 提示“已有诊断，打开 / 重新诊断”。
+- 不写 `diagnosis_cache.jsonl`：结果就是诊断会话首轮报告；`Session.report_segment_id` 指向它，追问不覆盖报告。
+- `Session` 同时记录 `target` 和 `bundle_hash`；相同 `target + bundle_hash` 已有诊断时，UI 提示“已有诊断，打开 / 重新诊断”。
+- `AGENT_RUNTIME_DIAGNOSIS_MODEL` 填 catalog `id`，用 `catalog.require()` 解析完整 endpoint/key，不能复用主模型的 endpoint。
 - 预算旋钮：
   1. **范围**：task / run / cohort；cohort 最多 20 个 case。
   2. **单次成本**：模型选择、bundle 大小、输出上限。
-  3. **总量**：每天最大诊断次数；超限按钮置灰并提示。
-- 默认建议：`max_iterations: 6`，单文件 ≤ 5 MB，输出 ≤ 4k tokens，cohort ≤ 20 个 case。
+  3. **总量**：`RuntimeConfig.diagnosis_daily_limit`；`/diagnose` 返回 `remaining`，超限 429。
+- 默认建议：`max_iterations: 6`，`bundle.json` ≤ 1 MB，`max_output_tokens ≤ 4k`，cohort ≤ 20 个 case。
+- 主循环目前没有 `max_tokens` 控制；诊断请求单独加 `max_output_tokens`，不改全局 agent 默认。
 - 失败/超预算：会话里明确报错，不返回伪诊断；可手动重试。
 
 ## 5.7 改进建议如何落地
@@ -520,7 +531,7 @@ cohort 时 `task` 为空，`runs` 换成 `cases`，每个 case 一张紧凑卡�
 |---|---|---|
 | 定义 `run.config` / `run.metrics` schema | `docs/evaluation.md`、`src/agent_runtime/metrics.py` | 字段有定义、有示例 |
 | 定义指标口径与诊断 Markdown 约定 | 同上 | 每个指标有分母/来源/判定；四个固定标题有示例 |
-| `Session` 增加 `origin` / `target` | `webui/sessions.py` | 诊断会话可被 task/run 索引；不写 `board_events` |
+| `Session` 增加 `origin` / `target` / `report_segment_id` / `bundle_hash` | `webui/sessions.py` | 诊断会话可索引；追问不覆盖报告；不写 `board_events` |
 | 新增 metrics 路径 | `src/agent_runtime/storage.py` | `workspace/metrics/runs.jsonl` 可写 |
 | 测试骨架 | `tests/agent/test_metrics.py` | schema 序列化通过 |
 
@@ -530,9 +541,12 @@ cohort 时 `task` 为空，`runs` 换成 `cases`，每个 case 一张紧凑卡�
 |---|---|---|
 | `RunTrace` 支持 `run.config` / `run.metrics` / retain 策略 | `trace.py` | 每 run 两条事件；内存不常驻 payload |
 | `llm.start` 全量 messages；`llm.end` assembled response；chunk 默认关 | `loop.py`、`chat.py` | messages 只写一次；chunk 0 条 |
-| tool 统计（queue/exec/exit/output） | `tool_runner.py` | 每次工具调用有完整字段 |
-| usage/cache/prefix | `turn_history.py` | cached tokens/prefix hash 可见 |
-| join keys + trace level + `origin` 切片 | `webui/server.py` | trace 可 join task/session；诊断/改进 run 可单独切片 |
+| tool 统计（error_kind/exit/edited_files/exec） | `tool_runner.py`、`tools/` | 结果错误不再记 success；spill_path 进 tool.end |
+| usage/cache/prefix/finish_reason | `providers/llm.py`、`agent/chat.py`、`agent/tokens.py`、`turn_history.py` | cached tokens、finish_reason 透传 |
+| join keys + trace level + `origin` 切片 + run_id 贯穿 | `webui/server.py`、`webui/executor.py` | board run_id == trace run_id；诊断/改进可切片 |
+| `EventEmitter` 不常驻 delta | `events.py` | 内存不随 delta 增长 |
+| CLI 交互每 turn 独立 trace | `run_agent.py` | 每 turn 一个 run_id、run.config/metrics |
+| Harbor sink 裁剪大 payload | `integrations/harbor.py` | `last_event` 不再塞全量 messages |
 | board 生命周期事件 | `webui/board.py`、`webui/executor.py` | 状态变更/评论/run 完成都有事件 |
 | Harbor 去掉全量 events 依赖 | `integrations/harbor.py` | 仍能拿到 agent.error/event_count |
 | 测试 | `tests/test_trace.py`、`tests/webui/test_board.py` | 覆盖新事件与内存策略 |
@@ -542,7 +556,7 @@ cohort 时 `task` 为空，`runs` 换成 `cases`，每个 case 一张紧凑卡�
 | 任务 | 文件 | 验收 |
 |---|---|---|
 | `EvaluationStore` 内存索引 | `webui/evaluation.py` | 10k run 启动 < 1s；含 `Session.origin/target` 索引 |
-| KPI/趋势/漏斗/切片 | 同上 | 结果与手工核对一致 |
+| KPI/趋势/漏斗/切片（Board / Harbor 双轨） | 同上 | Run 级不绑 task_id；Board 与 Harbor 分视图 |
 | run 详情 trace digest | 同上 | 按需读取，带缓存 |
 | API 路由 | `webui/server.py` | 评测端点全部可用 |
 | 测试 | `tests/webui/test_evaluation.py` | fixture 覆盖空数据/正常/异常 |
@@ -562,7 +576,8 @@ cohort 时 `task` 为空，`runs` 换成 `cases`，每个 case 一张紧凑卡�
 
 | 任务 | 文件 | 验收 |
 |---|---|---|
-| evidence bundle builder | `src/agent_runtime/diagnosis.py` | 从 run.metrics + trace + board + session 构建，写 `diagnosis/<id>/` |
+| evidence bundle builder | `src/agent_runtime/diagnosis.py` | 从 run.metrics + trace + board + session 构建，写 `runtime_home/diagnosis/<id>/` |
+| trace 只读工具 | `src/agent_runtime/diagnosis.py` | `read_trace` / `search_trace` 直读 `storage.traces_dir()`，绕开 sandbox 限制 |
 | `harnesses/evaluation-v1.yaml` | `harnesses/` | 只读工具、诊断 prompt、Markdown 约定 |
 | 诊断会话编排 | `webui/evaluation.py` | 写 bundle → 建会话（`origin/target`）→ 发首条消息 → 返回 `session_id` |
 | 诊断模型配置 | `runtime_config.py`、`model.json` | 默认 catalog，可用 `AGENT_RUNTIME_DIAGNOSIS_MODEL` 覆盖 |
@@ -599,6 +614,10 @@ cohort 时 `task` 为空，`runs` 换成 `cases`，每个 case 一张紧凑卡�
 11. cohort 诊断（`target.type=cohort`）在同一会话里输出 Top 5 建议，每条绑定指标、影响面、成本和验证方式。
 12. 无 SQLite；删除 `metrics/` 后可由 trace 重建。
 13. `pytest` 与 `npm run build` 全绿。
+14. board run 的 `board.json runs[].run_id` 与 `traces/run-*.jsonl` 的 `run_id` 一致。
+15. VCR / Hallucinated completion 只对声明需要产物的任务计算；产物证据来自 `tool.end`，不依赖事后 git diff。
+16. 诊断报告由 `Session.report_segment_id` 固定；追问不改变评测页读取的报告。
+17. Harbor 的 accuracy/reward 与 Board 的 TSR 分视图展示，不混算。
 
 ---
 
@@ -611,10 +630,122 @@ cohort 时 `task` 为空，`runs` 换成 `cases`，每个 case 一张紧凑卡�
 | 用户忘记更新状态 | 记录 stale review；指标页显示数据质量提示 |
 | 模型诊断幻觉 | 只读工具自行核实；引用不到标“未验证”；标注置信度；允许人工覆盖；不自动改 harness |
 | 诊断成本 | 仅手动触发；`max_iterations` 限制；bundle/输出上限；cohort 限制 case 数 |
-| 诊断会话污染指标 | `origin` 切片；默认 harness 指标只聚合 `task_id != null` 的 run |
+| 诊断会话污染指标 | `origin` 切片；Run 级不绑 `task_id`；Board 与 Harbor outcome 分视图 |
 | Markdown 解析失败 | 四个标题为约定，解析失败原样渲染，不影响阅读 |
 | 内存索引增长 | 按月轮转；超过阈值再评估 SQLite |
 | 安全被误解 | 明确 guard 只是 fool-proofing，不对外宣称安全 |
+
+---
+
+# 九、与现有代码对齐的修正（实现前置）
+
+以下问题与当前源码直接冲突，必须在 Phase 0/1 修掉；否则指标会失真或链路断掉。
+
+## 9.1 Run 身份：board run_id 必须贯穿 trace
+
+现状：
+
+- `webui/board.py` 的 `claim_next_todo()` 生成 `task.run_id`；
+- `webui/executor.py` 调 `_run_turn(session, prompt)`，没有传 `task.id` / `task.run_id`；
+- `webui/server.py` 的 `_prepare_turn()` 又生成一个新的 `RunTrace.run_id`；
+- `finish_run()` 只用 `task.run_id`，丢弃 `outcome.run_id`。
+
+修正：
+
+- `run_board_task` 把 `task.id`、`task.run_id`、`run_index` 传给 `_prepare_turn`；
+- `_prepare_turn(..., run_id=..., task_id=..., run_index=...)` 不再自己生成；只有 CLI / 普通聊天才生成新 `run_id`；
+- `finish_run()` 校验 `outcome.run_id == task.run_id`；
+- 历史数据只能按 `(session_id, 时间窗)` best-effort 回填，不承诺逐条对齐。
+
+验收：`board.json` 的 `runs[].run_id` 与 `traces/run-*.jsonl` 的 `run_id` 一致。
+
+## 9.2 产物证据：不要依赖事后 git diff
+
+现状：不做快照、所有任务共用 `LocalWorkspace`；事后 `git diff` 会串味，调研/问答任务也没有 diff。
+
+修正：
+
+- `tool.end` 记录 `edited_files`（成功的 `write_file` / `edit_file` / `apply_patch`，复用 `harness.verification.edit_tools`）；
+- 产物证据 = `edited_files` 非空，或存在有效 `submit_result`；
+- VCR / Hallucinated completion 只对“声明需要产物”的任务/harness 计算；其他任务记 `null`；
+- bundle 的 `environment` 用 `edited_files + diff_summary（若可得）`，不把 git diff 当唯一证据。
+
+## 9.3 诊断工具与路径：绕开 sandbox 限制
+
+现状：
+
+- `storage.runtime_home()`（默认 `workspace/`，受 `AGENT_RUNTIME_HOME` 控制）与 `LocalWorkspace.root`（`AGENT_RUNTIME_WORKSPACE` 或 cwd）是两套根；
+- `execution/base.py` 的 `SKIP_DIRS` 含 `"workspace"`；
+- `grep_search` 跳过 > 1 MB 文件；
+- 保留全量 `messages` 后，`traces/run-*.jsonl` 普遍 > 1 MB。
+
+修正：
+
+- 诊断产物固定写 `storage.runtime_home() / "diagnosis"`；
+- 给 `evaluation-v1` 提供专用只读工具 `read_trace(run_id, event_type/event_id/iteration)`、`search_trace(run_id, pattern)`，直接读 `storage.traces_dir()`，不走 `LocalWorkspace`；这两个工具不进通用 `builtin_tool_specs`，只在 `evaluation-v1` 的 registry 里注册；
+- `bundle.json` 目标 ≤ 1 MB，超出则截断并标 `truncated_input`；
+- 会话消息里给 runtime-home 相对路径，不给 sandbox 路径。
+
+## 9.4 指标分层：Board 与 Harbor 分开
+
+现状：Harbor `jobs/` 与普通聊天都没有 `task_id`；Harbor 的成败是 `reward/accuracy`，不是 `done`。
+
+修正：
+
+- **Run 级**（TCR、工具错误、参数合法性、tokens、latency、TTFT、retry、summary invalid）：聚合 `origin in {webui, cli, harbor}`，按 `origin/harness/model/day` 切片，不绑 `task_id != null`；
+- **Board outcome**：TSR / first-pass / rework，只从 `board_events.jsonl` 算；
+- **Harbor outcome**：accuracy / reward，复用 `evaluation/records/`；
+- 评测页分「Harness 运行」和「任务结果」两个视图，不混成一个 TSR。
+
+## 9.5 Trace / Tool / LLM 埋点修正
+
+| 问题 | 现状 | 修正 |
+|---|---|---|
+| 工具错误被记 success | `LocalShellExecutor` / `read_file` 返回 `{"error": ...}` 不抛异常 | `tool.end` 增加 `status`、`error_kind`、`exit_code`，按结果判定 |
+| `spill_path` 迟到 | `observations.render()` 在 `tool` span 之后 | 先 `render` 再写 `tool.end`，`exec_ms` 单独计 |
+| `queue_ms` 不存在 | `ToolRunner` 严格串行 | 删除 `queue_ms`，或定义为同 iteration 等待前序工具 |
+| `messages` 写两次 | `RunTrace.span()` 把同一 `span_meta` 给 `.start` 和 `.end` | `llm.start` 单独 emit 请求 payload；`llm.end` 只写响应/usage/timing |
+| 重试混入时长 | span 包住 `chat_with_recovery` | 事件下沉到单次 `_chat_response` attempt，或加 `attempt` 字段 |
+| `maxsize` 丢关键事件 | `flush()` 用 `put_nowait(_STOP)` | 只丢 `llm.chunk`；关键事件不丢；`flush` 用 `await queue.put` |
+| usage 丢缓存 token | `_usage_dict` / `_consume_stream` 只留两项 | 透传 `cached_tokens` / `prompt_cache_hit_tokens` |
+| `finish_reason` 丢失 | `_consume_stream` 未放进 response | 放进 response，`llm.end` 记录 |
+
+## 9.6 诊断会话的元数据与配额
+
+- `Session` 增加 `origin`、`target`、`report_segment_id`、`bundle_hash`、`diagnosis_id`；
+- 追问后评测页只读 `report_segment_id` 指向的首轮报告，不读“最后一条”；
+- `AGENT_RUNTIME_DIAGNOSIS_MODEL` 填 catalog `id`，用 `catalog.require()` 解析完整 endpoint/key；
+- 配额：`RuntimeConfig` 增加 `diagnosis_daily_limit`、`diagnosis_max_output_tokens`；`/diagnose` 返回 `remaining`，超限 429；
+- 主循环目前没有 `max_tokens` 控制；诊断请求单独加 `max_output_tokens`，不改全局 agent 默认。
+
+## 9.7 Board 指标边界
+
+- **TSR**：分子必须是“进入过执行且 done”，否则 backlog 直接拖到 done 会让 TSR > 100%；
+- **Rework**：完成过至少一次 run 后，`review → todo/doing`，或 doing/review 期间追加评论触发下一轮；未执行就加评论不算返工；
+- **Queue wait**：`claim_next_todo()` 会清空 `queued_at`，必须在 claim 时先算；
+- **事件补齐**：`task_created`、`task_deleted`、`status_changed`、`comment_added`、`run_claimed`（带 `queued_at` / `queue_wait_ms`）、`run_requeued`、`run_finished`。
+
+## 9.8 其它落地项
+
+- `harnesses/evaluation-v1.yaml`：建议加 `internal: true` 并在 `/api/config` 过滤；不加也能跑，只是会出现在普通聊天/看板的下拉里；
+- `SessionStore.create()` 加随机后缀，避免同秒 ID 冲突；
+- 前端 `selectSession()` 用 `detail.busy` 初始化 busy，避免运行中的诊断会话被当成空闲；
+- `Cost / success` 暂降 P2；要做就先给 `model.json` 加可选 `pricing`；
+- `run_agent.py` 交互模式每 turn 新建 trace / run_id；
+- `runs.jsonl` 写入责任写清楚：由调用方（`webui/server.py` / `run_agent.py` / `harbor.py`）写，或由 `RunTrace` 写但测试隔离 `AGENT_RUNTIME_HOME`；Harbor 多进程用原子 append；
+- `run.config` 的 git 信息异步 + 超时 + env 白名单；
+- Harbor sink 的 `last_event` 不再塞全量 `messages`；
+- 前端复用 `components/Markdown.tsx`，不重写渲染。
+
+## 9.9 Phase 1 必须补列的文件
+
+- `src/agent_runtime/providers/llm.py`（cached tokens）
+- `src/agent_runtime/agent/chat.py`（`finish_reason`、usage 透传）
+- `src/agent_runtime/agent/tokens.py`（usage 结构）
+- `src/agent_runtime/events.py`（`EventEmitter` 不常驻 delta）
+- `run_agent.py`（每 turn 独立 trace）
+- `src/agent_runtime/integrations/harbor.py`（sink 裁剪）
+- `webui/executor.py` / `webui/server.py`（run_id 贯穿）
 
 ---
 
