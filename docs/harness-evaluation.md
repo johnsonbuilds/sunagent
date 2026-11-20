@@ -242,7 +242,7 @@ Tab: 总览 | 有效性 | 过程 | 效率 | 可靠性 | 任务 | 基准 | 诊断
 - Tokens/task 堆叠趋势（prompt / completion / cached / summarizer）
 - 延迟拆分：LLM / tool / summarizer / verify / overhead
 - TTFT p50/p95、queue wait
-- Cost/success
+- Cost/success（配置 pricing 后显示）
 
 ### 可靠性
 
@@ -367,7 +367,7 @@ Tab: 总览 | 有效性 | 过程 | 效率 | 可靠性 | 任务 | 基准 | 诊断
 
 ## 5.2 Evidence bundle
 
-诊断输入不是整条 trace，而是压缩后的 case bundle，写到 workspace 文件：
+诊断输入不是整条 trace，而是压缩后的 case bundle，写到 `runtime_home/diagnosis/<id>/`：
 
 ```json
 {
@@ -416,13 +416,13 @@ Tab: 总览 | 有效性 | 过程 | 效率 | 可靠性 | 任务 | 基准 | 诊断
 └── summary.md      # 指标口径与聚合结果，便于模型快速定位
 ```
 
-诊断产物归属 `storage.runtime_home()`（`AGENT_RUNTIME_HOME`），不是 `LocalWorkspace.root`（`AGENT_RUNTIME_WORKSPACE`）。两者在代码里是分开的；`AGENT_RUNTIME_WORKSPACE` 指向子目录时，sandbox 读不到 runtime home。模型通过专用只读工具 `read_trace` / `search_trace` 读取，不靠通用 `grep_search`（它跳过 > 1 MB 文件和 `workspace/` 目录）。
+诊断产物归属 `storage.runtime_home()`（`AGENT_RUNTIME_HOME`），不是 `LocalWorkspace.root`（`AGENT_RUNTIME_WORKSPACE`）。两者在代码里是分开的；`AGENT_RUNTIME_WORKSPACE` 指向子目录时，sandbox 读不到 runtime home。模型通过专用只读工具 `read_diagnosis` / `read_trace` / `search_trace` 读取，不靠通用 `grep_search`（它跳过 > 1 MB 文件和 `workspace/` 目录）。
 
 Bundle 规则：
 
 - 每条证据带 `event_id`；模型应引用它，后端做 best-effort 校验。
 - 大结果只给摘要/尾部 + spill 路径，避免一次读入过多。
-- cohort 诊断先读多条诊断会话的结论，再汇总，不把所有 trace 塞进一次请求。
+- cohort 诊断现场生成 case 紧凑摘要（已有诊断会话时复用其结论），再汇总，不把所有 trace 塞进一次请求。
 - 单文件建议 ≤ 1 MB；超出时按“失败 run > 返工 run > 通过 run”排序并截断，同时标 `truncated_input`。
 
 cohort 时 `task` 为空，`runs` 换成 `cases`，每个 case 一张紧凑卡片：
@@ -548,7 +548,7 @@ cohort 时 `task` 为空，`runs` 换成 `cases`，每个 case 一张紧凑卡�
 |---|---|---|
 | 定义 `run.config` / `run.metrics` schema | `docs/evaluation.md`、`src/agent_runtime/metrics.py` | 字段有定义、有示例 |
 | 定义指标口径与诊断 Markdown 约定 | 同上 | 每个指标有分母/来源/判定；四个固定标题有示例 |
-| `Session` 增加 `origin` / `target` / `report_segment_id` / `bundle_hash` | `webui/sessions.py` | 诊断会话可索引；追问不覆盖报告；不写 `board_events` |
+| `Session` 增加 `origin` / `target` / `report_segment_id` / `bundle_hash` / `diagnosis_id` | `webui/sessions.py` | 诊断会话可索引；追问不覆盖报告；不写 `board_events` |
 | `SessionStore.create()` 随机后缀 + 序列化同步 | `webui/sessions.py` | 同秒并发不覆盖；`summary/to_record/_session_from_record` 带上新字段 |
 | `BoardTask` 增加 `expects_artifact` | `webui/board.py` | 显式标记优先；`to_record`/创建/更新路径同步 |
 | 新增 metrics 路径 | `src/agent_runtime/storage.py` | `workspace/metrics/runs.jsonl` 可写 |
@@ -630,7 +630,7 @@ cohort 时 `task` 为空，`runs` 换成 `cases`，每个 case 一张紧凑卡�
 3. trace 能按 `task_id/session_id/harness/model` join。
 4. `board_events.jsonl` 能算出 TSR、first-pass、rework、queue wait。
 5. `/api/evaluation/overview` 在 10k run 下 < 200ms（内存索引）。
-6. 评测页能看六个维度，能从任务下钻到 run/trace。
+6. 评测页能看八个 Tab（总览 / 有效性 / 过程 / 效率 / 可靠性 / 任务 / 基准 / 诊断与建议），能从任务下钻到 run/trace。
 7. 手动点击「开始诊断」会新建一个普通会话（`origin=diagnosis`），出现在会话列表，可继续追问。
 8. 诊断会话用只读工具核实证据，输出 Markdown，包含 `## 结论` / `## 根因` / `## 证据` / `## Top 5 改进建议`。
 9. 任务详情能通过 `Session.target` 列出历史诊断；诊断不写 `board_events.jsonl`，不进 TSR 分母。
@@ -741,6 +741,8 @@ cohort 时 `task` 为空，`runs` 换成 `cases`，每个 case 一张紧凑卡�
 
 - `Session` 增加 `origin`、`target`、`report_segment_id`、`bundle_hash`、`diagnosis_id`；
 - 追问后评测页只读 `report_segment_id` 指向的首轮报告，不读“最后一条”；
+- 追问走普通 `POST /api/sessions/{id}/messages` → `_prepare_turn()`；trace 的 `origin` 必须从 `session.origin` 继承（默认 `webui`，诊断会话 `diagnosis`），不能按路由硬编码，否则追问 run 会混进 webui 指标；`max_output_tokens` 也按 `session.origin == "diagnosis"` 生效；
+- 配额计数：统计 `SessionStore` 中当天创建的 `origin == "diagnosis"` 会话数（本地自然日或 UTC，二选一写死）；`/diagnose` 内加锁保证“判重 + 查配额 + 建会话”原子执行；`duplicate: true` 不扣配额；
 - `AGENT_RUNTIME_DIAGNOSIS_MODEL` 填 catalog `id`，用 `catalog.require()` 解析完整 endpoint/key；
 - 配额：`RuntimeConfig` 增加 `diagnosis_daily_limit`、`diagnosis_max_output_tokens`；`/diagnose` 返回 `remaining`，超限 429；
 - 主循环目前没有 `max_tokens` 控制；诊断请求单独加 `max_output_tokens`，不改全局 agent 默认。
@@ -754,6 +756,7 @@ cohort 时 `task` 为空，`runs` 换成 `cases`，每个 case 一张紧凑卡�
 
 ## 9.8 其它落地项
 
+- `internal` 只在 `list_harnesses(include_internal=False)`（`/api/config`）和 `POST /api/sessions` / `POST /api/board/tasks` 的入参校验里过滤；`resolve_harness("evaluation-v1")` 必须保持可解析，否则诊断首轮/追问的 `_resolve_snapshot()` 会失败；
 - `harnesses/evaluation-v1.yaml`：建议加 `internal: true` 并在 `/api/config` 过滤；需要同步改 `harness/schema.py`（`HarnessSpec.internal: bool = False`，不进 `genes_dict()`）和 `harness/loader.py`（顶层 key 白名单 + `list_harnesses(include_internal=False)`）；不加也能跑，只是会出现在普通聊天/看板的下拉里；
 - `SessionStore.create()` 加随机后缀，避免同秒 ID 冲突；
 - 前端 `selectSession()` 用 `detail.busy` 初始化 busy，避免运行中的诊断会话被当成空闲；
