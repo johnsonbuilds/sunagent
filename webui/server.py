@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, StrictBool
@@ -51,6 +51,12 @@ from .board import (
     BoardStorageError,
     BoardStore,
     BoardValidationError,
+)
+from .evaluation import (
+    DEFAULT_RANGE,
+    EvaluationError,
+    EvaluationNotFound,
+    EvaluationStore,
 )
 from .executor import BoardExecutor, RunRequest, TurnOutcome
 from .sessions import STREAM_STOP, Session, SessionStore
@@ -295,6 +301,11 @@ def create_app(store: SessionStore | None = None,
         run_turn=run_board_task,
     )
 
+    # The evaluation index reads the run metrics, the board event stream,
+    # the session store, and the benchmark records; it is refreshed
+    # lazily on the first query after a write.
+    evaluation = EvaluationStore(sessions, tasks)
+
     def board_snapshot() -> dict[str, Any]:
         return {**tasks.snapshot(sessions), "executor": executor.status()}
 
@@ -318,6 +329,7 @@ def create_app(store: SessionStore | None = None,
     app.state.executor = executor
     app.state.runner = runner
     app.state.workspace = browser
+    app.state.evaluation = evaluation
     _APPS.add(app)
 
     if credentials is not None:
@@ -634,6 +646,73 @@ def create_app(store: SessionStore | None = None,
         return {"board": board_snapshot(), "detail": detail,
                 "deferred": deferred}
 
+    @app.get("/api/evaluation/overview")
+    async def evaluation_overview(
+            range_: str = Query(DEFAULT_RANGE, alias="range"),
+            origin: str | None = None,
+            harness: str | None = None,
+            model: str | None = None) -> dict[str, Any]:
+        """Run-level KPIs, sliced by ``origin`` (never by ``task_id``)."""
+        return await asyncio.to_thread(
+            _evaluation_call, evaluation.overview,
+            origins=_parse_origins(origin), range_=range_,
+            harness=harness, model=model)
+
+    @app.get("/api/evaluation/board-overview")
+    async def evaluation_board_overview(
+            range_: str = Query(DEFAULT_RANGE, alias="range")) -> dict[str, Any]:
+        """Board outcome: TSR / first pass / rework / funnel / artifacts."""
+        return await asyncio.to_thread(
+            _evaluation_call, evaluation.board_overview, range_=range_)
+
+    @app.get("/api/evaluation/benchmarks")
+    async def evaluation_benchmarks() -> dict[str, Any]:
+        """Harbor benchmark records, kept in their own view."""
+        return await asyncio.to_thread(
+            _evaluation_call, evaluation.benchmarks)
+
+    @app.get("/api/evaluation/tasks")
+    async def evaluation_tasks(
+            range_: str = Query(DEFAULT_RANGE, alias="range"),
+            status: str | None = None,
+            harness: str | None = None,
+            model: str | None = None,
+            origin: str | None = None,
+            q: str | None = None,
+            sort: str = "updated_at",
+            order: str = "desc",
+            page: int = 1,
+            page_size: int = 50) -> dict[str, Any]:
+        return await asyncio.to_thread(
+            _evaluation_call, evaluation.tasks,
+            range_=range_, status=status, harness=harness, model=model,
+            origins=_parse_origins(origin), query=q, sort=sort, order=order,
+            page=page, page_size=page_size)
+
+    @app.get("/api/evaluation/tasks/{task_id}")
+    async def evaluation_task_detail(task_id: str) -> dict[str, Any]:
+        return await asyncio.to_thread(
+            _evaluation_call, evaluation.task_detail, task_id)
+
+    @app.get("/api/evaluation/runs/{run_id}")
+    async def evaluation_run_detail(run_id: str) -> dict[str, Any]:
+        """``run.metrics`` plus a bounded trace digest (never the payloads)."""
+        return await asyncio.to_thread(
+            _evaluation_call, evaluation.run_detail, run_id)
+
+    @app.get("/api/evaluation/diagnoses")
+    async def evaluation_diagnoses(
+            task_id: str | None = None) -> dict[str, Any]:
+        """Diagnosis sessions linked to a task through ``Session.target``."""
+        return await asyncio.to_thread(
+            _evaluation_call, evaluation.diagnoses, task_id=task_id)
+
+    @app.post("/api/evaluation/refresh")
+    async def evaluation_refresh() -> dict[str, Any]:
+        """Rebuild the in-memory index from disk."""
+        return await asyncio.to_thread(
+            evaluation.refresh, force=True)
+
     @app.get("/api/workspace/tree")
     async def workspace_tree(path: str = "",
                              ignored: bool = False) -> dict[str, Any]:
@@ -861,6 +940,25 @@ def _session_detail(session: Session) -> dict[str, Any]:
 def _workspace_http_error(exc: WorkspaceError) -> HTTPException:
     """Map a workspace-browser failure to its response."""
     return HTTPException(status_code=exc.status, detail=exc.message)
+
+
+def _parse_origins(raw: str | None) -> tuple[str, ...] | None:
+    """Read a comma-separated ``origin`` filter."""
+    if not raw:
+        return None
+    parts = tuple(part.strip() for part in raw.split(",") if part.strip())
+    return parts or None
+
+
+def _evaluation_call(call: Callable[..., Any], *args: Any,
+                     **kwargs: Any) -> Any:
+    """Run one evaluation query, mapping its failures to HTTP."""
+    try:
+        return call(*args, **kwargs)
+    except EvaluationNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except EvaluationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _board_http_error(exc: Exception) -> HTTPException:

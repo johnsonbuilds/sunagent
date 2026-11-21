@@ -211,8 +211,6 @@ class RunsIndexTests(unittest.TestCase):
             self.assertIn("模型", line)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class _FlushGate:
@@ -432,3 +430,17 @@ class FinalizeRunTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([record.run_id for record in records],
                              ["run-cancel-post"])
             self.assertEqual(records[0].status, "error")
+
+
+if __name__ == "__main__":
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    # A direct run skips ``conftest.py``: isolate the runtime home here too.
+    _sys.path.insert(0, str(next(parent for parent in
+                                 _Path(__file__).resolve().parents
+                                 if (parent / "conftest.py").is_file())))
+    from _direct_run import isolate_runtime_home
+
+    isolate_runtime_home()
+    unittest.main()

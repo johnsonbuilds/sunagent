@@ -123,7 +123,7 @@ runtime_home/                     # AGENT_RUNTIME_HOME，默认 workspace/
 | `started_at` / `finished_at` / `duration_ms` | float | 端到端时长 |
 | `iterations` | int | LLM 迭代次数 |
 | `tool_calls` / `tool_errors` | int | 工具调用总数与失败数（按 `tool.end.status` 判定） |
-| `error_kinds` | object | `error_kind -> count`（`schema` / `not_found` / `exit_code` / …） |
+| `error_kinds` | object | `error_kind -> count`（`validation` / `not_found` / `exit_code` / `command_blocked` / …）；schema 校验拒绝统一记 `validation` |
 | `edited_files` | array | 成功的 `write_file` / `edit_file` / `apply_patch` 产生的文件；产物证据 |
 | `tokens` | object | `prompt` / `completion` / `cached` / `summarizer` / `total` |
 | `latency_ms` | object | `llm` / `tool` / `summarizer` / `overhead` |
@@ -140,7 +140,7 @@ runtime_home/                     # AGENT_RUNTIME_HOME，默认 workspace/
 示例（`runs.jsonl` 一行，未格式化）：
 
 ```json
-{"run_id":"run-3f1a...","origin":"webui","harness_id":"coding-v1","genes_hash":"g8c1...","model":"deepseek-v4.1-flash","session_id":"sess-...","task_id":"task-9d2f...","run_index":2,"status":"completed","has_answer":true,"started_at":1763700000.1,"finished_at":1763700182.4,"duration_ms":182300.0,"iterations":17,"tool_calls":24,"tool_errors":2,"error_kinds":{"schema":1,"not_found":1},"edited_files":["src/app/main.py"],"tokens":{"prompt":412000,"completion":18000,"cached":300000,"summarizer":0,"total":430000},"latency_ms":{"llm":150000.0,"tool":21000.0,"summarizer":0.0,"overhead":11300.0},"ttft_ms":820.0,"retries":1,"summary_invalid":0,"summary_attempts":1,"compactions":1,"policy_blocks":0,"error":null,"trace_bytes":2400000}
+{"run_id":"run-3f1a...","origin":"webui","harness_id":"coding-v1","genes_hash":"g8c1...","model":"deepseek-v4.1-flash","session_id":"sess-...","task_id":"task-9d2f...","run_index":2,"status":"completed","has_answer":true,"started_at":1763700000.1,"finished_at":1763700182.4,"duration_ms":182300.0,"iterations":17,"tool_calls":24,"tool_errors":2,"error_kinds":{"validation":1,"not_found":1},"edited_files":["src/app/main.py"],"tokens":{"prompt":412000,"completion":18000,"cached":300000,"summarizer":0,"total":430000},"latency_ms":{"llm":150000.0,"tool":21000.0,"summarizer":0.0,"overhead":11300.0},"ttft_ms":820.0,"retries":1,"summary_invalid":0,"summary_attempts":1,"compactions":1,"policy_blocks":0,"error":null,"trace_bytes":2400000}
 ```
 
 `tokens` 的两个不变量（Phase 3 堆叠柱状图直接按此渲染，不要重复叠加）：
@@ -167,9 +167,9 @@ runtime_home/                     # AGENT_RUNTIME_HOME，默认 workspace/
 | Rework rate | 进入过 `review` 的任务 | `board_events.jsonl` | 规则：首次 run 完成后 `review → todo/doing` |
 | TCR | 发起的 run | `run.metrics` | 规则：`status == completed` |
 | VCR | 声明的"需要产物"的 run | `run.metrics` | 规则：`completed` + `has_answer` + `edited_files` 非空 + `policy_blocks == 0` |
-| Hallucinated completion | 声明了"需要产物"且进入执行的任务 | `board_events` + `run.metrics` | 规则：`runs[].response` 声称完成但该 run `edited_files` 为空，且任务随后被退回（`review → todo/doing`）；给**计数 + 率** |
+| Hallucinated completion | 声称完成且该 run 有 `run.metrics` 的任务（`claiming_tasks`） | `board_events` + `run.metrics` | 规则：`runs[].response` 声称完成但该 run `edited_files` 为空，且任务随后被退回（`review → todo/doing`，或执行中追加评论）；给**计数 + 率** |
 | Tool error rate | 工具调用总数 | `run.metrics`（总览）/ trace `tool.end`（按工具拆分） | 规则：`tool_errors / tool_calls`；拆到具体工具时读 trace |
-| Argument validity | 工具调用总数 | 同上 | 规则：`error_kinds` 占比、schema 通过率、编辑命中率 |
+| Argument validity | 工具调用总数 | `run.metrics`（总览）/ trace `tool.end`（按工具拆分） | 规则：`error_kinds` 占比、schema 通过率（`error_kinds["validation"] / tool_calls`） |
 | Tokens / task | 进入过执行的任务 | `run.metrics` | 规则：任务内 run 求和 |
 | Latency p50 / p95 | 发起的 run | `run.metrics` | 规则：`duration_ms` 分位 |
 | TTFT | LLM 请求数 | trace `llm.end` | 规则：`ttft_ms` 分位 |
@@ -181,6 +181,8 @@ runtime_home/                     # AGENT_RUNTIME_HOME，默认 workspace/
 边界规则：
 
 - **TSR 分子必须"进入过执行且 done"**，否则 backlog 直接拖到 done 会让 TSR > 100%。
+- **`done` 只看当前列**：卡片被退回 `todo` / `review` / `doing` 后不再计入 `funnel.done` 与
+  TSR；历史里「曾到过 done」不算验收（`reached_review` 仍按历史算，它描述的是"被审阅过"）。
 - **返工只算执行过之后**：`review → todo/doing`，或 doing/review 期间追加评论触发下一轮；
   未执行就加评论不算返工。
 - **Queue wait 必须在 claim 时算**：`claim_next_todo()` 会清空 `queued_at`。
@@ -188,6 +190,9 @@ runtime_home/                     # AGENT_RUNTIME_HOME，默认 workspace/
   为 `null` 时按 harness 判定（`coding-v1` / `terminal-v1` 需要产物，
   `general-v1` / `readonly-v1` 不需要）。不需要产物的任务，VCR / hallucinated
   completion 记 `null`，不判失败。
+- **没有 `run.metrics` 的声明不算幻觉**：Phase 1 之前的历史 run 无法判定产物，只计进
+  `artifact.unmeasured_claiming_tasks`，既不进分子也不进分母（`task_detail` 对应 run 标
+  `evidence: "missing"`）。
 - **VCR 分母靠 `task_id` 关联 `board.json`**：`run.metrics` 不重复存 `expects_artifact`，
   查询时用 `run.task_id → BoardTask.expects_artifact` 判定（`null` 时按 harness 规则）；
   非 board run（CLI / Harbor）不参 VCR。
@@ -234,3 +239,51 @@ runtime_home/                     # AGENT_RUNTIME_HOME，默认 workspace/
 - 建议必须绑定：影响指标、影响面、成本、验证方式。模型不自动改 harness。
 - 解析失败（标题缺失、顺序错、条数不足）只在 UI 标注，**不拒绝**诊断，
   报告原样渲染。
+
+## 8. 聚合与 API（Phase 2）
+
+实现在 `webui/evaluation.py`（`EvaluationStore`），路由挂在 `webui/server.py`。
+三类指标**分视图返回，不合并成一个成功率**：
+
+| 视图 | 端点 | 数据源 |
+|---|---|---|
+| Run 级 | `GET /api/evaluation/overview` | `metrics/runs.jsonl`，`origin in {cli, webui, harbor}` |
+| Board outcome | `GET /api/evaluation/board-overview` | `board_events.jsonl` + `board.json` |
+| Harbor outcome | `GET /api/evaluation/benchmarks` | `evaluation/records/*.json` |
+
+- 索引在首次查询时按文件大小增量刷新（只解析新追加的整行）；文件变小，或 inode 变了
+  （原子替换式轮转，新文件可能更大），都整体重建。半行不会被解析，补齐后再读。
+- 行按 `run_id` 去重（`dict` 保序，后行覆盖前行）：重复的一行不会把指标算两次。
+- 失败的行（非法 JSON、非对象、缺 `run_id`）计进 `skipped_lines`，不进任何指标；
+  `POST /api/evaluation/refresh`（`force=True`）重建时该计数归零重数。
+- 分母为空的率一律返回 `null`，不返回 `0`：`0%` 和“没有可判定的样本”是两件事。
+- `overview()` 对选中的 run 只走一趟循环：所有 KPI、trends 与 slices 在一次遍历里累加，
+  每条日/切片时长序列只排序一次并复用于 p50/p95（旧实现按 KPI 分组重复遍历、重复排序，
+  10k run 约 0.4 s）；日期分桶按“分钟”缓存到本地日期——本地 UTC 偏移都是整分钟，
+  一分钟不会跨越本地午夜，所以结果与逐条 `strftime` 完全一致。
+  10k run 的 `overview()` 约 70 ms，`tests/webui/test_evaluation.py` 用它守住交互预算。
+- Run 级不绑 `task_id`；`origin=diagnosis/improvement` 的 run 保留在文件里但从
+  Run 级聚合中排除，排除条数见 `excluded.runs_by_origin`。
+- `range` 取 `24h` / `7d` / `30d` / `90d` / `all`（默认 `7d`）；Run 级按
+  `finished_at`（缺失回落到 `started_at`）过滤，Board 视图按任务 `updated_at` 过滤。
+- Board 视图的 `artifact` 段给出 VCR 与 hallucinated completion：分母是
+  `expects_artifact` 解析为 `true` 的任务（显式值优先，否则 `coding-v1` /
+  `terminal-v1` 视为需要产物，`general-v1` / `readonly-v1` 记 `null` 不判定）。
+  VCR 按 run 计（`vcr_runs` / `vcr_passed`），hallucinated 按任务计
+  （`claiming_tasks` = 声称完成且至少有一条带 `run.metrics` 的 run；
+  没 metrics 的历史任务进 `unmeasured_claiming_tasks`，不算幻觉）。
+- Board 视图的 `kpis` 含 `tokens_per_task` 与 `runs_per_task`（分母为进入过执行的任务），
+  Phase 3 页面直接消费，不另算。
+- `GET /api/evaluation/tasks` 显式传 `origin` 时只保留有匹配 origin run 的任务
+  （未传时保留尚未执行的 backlog/todo 卡片）。
+- 返工事件来源：`status_changed`（`review → todo/doing`）与 `comment_added`
+  （`from_status` 为 `review` 或 `doing`），只统计首次 `run_claimed` 之后的；
+  `comment_added.from_status` 为空的历史行不计。两份事件用两种键名（`from`/`to` 与
+  `from_status`/`to_status`），读侧两种都认。
+- `queue_wait` 只在 `run_claimed.queue_wait_ms` 上取（claim 会清空 `queued_at`）。
+- `GET /api/evaluation/runs/{run_id}` 返回 `run.metrics` + trace digest：
+  事件类型计数、工具聚合、LLM 请求/重试/finish_reason、错误样本、`run.config` 摘要。
+  digest **不含 payload**（messages / response / 工具结果），最多读 32MB，
+  超出标 `truncated`，并按 `(mtime, size)` 缓存。
+- 诊断会话只从 `SessionStore` 的 `origin`/`target` 建索引（`/diagnoses`），
+  不写入 `board_events.jsonl`。

@@ -156,6 +156,14 @@ under `harnesses/archived/` never appear in the picker.
 | `POST` | `/api/board/tasks/{id}/comments` | leave feedback and re-queue the task |
 | `POST` | `/api/board/tasks/{id}/session` | create or reuse the task's conversation |
 | `PATCH` | `/api/board/executor` | pause or resume serial task execution |
+| `GET` | `/api/evaluation/overview` | run-level KPIs/trends (`range`, `origin`, `harness`, `model`) |
+| `GET` | `/api/evaluation/board-overview` | TSR / first pass / rework / funnel / artifacts (`range`) |
+| `GET` | `/api/evaluation/benchmarks` | Harbor benchmark records (own view) |
+| `GET` | `/api/evaluation/tasks` | task rows (`range`, `status`, `harness`, `model`, `origin`, `q`, `sort`, `order`, `page`, `page_size`) |
+| `GET` | `/api/evaluation/tasks/{id}` | lifecycle, runs with metrics, evidence, diagnoses |
+| `GET` | `/api/evaluation/runs/{id}` | `run.metrics` plus a bounded trace digest |
+| `GET` | `/api/evaluation/diagnoses` | diagnosis sessions linked through `Session.target` (`task_id`) |
+| `POST` | `/api/evaluation/refresh` | rebuild the in-memory evaluation index |
 | `GET` | `/api/workspace/tree` | one directory level of the workspace (`path`, `ignored`) |
 | `GET` | `/api/workspace/file` | text preview of one file (`path`) |
 | `GET` | `/api/workspace/changes` | uncommitted changes from `git status` |

@@ -1,9 +1,11 @@
 import asyncio
 import json
 import sys
+import threading
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 
 sys.path.insert(0, str(Path(__file__).parents[2]))
@@ -12,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
 from agent_runtime.channels.webui import WebUIChannel
 from agent_runtime.events import AgentEvent
 
-from webui.sessions import STREAM_STOP, SessionStore
+from webui.sessions import STREAM_STOP, Session, SessionStore
 
 
 class FrameBusTests(unittest.IsolatedAsyncioTestCase):
@@ -333,6 +335,42 @@ class SessionStoreTests(unittest.TestCase):
             listed = store.list()
             self.assertEqual(listed[0].id, second.id)
 
+    def test_listing_survives_concurrent_creates_and_deletes(self) -> None:
+        store = SessionStore(Path("/tmp/does-not-matter"))
+        for index in range(20):
+            store.create(f"seed-{index}").append_user_message(f"hi {index}")
+        entered = threading.Event()
+        release = threading.Event()
+        done = threading.Event()
+        real_is_empty = Session.is_empty.fget
+        state = {"calls": 0}
+
+        def slow_is_empty(self) -> bool:
+            state["calls"] += 1
+            if state["calls"] == 3:
+                # ``list()`` is now iterating the dict with a generator
+                # suspended inside this call.
+                entered.set()
+                release.wait(2.0)
+            return real_is_empty(self)
+
+        def writer() -> None:
+            entered.wait(2.0)
+            store.create("churn")
+            done.set()
+            release.set()
+
+        with patch.object(Session, "is_empty", property(slow_is_empty)):
+            thread = threading.Thread(target=writer)
+            thread.start()
+            try:
+                listed = store.list()
+            finally:
+                release.set()
+                thread.join()
+        self.assertTrue(done.is_set())
+        self.assertEqual(len(listed), 20)
+
 
 class ChannelSinkTests(unittest.TestCase):
     def test_a_segment_frame_is_appended_to_the_transcript(self) -> None:
@@ -361,4 +399,14 @@ class ChannelSinkTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    # A direct run skips ``conftest.py``: isolate the runtime home here too.
+    _sys.path.insert(0, str(next(parent for parent in
+                                 _Path(__file__).resolve().parents
+                                 if (parent / "conftest.py").is_file())))
+    from _direct_run import isolate_runtime_home
+
+    isolate_runtime_home()
     unittest.main()

@@ -15,6 +15,7 @@ import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import RLock
 from typing import Any
 from uuid import uuid4
 
@@ -205,11 +206,17 @@ def _copy_target(target: dict[str, Any] | None) -> dict[str, Any] | None:
 
 
 class SessionStore:
-    """Load, create, and persist web UI sessions."""
+    """Load, create, and persist web UI sessions.
+
+    Queries run inside HTTP worker threads (``asyncio.to_thread``) while
+    the event loop keeps creating and deleting sessions, so the dict is
+    guarded by a lock the same way ``BoardStore`` guards its cards.
+    """
 
     def __init__(self, root: Path | None = None) -> None:
         self._root = Path(root) if root is not None else default_sessions_root()
         self._sessions: dict[str, Session] = {}
+        self._lock = RLock()
 
     @property
     def root(self) -> Path:
@@ -219,6 +226,7 @@ class SessionStore:
         """Read every persisted session from disk."""
         if not self._root.is_dir():
             return
+        loaded: dict[str, Session] = {}
         for path in sorted(self._root.glob("*.json")):
             try:
                 record = json.loads(path.read_text(encoding="utf-8"))
@@ -232,24 +240,31 @@ class SessionStore:
             if session.is_empty:
                 logger.debug("webui.session.load_skipped_empty path=%s", path)
                 continue
-            self._sessions[session.id] = session
+            loaded[session.id] = session
+        with self._lock:
+            self._sessions.update(loaded)
 
     def list(self) -> list[Session]:
         """The sessions worth showing, newest first."""
-        return sorted((session for session in self._sessions.values()
-                       if not session.is_empty),
-                      key=lambda session: session.updated_at, reverse=True)
+        with self._lock:
+            sessions = [session for session in self._sessions.values()
+                        if not session.is_empty]
+        return sorted(sessions, key=lambda session: session.updated_at,
+                      reverse=True)
 
     def shutdown(self) -> None:
         """Close every event stream and stop every running turn."""
-        for session in self._sessions.values():
+        with self._lock:
+            sessions = list(self._sessions.values())
+        for session in sessions:
             session.bus.stop()
             task = session.task
             if task is not None and not task.done():
                 task.cancel()
 
     def get(self, session_id: str) -> Session | None:
-        return self._sessions.get(session_id)
+        with self._lock:
+            return self._sessions.get(session_id)
 
     def create(self, title: str | None = None, *,
                model: str | None = None,
@@ -273,11 +288,13 @@ class SessionStore:
             origin=origin, target=_copy_target(target),
             diagnosis_id=diagnosis_id, bundle_hash=bundle_hash,
         )
-        self._sessions[session.id] = session
+        with self._lock:
+            self._sessions[session.id] = session
         return session
 
     def delete(self, session_id: str) -> bool:
-        session = self._sessions.pop(session_id, None)
+        with self._lock:
+            session = self._sessions.pop(session_id, None)
         if session is None:
             return False
         path = self._path(session_id)
@@ -291,7 +308,8 @@ class SessionStore:
         return True
 
     def rename(self, session_id: str, title: str) -> Session | None:
-        session = self._sessions.get(session_id)
+        with self._lock:
+            session = self._sessions.get(session_id)
         if session is None:
             return None
         session.title = title.strip() or session.title
