@@ -136,7 +136,7 @@ Scripts are saved under `.scripts/`; long observations spill to `.outputs/`.
 
 ## Context, Memory, Skills
 
-Context strategies are `full_history`, `compact_observations` (deterministic folding over budget), and `llm_summary` (structured LLM snapshot plus a verbatim recent tail). Set `AGENT_RUNTIME_MEMORY=1` to inject a `workspace/memory/` listing; the agent maintains it with file tools. The directory lives under the runtime home (`<home>/memory`), not under the sandbox root, so it survives a change of `AGENT_RUNTIME_WORKSPACE`; the prompt spells the paths relative to the sandbox because the file tools reject anything outside it. A harness declaring `skills: [coder]` loads `skills/coder/SKILL.md` into the prompt.
+Context strategies are `full_history`, `compact_observations` (deterministic folding over budget), and `llm_summary` (structured LLM snapshot plus a verbatim recent tail). Set `AGENT_RUNTIME_MEMORY=1` to inject a `workspace/memory/` listing; the agent maintains it with file tools. The directory lives under the runtime home (`<home>/memory`), not under the sandbox root, so it survives a change of `AGENT_RUNTIME_WORKSPACE`; the prompt spells the paths relative to the sandbox because the file tools reject anything outside it. A harness declaring `skills: [name]` loads `skills/<name>/SKILL.md` into the prompt, looked up next to the harness files (`AGENT_RUNTIME_SKILLS_DIR` overrides the location; no skills ship with the repo today).
 
 ## Configuration
 

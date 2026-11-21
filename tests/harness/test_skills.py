@@ -1,8 +1,10 @@
-import asyncio
+import os
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 
 sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
@@ -12,8 +14,9 @@ from agent_runtime.agent.turn_history import (
     Conversation,
     ensure_system_prompt,
 )
-from agent_runtime.harness import HarnessError, from_dict, resolve_harness
+from agent_runtime.harness import HarnessError, from_dict
 from agent_runtime.skills import (
+    ENV_SKILLS_DIR,
     MAX_SKILL_CHARS,
     render_skills_block,
     resolve_skills,
@@ -22,9 +25,6 @@ from agent_runtime.skills import (
 )
 from agent_runtime.tools.tools import ToolRegistry, ToolSpec
 from agent_runtime.trace import RunTrace
-
-
-REPO_ROOT = Path(__file__).parents[2]
 
 
 async def _noop_handler(**kwargs: object) -> str:
@@ -52,20 +52,30 @@ def _write_skill(directory: Path, name: str, body: str,
 
 
 class SkillLoadingTests(unittest.TestCase):
-    def test_resolve_coder_from_repo(self) -> None:
-        harness = from_dict({"skills": ["coder"]})
-        skills = resolve_skills(["coder"], harness=harness)
-        self.assertEqual(len(skills), 1)
-        self.assertEqual(skills[0].name, "coder")
-        self.assertEqual(skills[0].version, "v1")
-        self.assertIn("final answer", skills[0].content)
-        self.assertFalse(skills[0].truncated)
+    def test_resolve_skill_from_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = _write_skill(root, "coder", "close with a final answer",
+                                version="v3")
+            harness = from_dict({"skills": ["coder"]})
+            (skill,) = resolve_skills(["coder"], skills_dir=root,
+                                      harness=harness)
+        self.assertEqual(skill.name, "coder")
+        self.assertEqual(skill.version, "v3")
+        self.assertEqual(skill.content, "close with a final answer")
+        self.assertEqual(skill.source, str(path))
+        self.assertFalse(skill.truncated)
 
-    def test_coder_content_carries_finish_guidance(self) -> None:
-        harness = from_dict({"skills": ["coder"]})
-        skills = resolve_skills(["coder"], harness=harness)
-        self.assertTrue(skills[0].content.strip())
-        self.assertIn("final answer", skills[0].content)
+    def test_default_dir_is_harness_source_sibling(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "harnesses").mkdir()
+            _write_skill(root / "skills", "coder", "sibling body")
+            harness = replace(from_dict({"skills": ["coder"]}),
+                              source=str(root / "harnesses" / "code-v1.yaml"))
+            with patch.dict(os.environ, {ENV_SKILLS_DIR: ""}):
+                (skill,) = resolve_skills(["coder"], harness=harness)
+        self.assertEqual(skill.content, "sibling body")
 
     def test_empty_names_resolve_to_empty(self) -> None:
         self.assertEqual(resolve_skills([]), [])
@@ -148,6 +158,12 @@ class EnsureSystemPromptTests(unittest.TestCase):
 
 
 class SkillTurnTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        # A rendered memory block would also ride the system message.
+        env = patch.dict(os.environ, {"AGENT_RUNTIME_MEMORY": "0"})
+        env.start()
+        self.addCleanup(env.stop)
+
     async def test_skill_block_reaches_llm_and_trace(self) -> None:
         llm = FakeLLM([{"content": "done", "tool_calls": []}])
         trace = RunTrace(run_id="skill-turn")
@@ -155,51 +171,49 @@ class SkillTurnTests(unittest.IsolatedAsyncioTestCase):
         registry = ToolRegistry(
             [ToolSpec("t", "", {"type": "object", "properties": {}},
                       _noop_handler)])
-        answer = await run_turn(
-            "hi", llm, registry, harness=harness, trace=trace,
-            skills_dir=REPO_ROOT / "skills")
+        body = "work step by step; close with a final answer"
+        with tempfile.TemporaryDirectory() as directory:
+            _write_skill(Path(directory), "coder", body)
+            answer = await run_turn(
+                "hi", llm, registry, harness=harness, trace=trace,
+                skills_dir=Path(directory))
         self.assertEqual(answer, "done")
         system = llm.seen[0][0]
         self.assertEqual(system["role"], "system")
-        self.assertNotIn("<skill", system["content"])
-        self.assertIn("final answer", system["content"])
+        self.assertEqual(system["content"], body)
         loaded = [e for e in trace.events if e.event_type == "skills.loaded"]
         self.assertEqual(len(loaded), 1)
         self.assertEqual(loaded[0].data["skills"], ["coder"])
         self.assertTrue(loaded[0].data["skills_content_hash"])
 
     async def test_empty_skills_emit_no_event(self) -> None:
-        import os
-        previous = os.environ.get("AGENT_RUNTIME_MEMORY")
-        os.environ["AGENT_RUNTIME_MEMORY"] = "0"
-        try:
-            llm = FakeLLM([{"content": "done", "tool_calls": []}])
-            trace = RunTrace(run_id="no-skill")
-            harness = from_dict({"prompt": {"system": "hello"}})
-            registry = ToolRegistry(
-                [ToolSpec("t", "", {"type": "object", "properties": {}},
-                          _noop_handler)])
-            await run_turn("hi", llm, registry, harness=harness, trace=trace)
-            self.assertEqual(llm.seen[0][0]["content"], "hello")
-            self.assertFalse([e for e in trace.events
-                              if e.event_type == "skills.loaded"])
-        finally:
-            if previous is None:
-                os.environ.pop("AGENT_RUNTIME_MEMORY", None)
-            else:
-                os.environ["AGENT_RUNTIME_MEMORY"] = previous
+        llm = FakeLLM([{"content": "done", "tool_calls": []}])
+        trace = RunTrace(run_id="no-skill")
+        harness = from_dict({"prompt": {"system": "hello"}})
+        registry = ToolRegistry(
+            [ToolSpec("t", "", {"type": "object", "properties": {}},
+                      _noop_handler)])
+        await run_turn("hi", llm, registry, harness=harness, trace=trace)
+        self.assertEqual(llm.seen[0][0]["content"], "hello")
+        self.assertFalse([e for e in trace.events
+                          if e.event_type == "skills.loaded"])
 
 
-class CodeV14Tests(unittest.TestCase):
-    def test_code_v14_uses_coder_skill_with_empty_system(self) -> None:
-        v13 = from_dict({})
-        v14 = from_dict({"skills": ["coder"], "prompt": {"system": ""}})
-        self.assertEqual(v14.prompt.system, "")
-        self.assertEqual(list(v14.skills), ["coder"])
-        skills = resolve_skills(list(v14.skills), harness=v14)
-        self.assertTrue(skills[0].content.strip())
+class SkillsGeneTests(unittest.TestCase):
+    """``skills`` is a genome field: declarable without repo assets."""
+
+    def test_skills_gene_leaves_other_genes_untouched(self) -> None:
+        plain = from_dict({})
+        with_skills = from_dict({"skills": ["coder"],
+                                 "prompt": {"system": ""}})
+        self.assertEqual(list(with_skills.skills), ["coder"])
+        self.assertEqual(with_skills.prompt.system, "")
         for gene in ("tools", "control", "context", "recovery"):
-            self.assertEqual(getattr(v14, gene), getattr(v13, gene))
+            self.assertEqual(getattr(with_skills, gene), getattr(plain, gene))
+
+    def test_skills_change_moves_genes_hash(self) -> None:
+        self.assertNotEqual(from_dict({"skills": ["coder"]}).genes_hash,
+                            from_dict({}).genes_hash)
 
 
 if __name__ == "__main__":
