@@ -243,6 +243,7 @@ runtime_home/                     # AGENT_RUNTIME_HOME，默认 workspace/
 ## 8. 聚合与 API（Phase 2）
 
 实现在 `webui/evaluation.py`（`EvaluationStore`），路由挂在 `webui/server.py`。
+前端页面见 `docs/webui.md` §7（`/evaluation`，八个 Tab）。
 三类指标**分视图返回，不合并成一个成功率**：
 
 | 视图 | 端点 | 数据源 |
@@ -274,6 +275,10 @@ runtime_home/                     # AGENT_RUNTIME_HOME，默认 workspace/
   没 metrics 的历史任务进 `unmeasured_claiming_tasks`，不算幻觉）。
 - Board 视图的 `kpis` 含 `tokens_per_task` 与 `runs_per_task`（分母为进入过执行的任务），
   Phase 3 页面直接消费，不另算。
+- `overview()` 还返回固定分桶的 `histograms`（`iterations` 与 `duration_ms`）：
+  分桶边界写死在 `ITERATION_BUCKETS` / `DURATION_BUCKETS`，标签语言中立（`0–1`、
+  `33+`、`<1s`、`5m+`），前端原样渲染，不做二次翻译。分桶在同一趟循环里累加，
+  所以页面要直方图不必再多读一遍 trace。
 - `GET /api/evaluation/tasks` 显式传 `origin` 时只保留有匹配 origin run 的任务
   （未传时保留尚未执行的 backlog/todo 卡片）。
 - 返工事件来源：`status_changed`（`review → todo/doing`）与 `comment_added`

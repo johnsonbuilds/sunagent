@@ -216,6 +216,10 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
       setActiveModel(detail.model || config.defaultModel);
       setActiveHarness(detail.harness || config.defaultHarness);
       setHarnessLocked(Boolean(detail.harness_locked));
+      // A turn may already be running (page reload, board task, another
+      // tab): start from the server's answer so Stop is reachable and the
+      // composer does not accept a second message.
+      updateBusy(Boolean(detail.busy));
       connectStream(sessionId);
       return true;
     },

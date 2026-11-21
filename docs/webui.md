@@ -428,7 +428,7 @@ conversation on the next start.
 
 `webui/frontend/` is a Next.js App Router project written in TypeScript.
 The route table in `lib/routes.ts` is the single source of truth for
-destinations (`/`, `/board`, `/files`, `/observability`, `/schedules`,
+destinations (`/`, `/board`, `/files`, `/evaluation`, `/schedules`,
 `/settings`); `app/(console)/[...slug]/page.tsx` statically generates every
 non-root path and `lib/views.tsx` maps each route id to its view. Adding a
 page means adding one route row, one view, and one entry in the registry.
@@ -463,3 +463,38 @@ rewrites `/api` to `http://127.0.0.1:8000`.
 
 See `docs/webui-frontend.md` for the architecture, state layering, and the
 checklist to follow when adding a page.
+
+### The evaluation page
+
+`/evaluation` (`views/EvaluationPage.tsx`) reads the three evaluation views
+through `lib/useEvaluation.ts` and keeps them apart: run-level KPIs come from
+`/api/evaluation/overview`, board outcome (TSR, funnel, rework, VCR) from
+`/api/evaluation/board-overview`, and Harbor records from
+`/api/evaluation/benchmarks`. The filter bar sets `range`, `origin`,
+`harness` and `model`; `harness` / `model` options are derived from the
+response itself, so they only ever list values that actually occur.
+
+Eight tabs: overview (funnel, acceptance and clean-run trends, rework
+reasons, top offenders, data quality), validity (artifact evidence:
+judged / claimed / unmeasured tasks, VCR, hallucinated completions, slices),
+process (tool error kinds, iterations histogram, errors by stage), efficiency
+(token mix, latency split, tokens by day, duration histogram, TTFT and queue
+wait), reliability (error / cancel / retry / summary-invalid plus compaction
+counts), tasks (table with sorting, paging, filtering), benchmarks (Harbor
+records and the latest accuracy per harness), diagnosis (the history of
+diagnosis conversations linked through `Session.target`).
+
+Every rate renders `—` when its denominator is empty: the page never shows
+`0%` for "nothing to judge". The task table drills into
+`TaskDetailDrawer.tsx`, which shows the lifecycle from
+`board_events.jsonl`, each run's metrics and evidence state, and the run's
+trace digest on demand (`/api/evaluation/runs/{id}`); "open conversation"
+goes through `/api/board/tasks/{id}/session`, so it reuses or creates the
+task's session exactly like the board does. Charts (`TrendChart`,
+`BarList`, `StackedBars`, `EvaluationFunnel`, `Histogram`) are hand-rolled
+SVG/CSS — the page adds no chart dependency — and `app/styles/evaluation.css`
+carries their styles, collapsing to one column below 860px.
+
+A session opened while its turn is still running starts with `busy` taken
+from `GET /api/sessions/{id}`, so a reload during a run shows Stop instead
+of a composer that would reject the next message.

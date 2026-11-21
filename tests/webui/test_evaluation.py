@@ -85,6 +85,26 @@ class EvaluationStoreTests(unittest.TestCase):
 
     # -- run level ------------------------------------------------------
 
+    def test_overview_histograms_use_the_fixed_buckets(self):
+        self._append(
+            _record("run-a", iterations=0, duration_ms=400.0),
+            _record("run-b", iterations=2, duration_ms=1_000.0),
+            _record("run-c", iterations=4, duration_ms=9_000.0),
+            _record("run-d", status="error", iterations=40,
+                    duration_ms=900_000.0),
+        )
+        histograms = self._store().overview()["histograms"]
+        self.assertEqual(
+            histograms["iterations"],
+            [{"label": "0–1", "count": 1}, {"label": "2", "count": 1},
+             {"label": "3–4", "count": 1}, {"label": "5–8", "count": 0},
+             {"label": "9–16", "count": 0}, {"label": "17–32", "count": 0},
+             {"label": "33+", "count": 1}])
+        # Every run lands in exactly one duration bucket, edges included.
+        rows = histograms["duration_ms"]
+        self.assertEqual([row["count"] for row in rows], [1, 1, 1, 0, 0, 1])
+        self.assertEqual(sum(row["count"] for row in rows), 4)
+
     def test_overview_slices_by_origin_and_keeps_diagnosis_out(self):
         self._append(
             _record("run-a", status="completed", duration_ms=1000.0,

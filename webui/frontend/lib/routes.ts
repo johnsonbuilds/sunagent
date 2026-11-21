@@ -4,7 +4,7 @@ export type RouteId =
   | "chat"
   | "board"
   | "files"
-  | "observability"
+  | "evaluation"
   | "schedules"
   | "settings";
 
@@ -46,11 +46,11 @@ export const ROUTES: RouteDef[] = [
     nav: { labelKey: "navFiles", icon: "files" },
   },
   {
-    id: "observability",
-    path: "/observability",
+    id: "evaluation",
+    path: "/evaluation",
     panel: null,
-    titleKey: "navObservability",
-    nav: { labelKey: "navObservability", icon: "observability" },
+    titleKey: "navEvaluation",
+    nav: { labelKey: "navEvaluation", icon: "evaluation" },
   },
   {
     id: "schedules",

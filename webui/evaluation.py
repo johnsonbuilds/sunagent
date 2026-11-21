@@ -38,6 +38,7 @@ rebuilt lazily on the first query after a write.
 
 from __future__ import annotations
 
+import bisect
 import json
 import logging
 import math
@@ -224,6 +225,30 @@ def _slice_row(key: str, bucket: _RunBucket) -> dict[str, Any]:
         "tokens": bucket.tokens,
         "duration_p95_ms": _percentile_sorted(sorted(bucket.durations), 0.95),
     }
+
+
+# Fixed lower bounds of the overview histograms.  The labels are language
+# neutral so the front end can render them verbatim; a histogram over a
+# fixed grid also keeps ``overview()`` at one pass over the runs.
+ITERATION_BUCKETS: tuple[tuple[str, float], ...] = (
+    ("0–1", 0.0), ("2", 2.0), ("3–4", 3.0), ("5–8", 5.0),
+    ("9–16", 9.0), ("17–32", 17.0), ("33+", 33.0))
+DURATION_BUCKETS: tuple[tuple[str, float], ...] = (
+    ("<1s", 0.0), ("1–5s", 1_000.0), ("5–15s", 5_000.0),
+    ("15–60s", 15_000.0), ("1–5m", 60_000.0), ("5m+", 300_000.0))
+_ITERATION_BOUNDS = tuple(bound for _, bound in ITERATION_BUCKETS)
+_DURATION_BOUNDS = tuple(bound for _, bound in DURATION_BUCKETS)
+
+
+def _bucket_of(bounds: Sequence[float], value: float) -> int:
+    """Index of the fixed bucket that holds ``value``."""
+    return max(0, bisect.bisect_right(bounds, value) - 1)
+
+
+def _histogram(buckets: Sequence[tuple[str, float]],
+               counts: Sequence[int]) -> list[dict[str, Any]]:
+    return [{"label": label, "count": count}
+            for (label, _), count in zip(buckets, counts)]
 
 
 def _text(value: Any) -> str | None:
@@ -667,6 +692,8 @@ class EvaluationStore:
         stages: Counter[tuple[str, str]] = Counter()
         durations: list[float] = []
         ttfts: list[float] = []
+        iteration_counts = [0] * len(ITERATION_BUCKETS)
+        duration_counts = [0] * len(DURATION_BUCKETS)
         days: dict[str, _RunBucket] = {}
         slices: dict[str, dict[str, _RunBucket]] = {
             "origin": {}, "harness": {}, "model": {}}
@@ -694,6 +721,9 @@ class EvaluationStore:
             overhead_ms += latency.overhead
             duration = record.duration_ms
             durations.append(duration)
+            iteration_counts[_bucket_of(_ITERATION_BOUNDS,
+                                        float(record.iterations))] += 1
+            duration_counts[_bucket_of(_DURATION_BOUNDS, duration)] += 1
             if record.ttft_ms is not None:
                 ttfts.append(record.ttft_ms)
             tool_calls += record.tool_calls
@@ -790,6 +820,10 @@ class EvaluationStore:
                                           reverse=True)[:20]
             ],
             "trends": [_trend_row(day, days[day]) for day in sorted(days)],
+            "histograms": {
+                "iterations": _histogram(ITERATION_BUCKETS, iteration_counts),
+                "duration_ms": _histogram(DURATION_BUCKETS, duration_counts),
+            },
             "slices": {dimension: [_slice_row(key, group[key])
                                    for key in sorted(group)]
                        for dimension, group in slices.items()},
@@ -1479,6 +1513,8 @@ __all__ = [
     "EvaluationNotFound",
     "EvaluationRequestError",
     "EvaluationStore",
+    "DURATION_BUCKETS",
+    "ITERATION_BUCKETS",
     "RANGES",
     "RUN_ORIGINS",
     "TaskFacts",

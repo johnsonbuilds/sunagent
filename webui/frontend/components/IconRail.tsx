@@ -21,7 +21,7 @@ const NAV_ICONS: Record<NavIconId, () => ReactElement> = {
   chat: ChatIcon,
   board: BoardIcon,
   files: FilesIcon,
-  observability: ObservabilityIcon,
+  evaluation: ObservabilityIcon,
   schedules: SchedulesIcon,
   settings: SettingsIcon,
 };

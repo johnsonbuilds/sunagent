@@ -329,3 +329,377 @@ export type Frame =
   | RunStartedFrame
   | RunCompletedFrame
   | RunErrorFrame;
+
+/* -------------------------------------------- evaluation (/evaluation) */
+
+export type EvalRange = "24h" | "7d" | "30d" | "90d" | "all";
+
+export type EvalTab =
+  | "overview"
+  | "validity"
+  | "process"
+  | "efficiency"
+  | "reliability"
+  | "tasks"
+  | "benchmarks"
+  | "diagnosis";
+
+/** ``null`` always means "no sample", never "0". */
+export type Ratio = number | null;
+
+export interface EvalTokens {
+  prompt: number;
+  completion: number;
+  cached: number;
+  summarizer: number;
+  total: number;
+}
+
+export interface EvalLatency {
+  llm: number;
+  tool: number;
+  summarizer: number;
+  overhead: number;
+}
+
+export interface EvalHistogramRow {
+  label: string;
+  count: number;
+}
+
+export interface OverviewKpis {
+  runs: number;
+  tcr: Ratio;
+  error_rate: Ratio;
+  cancelled_rate: Ratio;
+  tool_calls: number;
+  tool_error_rate: Ratio;
+  schema_pass_rate: Ratio;
+  retry_rate: Ratio;
+  summary_invalid_rate: Ratio;
+  policy_blocks: number;
+  tokens_total: number;
+  tokens_per_run: Ratio;
+  duration_p50_ms: Ratio;
+  duration_p95_ms: Ratio;
+  ttft_p50_ms: Ratio;
+  ttft_p95_ms: Ratio;
+  dropped_events: number;
+  trace_bytes: number;
+}
+
+export interface EvalTrendRow {
+  day: string;
+  runs: number;
+  tcr: Ratio;
+  tokens: number;
+  errors: number;
+  duration_p50_ms: Ratio;
+  duration_p95_ms: Ratio;
+}
+
+export interface EvalSliceRow {
+  key: string;
+  runs: number;
+  tcr: Ratio;
+  tokens: number;
+  duration_p95_ms: Ratio;
+}
+
+export interface EvalOverview {
+  range: string;
+  origins: string[] | null;
+  since: number | null;
+  kpis: OverviewKpis;
+  tokens: EvalTokens;
+  latency_ms: EvalLatency;
+  retries: { runs: number; total: number };
+  summary: { attempts: number; invalid: number; compactions: number };
+  errors: { stage: string; code: string; count: number }[];
+  error_kinds: { kind: string; count: number }[];
+  trends: EvalTrendRow[];
+  histograms: {
+    iterations: EvalHistogramRow[];
+    duration_ms: EvalHistogramRow[];
+  };
+  slices: {
+    origin: EvalSliceRow[];
+    harness: EvalSliceRow[];
+    model: EvalSliceRow[];
+  };
+  excluded: { runs_by_origin: number };
+  generated_at: number;
+}
+
+export interface BoardFunnel {
+  created: number;
+  executed: number;
+  run_completed: number;
+  review: number;
+  done: number;
+}
+
+export interface BoardKpis {
+  tsr: Ratio;
+  first_pass_rate: Ratio;
+  rework_rate: Ratio;
+  queue_wait_p50_ms: Ratio;
+  queue_wait_p95_ms: Ratio;
+  queue_wait_mean_ms: Ratio;
+  tokens_per_task: Ratio;
+  runs_per_task: Ratio;
+  vcr: Ratio;
+  hallucinated_rate: Ratio;
+}
+
+export interface HallucinatedTask {
+  task_id: string;
+  run_id: string | null;
+  status: string;
+  runs: number;
+  rework_count: number;
+}
+
+export interface ArtifactPayload {
+  judged_tasks: number;
+  claiming_tasks: number;
+  unmeasured_claiming_tasks: number;
+  vcr_runs: number;
+  vcr_passed: number;
+  vcr: Ratio;
+  hallucinated_count: number;
+  hallucinated_rate: Ratio;
+  hallucinated_tasks: HallucinatedTask[];
+}
+
+export interface OffenderRow {
+  task_id: string;
+  status: string;
+  runs: number;
+  tokens: number;
+  wall_ms: number;
+  rework: number;
+}
+
+export interface BoardOverview {
+  range: string;
+  since: number | null;
+  funnel: BoardFunnel;
+  kpis: BoardKpis;
+  counts: {
+    tasks: number;
+    executed: number;
+    accepted: number;
+    reworked: number;
+    first_pass: number;
+    rework_events: number;
+    runs: number;
+    completed_runs: number;
+  };
+  rework_reasons: { reason: string; count: number }[];
+  artifact: ArtifactPayload;
+  tsr_trend: { day: string; tasks: number; executed: number; done: number;
+               tsr: Ratio }[];
+  top_offenders: {
+    tokens: OffenderRow[];
+    wall_ms: OffenderRow[];
+    rework: OffenderRow[];
+  };
+  generated_at: number;
+}
+
+export interface EvalTaskRow {
+  task_id: string;
+  title: string;
+  status: TaskStatus;
+  harness: string | null;
+  model: string | null;
+  runs: number;
+  completed_runs: number;
+  tokens: number;
+  wall_ms: number;
+  rework: number;
+  expects_artifact: boolean | null;
+  queue_wait_ms: number | null;
+  last_error: string | null;
+  updated_at: number;
+  created_at: number;
+}
+
+export interface EvalTaskPage {
+  total: number;
+  page: number;
+  page_size: number;
+  rows: EvalTaskRow[];
+  generated_at: number;
+}
+
+export interface EvalRunMetrics {
+  run_id: string;
+  origin: string;
+  harness_id: string;
+  genes_hash: string;
+  model: string;
+  session_id: string | null;
+  task_id: string | null;
+  run_index: number | null;
+  status: string;
+  has_answer: boolean;
+  started_at: number;
+  finished_at: number;
+  duration_ms: number;
+  iterations: number;
+  tool_calls: number;
+  tool_errors: number;
+  error_kinds: Record<string, number>;
+  edited_files: string[];
+  tokens: EvalTokens;
+  latency_ms: EvalLatency;
+  ttft_ms: number | null;
+  retries: number;
+  summary_invalid: number;
+  summary_attempts: number;
+  compactions: number;
+  policy_blocks: number;
+  error: Record<string, string> | null;
+  trace_bytes: number;
+  dropped_events: number;
+}
+
+export type EvalEvidence = "missing" | "present" | "none";
+
+export interface EvalTaskRun {
+  run_id: string | null;
+  status: string | null;
+  started_at: number | null;
+  finished_at: number | null;
+  error: string | null;
+  response_chars: number;
+  response: string;
+  metrics: EvalRunMetrics | null;
+  evidence: EvalEvidence;
+  edited_files: string[];
+  trace_available: boolean;
+}
+
+export interface EvalTimelineEvent {
+  type: string;
+  at: number;
+  run_id: string | null;
+  from: string | null;
+  to: string | null;
+  status: string | null;
+  queue_wait_ms: number | null;
+}
+
+export interface EvalDiagnosisRow {
+  session_id: string;
+  title: string;
+  origin: string;
+  target: Record<string, unknown> | null;
+  target_type: string | null;
+  target_id: string | null;
+  report_segment_id: string | null;
+  bundle_hash: string | null;
+  diagnosis_id: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface EvalTaskDetail {
+  task_id: string;
+  title: string;
+  status: TaskStatus;
+  harness: string | null;
+  model: string | null;
+  description: string;
+  expects_artifact: boolean | null;
+  expects_artifact_source: "explicit" | "harness";
+  executed: boolean;
+  done: boolean;
+  reached_review: boolean;
+  rework_count: number;
+  rework_reasons: Record<string, number>;
+  queue_waits_ms: number[];
+  last_error: string | null;
+  created_at: number;
+  updated_at: number;
+  runs: EvalTaskRun[];
+  timeline: EvalTimelineEvent[];
+  diagnoses: EvalDiagnosisRow[];
+  generated_at: number;
+}
+
+export interface EvalDigestTool {
+  tool: string;
+  calls: number;
+  errors: number;
+  exec_ms: number;
+}
+
+export interface EvalDigest {
+  available: boolean;
+  reason?: string;
+  bytes?: number;
+  truncated?: boolean;
+  events?: number;
+  event_counts?: Record<string, number>;
+  iterations?: number;
+  llm?: {
+    requests: number;
+    retries: number;
+    chunks: number;
+    finish_reasons: Record<string, number>;
+  };
+  context?: { compactions: number; summary_invalid: number };
+  tools?: EvalDigestTool[];
+  tool_calls?: number;
+  tool_errors?: number;
+  error_samples?: {
+    tool: string;
+    error_kind: string | null;
+    iteration: number | null;
+    edits: number;
+  }[];
+  config?: {
+    model?: string | null;
+    harness_id?: string | null;
+    tools?: number | null;
+    model_params?: Record<string, unknown> | null;
+    git?: Record<string, unknown> | null;
+  };
+  metrics?: { status?: string | null; dropped_events?: number | null };
+}
+
+export interface EvalRunDetail {
+  run_id: string;
+  metrics: EvalRunMetrics;
+  board: {
+    task_id: string | null;
+    title: string | null;
+    status: string | null;
+    run: Record<string, unknown>;
+  } | null;
+  digest: EvalDigest;
+  trace_path: string | null;
+  generated_at: number;
+}
+
+export interface EvalBenchmarkRow {
+  record_id: string | null;
+  created_at: string | null;
+  harness_id: string | null;
+  genes_hash: string | null;
+  model: string | null;
+  benchmark: string | null;
+  job_dir: string | null;
+  accuracy: number | null;
+  score: Record<string, unknown>;
+  tasks: number;
+}
+
+export interface EvalBenchmarks {
+  records: EvalBenchmarkRow[];
+  latest_accuracy: Record<string, number>;
+  generated_at: number;
+}

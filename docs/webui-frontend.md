@@ -79,13 +79,25 @@ webui/frontend/
       IconRail.tsx             # 从 state 改为 pathname 驱动
       Sidebar.tsx              # panel 由路由表决定
       panels.tsx               # PanelId → 组件映射
+    evaluation/                # 评测页图表与抽屉（无第三方图表库）
+      EvaluationKpis.tsx       # KPI 带：ratioCard 支持 invert（越低越好）
+      EvaluationFunnel.tsx
+      BarList.tsx              # value 可为 null，渲染 —
+      StackedBars.tsx
+      Histogram.tsx
+      TrendChart.tsx
+      TaskTable.tsx            # 列与 SORTABLE 一一对应
+      TaskDetailDrawer.tsx     # Esc 关闭
+      RunTimeline.tsx
+      DiagnosisPanel.tsx
+      Section.tsx
     ...
   views/
     ChatView.tsx
     BoardPage.tsx
     SettingsPage.tsx
     FilesPage.tsx              # P3 占位
-    ObservabilityPage.tsx      # P3 占位
+    EvaluationPage.tsx         # 评测页（/evaluation）
     SchedulesPage.tsx          # P3 占位
   lib/
     routes.ts                  # 纯数据路由表（server-safe）
@@ -97,6 +109,7 @@ webui/frontend/
       sessions.tsx
       board.tsx
     useRestart.ts
+    useEvaluation.ts           # 评测页数据：KPI 立即刷新、任务列表独立防抖
 ```
 
 ## 6. 路由设计
@@ -111,10 +124,10 @@ webui/frontend/
 import type { MessageKey } from "@/lib/i18n";
 
 export type RouteId =
-  | "chat" | "board" | "files" | "observability" | "schedules" | "settings";
+  | "chat" | "board" | "files" | "evaluation" | "schedules" | "settings";
 
 export type NavIconId =
-  | "chat" | "board" | "files" | "observability" | "schedules" | "settings";
+  | "chat" | "board" | "files" | "evaluation" | "schedules" | "settings";
 
 export type PanelId = "sessions" | "board" | null;
 
@@ -134,9 +147,9 @@ export const ROUTES: RouteDef[] = [
   // 占位页先不放侧栏面板；真实页面接入时再补 PanelId 和面板组件。
   { id: "files", path: "/files", panel: null, titleKey: "navFiles",
     nav: { labelKey: "navFiles", icon: "files" } },
-  { id: "observability", path: "/observability", panel: null,
-    titleKey: "navObservability",
-    nav: { labelKey: "navObservability", icon: "observability" } },
+  { id: "evaluation", path: "/evaluation", panel: null,
+    titleKey: "navEvaluation",
+    nav: { labelKey: "navEvaluation", icon: "evaluation" } },
   { id: "schedules", path: "/schedules", panel: null,
     titleKey: "navSchedules",
     nav: { labelKey: "navSchedules", icon: "schedules" } },
@@ -209,7 +222,7 @@ export default function Page() {
 | 聊天 | `/?session=<session_id>` |
 | 看板 | `/board`，未来 `?task=<task_id>` |
 | 文件 | `/files?path=<相对路径>` |
-| 可观测性 | `/observability?tab=logs&session=<id>` |
+| 评测 | `/evaluation`（筛选与 Tab 是页内状态，不进 URL） |
 | 定时任务 | `/schedules?task=<id>` |
 | 设置 | `/settings` |
 
