@@ -24,11 +24,41 @@ from agent_runtime.providers.llm import (
     OpenAICompatibleLLM,
     _project_messages_for_wire,
     _reasoning_text,
+    _usage_dict,
 )
 from agent_runtime.reasoning_echo import (
     reasoning_echo_mode,
     should_echo_reasoning,
 )
+
+
+class ProviderUsageTests(unittest.TestCase):
+    """The provider adapter must not drop the prompt-cache count."""
+
+    def test_object_usage_with_openai_details(self) -> None:
+        from types import SimpleNamespace
+
+        usage = SimpleNamespace(prompt_tokens=100, completion_tokens=20,
+                                prompt_tokens_details=SimpleNamespace(
+                                    cached_tokens=64))
+
+        self.assertEqual(_usage_dict(usage)["cached_tokens"], 64)
+
+    def test_dict_usage_with_deepseek_cache_field(self) -> None:
+        usage = {"prompt_tokens": 10, "completion_tokens": 2,
+                 "prompt_cache_hit_tokens": 7}
+
+        self.assertEqual(_usage_dict(usage)["cached_tokens"], 7)
+
+    def test_flat_cached_tokens_wins(self) -> None:
+        usage = {"prompt_tokens": 10, "completion_tokens": 2,
+                 "cached_tokens": 3, "prompt_cache_hit_tokens": 7}
+
+        self.assertEqual(_usage_dict(usage)["cached_tokens"], 3)
+
+    def test_missing_usage_is_zero(self) -> None:
+        self.assertEqual(_usage_dict(None)["cached_tokens"], 0)
+        self.assertEqual(_usage_dict(None)["prompt_tokens"], 0)
 
 
 class ReasoningEchoModeTests(unittest.TestCase):

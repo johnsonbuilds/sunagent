@@ -8,6 +8,7 @@ lose the conversation.
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import os
@@ -106,6 +107,22 @@ class Session:
     # when a turn starts (see ``webui.turn_context``).
     model: str | None = None
     harness: str | None = None
+    # Which surface started the turns of this session.  Inherited by every
+    # turn (see ``webui.turn_context``) so a diagnosis follow-up does not
+    # get counted as ordinary web UI traffic.
+    origin: str = "webui"
+    # What a diagnosis session is about: ``{"type": "task|run|cohort", ...}``.
+    # Empty for ordinary conversations.  This is the only task -> diagnosis
+    # link; diagnosis never writes to the board event stream.
+    target: dict[str, Any] | None = None
+    # The first report of a diagnosis session.  Follow-up turns may append
+    # new assistant segments, so the evaluation page must read this id
+    # rather than "the last assistant segment".
+    report_segment_id: str | None = None
+    # Fingerprint of the evidence bundle the first turn was built from and
+    # the id of that bundle under ``<home>/diagnosis/``.
+    bundle_hash: str | None = None
+    diagnosis_id: str | None = None
 
     @property
     def is_empty(self) -> bool:
@@ -135,22 +152,56 @@ class Session:
         """Whether the harness choice is frozen for this session."""
         return not self.is_empty
 
+    def mark_report_segment(self, segment_id: str) -> bool:
+        """Freeze the diagnosis report on its first assistant segment.
+
+        A follow-up question appends more assistant segments; the report
+        the evaluation page shows must stay the first one, so later calls
+        are ignored.  A blank id is refused instead of frozen, because it
+        would point at nothing and never be overwritten.
+        """
+        if self.report_segment_id:
+            return False
+        text = segment_id.strip() if isinstance(segment_id, str) else ""
+        if not text:
+            return False
+        self.report_segment_id = text
+        return True
+
     def summary(self) -> dict[str, Any]:
         return {"id": self.id, "title": self.title,
                 "created_at": self.created_at, "updated_at": self.updated_at,
                 "busy": self.busy, "model": self.model,
-                "harness": self.harness, "harness_locked": self.harness_locked}
+                "harness": self.harness, "harness_locked": self.harness_locked,
+                "origin": self.origin, "target": self.target,
+                "report_segment_id": self.report_segment_id}
 
     def to_record(self) -> dict[str, Any]:
         return {"id": self.id, "title": self.title,
                 "created_at": self.created_at, "updated_at": self.updated_at,
                 "segments": self.segments, "messages": self.messages,
-                "model": self.model, "harness": self.harness}
+                "model": self.model, "harness": self.harness,
+                "origin": self.origin, "target": self.target,
+                "report_segment_id": self.report_segment_id,
+                "bundle_hash": self.bundle_hash,
+                "diagnosis_id": self.diagnosis_id}
 
 
 def _derive_title(message: str) -> str:
     text = " ".join(message.split())
     return text[:48] + ("…" if len(text) > 48 else "")
+
+
+def _copy_target(target: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Detach a diagnosis target from its caller and from the JSON cache.
+
+    Targets nest (a cohort carries a ``filters`` object), so a shallow
+    copy would let a later edit leak into the reloaded cache.  An empty
+    target is the same as none.
+    """
+    if not isinstance(target, dict) or not target:
+        return None
+    return copy.deepcopy(target)
 
 
 class SessionStore:
@@ -202,14 +253,25 @@ class SessionStore:
 
     def create(self, title: str | None = None, *,
                model: str | None = None,
-               harness: str | None = None) -> Session:
-        """Start a session in memory."""
+               harness: str | None = None,
+               origin: str = "webui",
+               target: dict[str, Any] | None = None,
+               diagnosis_id: str | None = None,
+               bundle_hash: str | None = None) -> Session:
+        """Start a session in memory.
+
+        The id carries a random suffix: the timestamp alone collides when
+        two sessions are created within the same second.
+        """
         now = time.time()
         session = Session(
-            id="sess-" + time.strftime("%Y%m%d-%H%M%S", time.localtime(now)),
+            id="sess-" + time.strftime("%Y%m%d-%H%M%S", time.localtime(now))
+            + "-" + uuid4().hex[:6],
             title=title or "New conversation",
             created_at=now, updated_at=now,
             model=model, harness=harness,
+            origin=origin, target=_copy_target(target),
+            diagnosis_id=diagnosis_id, bundle_hash=bundle_hash,
         )
         self._sessions[session.id] = session
         return session
@@ -269,6 +331,16 @@ def _session_from_record(record: dict[str, Any]) -> Session | None:
     harness = record.get("harness")
     if isinstance(harness, str) and harness.strip():
         session.harness = harness.strip()
+    origin = record.get("origin")
+    if isinstance(origin, str) and origin.strip():
+        session.origin = origin.strip()
+    target = record.get("target")
+    if isinstance(target, dict):
+        session.target = _copy_target(target)
+    for name in ("report_segment_id", "bundle_hash", "diagnosis_id"):
+        value = record.get(name)
+        if isinstance(value, str) and value.strip():
+            setattr(session, name, value.strip())
     segments = record.get("segments")
     if isinstance(segments, list):
         session.segments = [segment for segment in segments

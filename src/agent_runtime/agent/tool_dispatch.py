@@ -232,9 +232,12 @@ def trace_tool_rejection(trace: RunTrace, iteration: int,
                           tool_meta: dict[str, Any], error: Exception) -> None:
     """Record a rejected tool call with the normal tool span lifecycle."""
     trace.emit("tool.start", iteration, **tool_meta)
-    error_meta = dict(tool_meta, error=str(error), duration_ms=0.0)
+    error_meta = dict(tool_meta, error=str(error),
+                      error_kind="validation", duration_ms=0.0)
     trace.emit("tool.error", iteration, **error_meta)
-    end_meta = dict(tool_meta, duration_ms=0.0, status="error")
+    end_meta = dict(tool_meta, duration_ms=0.0, exec_ms=0.0,
+                    status="error", error_kind="validation", exit_code=None,
+                    edited_files=[])
     trace.emit("tool.end", iteration, **end_meta)
 
 
@@ -276,6 +279,56 @@ def tool_call_payload(tool_call: Any) -> dict[str, Any]:
     return {"tool": name, "call_id": tool_call.get("id"), "arguments": arguments}
 
 
+_EDIT_TOOLS = frozenset({"write_file", "edit_file", "apply_patch"})
+
+
+def error_kind(name: Any) -> str:
+    """Classify a tool failure into a stable snake_case bucket."""
+    if not isinstance(name, str) or not name.strip():
+        return "unknown"
+    text = name.strip()
+    out: list[str] = []
+    for index, char in enumerate(text):
+        if char.isupper() and index and (text[index - 1].islower()
+                                         or text[index - 1].isdigit()):
+            out.append("_")
+        out.append(char.lower())
+    return "".join(out) or "unknown"
+
+
+def tool_outcome_fields(result: Any, tool: str | None = None) -> dict[str, Any]:
+    """Judge a tool *result*: a returned ``{"error": ...}`` is a failure.
+
+    Shell and file tools report failures as data instead of raising, so
+    the trace must read the result, not the exception, or every broken
+    command would be counted as a success.
+    """
+    status = "success"
+    kind: str | None = None
+    exit_code: int | None = None
+    edited_files: list[str] = []
+    if isinstance(result, Mapping):
+        error = result.get("error")
+        if isinstance(error, Mapping):
+            status = "error"
+            kind = error_kind(error.get("type")) or "tool_error"
+        elif error:
+            status = "error"
+            kind = "tool_error"
+        raw_exit = result.get("exit_code")
+        if isinstance(raw_exit, int) and not isinstance(raw_exit, bool):
+            exit_code = raw_exit
+            if status == "success" and exit_code != 0:
+                status = "error"
+                kind = "exit_code"
+        if status == "success" and tool in _EDIT_TOOLS:
+            path = result.get("path")
+            if isinstance(path, str) and path.strip():
+                edited_files = [path.strip()]
+    return {"status": status, "error_kind": kind, "exit_code": exit_code,
+            "edited_files": edited_files}
+
+
 def tool_result_summary(result: Any) -> dict[str, Any]:
     """Summarize a tool result for user-facing events."""
     if isinstance(result, Mapping) and "exit_code" in result and "stdout" in result:
@@ -301,6 +354,8 @@ __all__ = [
     "rejected_observation_message",
     "tool_call_payload",
     "tool_observation_message",
+    "tool_outcome_fields",
+    "error_kind",
     "tool_result_summary",
     "tool_trace_metadata",
     "trace_tool_rejection",

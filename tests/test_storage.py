@@ -43,6 +43,25 @@ class RuntimeHomeTests(unittest.TestCase):
         self.assertEqual(path.name, "run-abc123.jsonl")
         self.assertEqual(path.parent.name, "traces")
 
+    def test_metrics_index_lives_under_the_same_home(self) -> None:
+        with patch.dict(os.environ, {"AGENT_RUNTIME_HOME": "/tmp/elsewhere"}):
+            path = storage.metrics_path()
+            directory = storage.metrics_dir()
+
+        self.assertEqual(path, Path("/tmp/elsewhere/metrics/runs.jsonl"))
+        self.assertEqual(directory, Path("/tmp/elsewhere/metrics"))
+
+
+class IsolationTests(unittest.TestCase):
+    def test_the_suite_never_writes_into_the_checkout(self) -> None:
+        # ``tests/conftest.py`` points the home at a temporary directory:
+        # a test run must not append to ``workspace/metrics/runs.jsonl``.
+        checkout_home = Path(__file__).parents[1] / "workspace"
+
+        self.assertNotEqual(storage.runtime_home(), checkout_home)
+        self.assertFalse(str(storage.metrics_path()).startswith(
+            str(checkout_home)))
+
 
 if __name__ == "__main__":
     unittest.main()

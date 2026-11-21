@@ -38,7 +38,7 @@ class BoardExecutorTests(unittest.IsolatedAsyncioTestCase):
             priority=priority,
         )
 
-    async def _default_turn(self, _session, message: str) -> TurnOutcome:
+    async def _default_turn(self, _session, message: str, _run=None) -> TurnOutcome:
         self.calls.append(message)
         self.active += 1
         self.max_active = max(self.max_active, self.active)
@@ -90,7 +90,7 @@ class BoardExecutorTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(stored.finished_at)
 
     async def test_failure_lands_in_review_with_error(self) -> None:
-        async def fail(_session, message: str) -> TurnOutcome:
+        async def fail(_session, message: str, _run=None) -> TurnOutcome:
             self.calls.append(message)
             return TurnOutcome("error", error="boom")
 
@@ -136,7 +136,7 @@ class BoardExecutorTests(unittest.IsolatedAsyncioTestCase):
         gate = asyncio.Event()
         started = asyncio.Event()
 
-        async def blocked(_session, message: str) -> TurnOutcome:
+        async def blocked(_session, message: str, _run=None) -> TurnOutcome:
             self.calls.append(message)
             started.set()
             await gate.wait()
@@ -155,7 +155,7 @@ class BoardExecutorTests(unittest.IsolatedAsyncioTestCase):
         gate = asyncio.Event()
         started = asyncio.Event()
 
-        async def blocked(_session, message: str) -> TurnOutcome:
+        async def blocked(_session, message: str, _run=None) -> TurnOutcome:
             self.calls.append(message)
             started.set()
             await gate.wait()
@@ -175,7 +175,7 @@ class BoardExecutorTests(unittest.IsolatedAsyncioTestCase):
     async def test_rerun_reuses_the_same_session(self) -> None:
         sessions_seen: list[str] = []
 
-        async def run_turn(session, message: str) -> TurnOutcome:
+        async def run_turn(session, message: str, _run=None) -> TurnOutcome:
             sessions_seen.append(session.id)
             self.calls.append(message)
             await asyncio.sleep(0.01)
@@ -300,7 +300,7 @@ class BoardExecutorTests(unittest.IsolatedAsyncioTestCase):
         gate = asyncio.Event()
         started = asyncio.Event()
 
-        async def blocked(_session, message: str) -> TurnOutcome:
+        async def blocked(_session, message: str, _run=None) -> TurnOutcome:
             self.calls.append(message)
             started.set()
             await gate.wait()
@@ -322,7 +322,7 @@ class BoardExecutorTests(unittest.IsolatedAsyncioTestCase):
         gates = [asyncio.Event(), asyncio.Event()]
         started = [asyncio.Event(), asyncio.Event()]
 
-        async def blocked(_session, message: str) -> TurnOutcome:
+        async def blocked(_session, message: str, _run=None) -> TurnOutcome:
             index = len(self.calls)
             self.calls.append(message)
             started[index].set()
@@ -351,7 +351,7 @@ class BoardExecutorTests(unittest.IsolatedAsyncioTestCase):
         gates = [asyncio.Event(), asyncio.Event()]
         started = [asyncio.Event(), asyncio.Event()]
 
-        async def blocked(_session, message: str) -> TurnOutcome:
+        async def blocked(_session, message: str, _run=None) -> TurnOutcome:
             index = len(self.calls)
             self.calls.append(message)
             started[index].set()
@@ -395,6 +395,46 @@ class BoardExecutorTests(unittest.IsolatedAsyncioTestCase):
         await self._wait_until(
             lambda: self.board.get(task["id"]).status == "review")
         self.assertEqual(self.calls, ["description for Busy"])
+
+
+class BoardRunIdTests(unittest.IsolatedAsyncioTestCase):
+    """Phase 1: the board's run_id/run_index reach the turn that runs."""
+
+    def setUp(self) -> None:
+        self._root = TemporaryDirectory()
+        self.addCleanup(self._root.cleanup)
+        root = Path(self._root.name)
+        self.board = BoardStore(root)
+        self.board.load()
+        self.sessions = SessionStore(root / "sessions")
+        self.requests = []
+
+    async def test_run_request_carries_the_claimed_run_id(self) -> None:
+        task = self.board.create("Widget", description="build it", status="todo")
+
+        async def capture(session, message, request) -> TurnOutcome:
+            self.requests.append(request)
+            return TurnOutcome("completed", request.run_id, answer="done")
+
+        executor = BoardExecutor(
+            self.board, self.sessions,
+            ensure_session=lambda task_id: self.board.ensure_session(
+                task_id, self.sessions)[0],
+            run_turn=capture, poll_interval=0.01)
+        self.addAsyncCleanup(executor.stop)
+        executor.start()
+
+        deadline = asyncio.get_running_loop().time() + 2.0
+        while not self.board.get(task["id"]).runs:
+            if asyncio.get_running_loop().time() > deadline:
+                self.fail("run never finished")
+            await asyncio.sleep(0.01)
+
+        stored = self.board.get(task["id"]).runs[0]
+        self.assertEqual(len(self.requests), 1)
+        self.assertEqual(self.requests[0].run_id, stored["run_id"])
+        self.assertEqual(self.requests[0].task_id, task["id"])
+        self.assertEqual(self.requests[0].run_index, 1)
 
 
 if __name__ == "__main__":

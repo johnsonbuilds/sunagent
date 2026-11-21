@@ -242,6 +242,55 @@ class BoardStoreTests(unittest.TestCase):
             self.assertIsNone(cleared["model"])
             self.assertIsNone(cleared["harness"])
 
+    def test_expects_artifact_round_trips_and_can_be_unset(self) -> None:
+        with TemporaryDirectory() as root:
+            board = self._board(root)
+            created = self._create(board, "Needs files",
+                                   expects_artifact=True)
+            self.assertIs(created["expects_artifact"], True)
+
+            reloaded = self._board(root)
+            self.assertIs(reloaded.get(created["id"]).expects_artifact, True)
+
+            self.assertIs(reloaded.update(
+                created["id"], {"expects_artifact": False}
+            )["expects_artifact"], False)
+            cleared = reloaded.update(created["id"],
+                                      {"expects_artifact": None})
+            self.assertIsNone(cleared["expects_artifact"])
+
+    def test_default_expects_artifact_is_unset(self) -> None:
+        with TemporaryDirectory() as root:
+            board = self._board(root)
+
+            created = self._create(board, "Untyped")
+
+            self.assertIsNone(created["expects_artifact"])
+            self.assertIsNone(board.get(created["id"]).expects_artifact)
+
+    def test_expects_artifact_rejects_a_non_boolean(self) -> None:
+        with TemporaryDirectory() as root:
+            board = self._board(root)
+            created = self._create(board, "Untyped")
+
+            with self.assertRaises(BoardValidationError):
+                board.update(created["id"], {"expects_artifact": "yes"})
+            with self.assertRaises(BoardValidationError):
+                self._create(board, "Untyped", expects_artifact="true")
+
+    def test_a_corrupt_expects_artifact_loads_as_unset(self) -> None:
+        with TemporaryDirectory() as root:
+            board = self._board(root)
+            created = self._create(board, "Untyped")
+            path = Path(root) / "board.json"
+            record = json.loads(path.read_text(encoding="utf-8"))
+            record["tasks"][0]["expects_artifact"] = "maybe"
+            path.write_text(json.dumps(record), encoding="utf-8")
+
+            reloaded = self._board(root)
+
+            self.assertIsNone(reloaded.get(created["id"]).expects_artifact)
+
     def test_ensure_session_prefers_task_choices_over_defaults(self) -> None:
         with TemporaryDirectory() as root:
             board = self._board(root)
@@ -693,6 +742,46 @@ class BoardApiTests(unittest.TestCase):
 
     def _tasks(self) -> list[dict]:
         return self.client.get("/api/board").json()["tasks"]
+
+    def test_expects_artifact_travels_through_the_api(self) -> None:
+        created = self.client.post("/api/board/tasks", json={
+            "title": "Needs files",
+            "description": "Produce an artefact",
+            "expects_artifact": True,
+        }).json()["tasks"][0]
+        self.assertIs(created["expects_artifact"], True)
+
+        task_id = created["id"]
+        self.assertIs(self.client.patch(
+            f"/api/board/tasks/{task_id}",
+            json={"expects_artifact": False}).json()["tasks"][0]
+            ["expects_artifact"], False)
+        # An explicit null means "let the harness decide" and must clear it.
+        self.assertIsNone(self.client.patch(
+            f"/api/board/tasks/{task_id}",
+            json={"expects_artifact": None}).json()["tasks"][0]
+            ["expects_artifact"])
+
+    def test_expects_artifact_rejects_loose_booleans_over_http(self) -> None:
+        # ``expects_artifact`` decides whether a run is judged on files, so
+        # a coerced ``"true"``/``1`` must not slip through the request model.
+        for value in ("true", "yes", "1", 1, 0):
+            with self.subTest(value=value):
+                created = self.client.post("/api/board/tasks", json={
+                    "title": "Typed",
+                    "description": "No loose booleans",
+                    "expects_artifact": value,
+                })
+                self.assertEqual(created.status_code, 422)
+
+        task_id = self.client.post("/api/board/tasks", json={
+            "title": "Typed", "description": "No loose booleans"
+        }).json()["tasks"][0]["id"]
+        for value in ("false", "no", 1):
+            with self.subTest(value=value):
+                patched = self.client.patch(f"/api/board/tasks/{task_id}",
+                                            json={"expects_artifact": value})
+                self.assertEqual(patched.status_code, 422)
 
     def test_create_edit_move_and_delete(self) -> None:
         response = self.client.post("/api/board/tasks", json={
@@ -1231,6 +1320,45 @@ class BoardServerExecutionTests(unittest.TestCase):
                     time.sleep(0.1)
                     self.assertEqual(len(calls), 1)
 
+    def test_a_cancelled_metrics_write_still_releases_the_session(self) -> None:
+        """A second ``cancel()`` must not leave the session stuck ``busy``."""
+
+        async def fake_run_turn(message, *args, **kwargs):
+            return "done"
+
+        async def cancelled_metrics(*args, **kwargs):
+            raise asyncio.CancelledError()
+
+        with TemporaryDirectory() as root:
+            path = Path(root)
+            sessions = SessionStore(path / "sessions")
+            board = BoardStore(path)
+            with patch.object(server, "credentials_from_env",
+                              return_value=None), \
+                    patch.object(server, "run_turn", fake_run_turn), \
+                    patch.object(server, "_record_run_metrics",
+                                 cancelled_metrics):
+                app = server.create_app(sessions, board)
+                with TestClient(app) as client:
+                    response = client.post("/api/board/tasks", json={
+                        "title": "Cancel metrics",
+                        "description": "run once",
+                        "status": "todo",
+                    })
+                    self.assertEqual(response.status_code, 201)
+                    task_id = response.json()["tasks"][0]["id"]
+                    stored = self._wait_status(client, task_id, "review")
+                    session = sessions.get(stored["session_id"])
+                    self.assertIsNotNone(session)
+                    self.assertFalse(session.busy)
+                    self.assertIsNone(session.task)
+
+                    # The session is usable again: a manual turn starts.
+                    response = client.post(
+                        f"/api/sessions/{session.id}/messages",
+                        json={"message": "still alive"})
+                    self.assertEqual(response.status_code, 200)
+
     def test_running_task_moved_to_todo_is_cancelled_and_rerun(self) -> None:
         turn = _BlockingTurn()
         with TemporaryDirectory() as root:
@@ -1271,6 +1399,14 @@ class BoardServerExecutionTests(unittest.TestCase):
 
                     stored = self._wait_status(client, task_id, "review")
                     self.assertEqual(stored["session_id"], session_id)
+
+                # The cancelled run still left a metrics record: the
+                # finally path must not skip it on the cancel path.
+                from agent_runtime import metrics as metrics_module
+
+                statuses = [record.status for record in
+                            metrics_module.read_run_metrics()]
+                self.assertIn("cancelled", statuses)
 
     def test_deleting_running_task_cancels_and_keeps_conversation(self) -> None:
         turn = _BlockingTurn()
@@ -1459,6 +1595,89 @@ class BoardServerExecutionTests(unittest.TestCase):
                     self.assertEqual(legacy["status"], "todo")
                     time.sleep(0.1)
                     self.assertEqual(calls, ["resume me"])
+
+
+class BoardEventStreamTests(unittest.TestCase):
+    """Phase 1: board lifecycle lands in board_events.jsonl."""
+
+    def setUp(self) -> None:
+        self._root = TemporaryDirectory()
+        self.addCleanup(self._root.cleanup)
+        self.root = Path(self._root.name)
+        self.store = BoardStore(self.root)
+        self.store.load()
+
+    def _events(self) -> list[dict]:
+        path = self.root / "board_events.jsonl"
+        if not path.is_file():
+            return []
+        return [json.loads(line) for line in path.read_text().splitlines()]
+
+    def test_lifecycle_events_cover_create_claim_finish(self) -> None:
+        task = self.store.create("Widget", description="build", status="todo")
+        claimed = self.store.claim_next_todo()
+        self.assertIsNotNone(claimed)
+        self.store.finish_run(claimed.id, claimed.run_id,
+                             status="review", response="done")
+
+        events = self._events()
+        kinds = [event["type"] for event in events]
+        self.assertEqual(kinds, ["task_created", "run_claimed", "run_finished"])
+        claimed_event = next(e for e in events if e["type"] == "run_claimed")
+        self.assertEqual(claimed_event["run_id"], claimed.run_id)
+        self.assertIsNotNone(claimed_event["queue_wait_ms"])
+        self.assertGreaterEqual(claimed_event["queue_wait_ms"], 0)
+        self.assertEqual(claimed_event["run_index"], 1)
+        finished = next(e for e in events if e["type"] == "run_finished")
+        self.assertEqual(finished["run_id"], claimed.run_id)
+        self.assertEqual(finished["status"], "completed")
+
+    def test_status_change_rework_and_comment_events(self) -> None:
+        task = self.store.create("Widget", description="build", status="todo")
+        self.store.update(task["id"], {"status": "doing"})
+        self.store.update(task["id"], {"status": "review"})
+        self.store.update(task["id"], {"status": "todo"})
+        self.store.add_comment(task["id"], "please redo")
+        self.store.delete(task["id"])
+
+        events = self._events()
+        changes = [(e["from"], e["to"]) for e in events
+                   if e["type"] == "status_changed"]
+        self.assertEqual(changes[:3], [("todo", "doing"), ("doing", "review"),
+                                       ("review", "todo")])
+        self.assertIn("comment_added", [e["type"] for e in events])
+        self.assertEqual(events[-1]["type"], "task_deleted")
+
+    def test_comment_records_the_column_it_came_from(self) -> None:
+        task = self.store.create("Widget", description="build", status="todo")
+        self.store.update(task["id"], {"status": "review"})
+        self.store.add_comment(task["id"], "please redo")
+
+        comment = next(e for e in self._events()
+                       if e["type"] == "comment_added")
+        self.assertEqual(comment["from_status"], "review")
+        self.assertEqual(comment["to_status"], "todo")
+        self.assertFalse(comment["deferred"])
+
+    def test_recovery_only_reports_the_cards_it_moved(self) -> None:
+        claimed = self.store.create("Running", description="build",
+                                    status="todo")
+        queued = self.store.create("Waiting", description="later",
+                                   status="todo")
+        chosen = self.store.claim_next_todo()
+        self.assertEqual(chosen.id, claimed["id"])
+
+        reloaded = BoardStore(self.root)
+        reloaded.load()
+        self.assertEqual(reloaded.recover_interrupted(), 1)
+
+        requeued = [e for e in self._events() if e["type"] == "run_requeued"]
+        # The plain queued card was never running; a fake requeue event
+        # for it would invent a run that Phase 2 would count as rework.
+        self.assertEqual([e["task_id"] for e in requeued], [claimed["id"]])
+        self.assertEqual(requeued[0]["run_id"], chosen.run_id)
+        self.assertEqual(requeued[0]["reason"], "restart")
+        self.assertNotEqual(claimed["id"], queued["id"])
 
 
 if __name__ == "__main__":

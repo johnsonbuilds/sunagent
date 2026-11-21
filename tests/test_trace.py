@@ -151,3 +151,135 @@ class AsyncTraceWriterTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RunRecordPolicyTests(unittest.IsolatedAsyncioTestCase):
+    """Phase 1: retention policy, run.config/run.metrics, drop accounting."""
+
+    def _trace(self, path, **kwargs):
+        spec = HarnessSpec()
+        return RunTrace(run_id="run-1", output_path=path, harness=spec, **kwargs)
+
+    async def test_control_retention_keeps_only_control_events(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "run.jsonl"
+            trace = self._trace(path, retain_events="control")
+            trace.emit("agent.start")
+            trace.emit("llm.start", 1, messages=[{"role": "user", "content": "hi"}])
+            trace.emit("tool.end", 1, status="success")
+            trace.emit("context.llm_summary.text", 1, summary="s")
+            await trace.flush()
+
+            self.assertEqual([event.event_type for event in trace.events],
+                             ["agent.start"])
+            # The file still holds everything (authoritative replay log).
+            written = [json.loads(line).get("event_type")
+                       for line in path.read_text().splitlines()]
+            self.assertIn("llm.start", written)
+            self.assertIn("tool.end", written)
+            self.assertEqual(trace.event_count, 4)
+
+    async def test_none_retention_keeps_nothing(self) -> None:
+        trace = self._trace(None, retain_events="none")
+        trace.emit("agent.start")
+        self.assertEqual(trace.events, [])
+        self.assertEqual(trace.event_count, 1)
+
+    async def test_run_config_and_metrics_are_recorded(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "run.jsonl"
+            trace = self._trace(path, retain_events="control")
+            config = trace.record_config(model_params={"model": "m"},
+                                         tools=[{"name": "read_file"}])
+            self.assertEqual(config.run_id, "run-1")
+            self.assertEqual(config.harness_id, trace.harness.id)
+            self.assertNotIn("api_key", json.dumps(config.to_dict()))
+
+            from agent_runtime.metrics import RunMetrics, finalize_run
+            record = finalize_run(trace, status="completed", answer="done")
+            self.assertEqual(record.run_id, "run-1")
+            await trace.flush()
+
+            kinds = [event.event_type for event in trace.events]
+            self.assertEqual(kinds, ["run.config", "run.metrics"])
+            written = [json.loads(line).get("event_type")
+                       for line in path.read_text().splitlines()]
+            self.assertIn("run.metrics", written)
+            self.assertIsInstance(record, RunMetrics)
+
+    async def test_streamed_chunks_are_dropped_and_counted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            trace = RunTrace(run_id="run-1",
+                             output_path=Path(directory) / "run.jsonl",
+                             queue_size=1)
+            trace._ensure_writer(asyncio.get_running_loop())
+            for _ in range(5):
+                trace.emit("llm.chunk", 1, content="x")
+            self.assertGreater(trace.dropped, 0)
+            self.assertEqual(trace.stats.dropped_events, trace.dropped)
+            # Control events are never dropped, even with a full queue.
+            trace.emit("agent.error", 1, error="boom")
+            self.assertIsNotNone(trace.agent_error())
+            await trace.flush()
+            written = [json.loads(line).get("event_type")
+                       for line in (Path(directory) / "run.jsonl")
+                       .read_text().splitlines()]
+            self.assertIn("agent.error", written)
+
+
+class AgentErrorTests(unittest.IsolatedAsyncioTestCase):
+    """``agent_error`` must not depend on what the trace retained."""
+
+    def test_none_retention_still_reports_the_failure(self) -> None:
+        trace = RunTrace(run_id="run-1", retain_events="none")
+        trace.emit("agent.error", 1, error="boom", stage="llm")
+
+        self.assertEqual(trace.events, [])
+        error = trace.agent_error()
+        self.assertIsNotNone(error)
+        self.assertEqual(error.data["stage"], "llm")
+
+    def test_a_successful_run_has_no_error(self) -> None:
+        trace = RunTrace(retain_events="none")
+        trace.emit("agent.end", 1, status="success")
+
+        self.assertIsNone(trace.agent_error())
+
+
+class HarnessHeaderTests(unittest.IsolatedAsyncioTestCase):
+    async def test_the_header_carries_the_join_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "run.jsonl"
+            trace = RunTrace(run_id="run-1", output_path=path,
+                             harness=HarnessSpec(), origin="webui",
+                             session_id="sess-1", task_id="task-1",
+                             run_index=3, model="m")
+            trace.emit("agent.start")
+            await trace.flush()
+
+            header = read_records(path)[0]
+
+        self.assertEqual(header["record_type"], "harness")
+        self.assertEqual(header["origin"], "webui")
+        self.assertEqual(header["session_id"], "sess-1")
+        self.assertEqual(header["task_id"], "task-1")
+        self.assertEqual(header["run_index"], 3)
+        self.assertEqual(header["model"], "m")
+
+
+class GitStateCacheTests(unittest.IsolatedAsyncioTestCase):
+    """A non-repository must not be re-probed for every run."""
+
+    def test_an_empty_result_is_cached_too(self) -> None:
+        from agent_runtime import trace as trace_module
+
+        with mock.patch.object(trace_module, "_git_cache", (0.0, {})), \
+                mock.patch.object(trace_module.subprocess, "run") as run:
+            run.return_value = mock.Mock(returncode=1, stdout="")
+            first = trace_module.git_state()
+            second = trace_module.git_state()
+
+        self.assertEqual(first, {})
+        self.assertEqual(second, {})
+        self.assertEqual(run.call_count, 3)
+

@@ -206,7 +206,7 @@ async def _generate_summary(messages: list[dict[str, Any]], *,
         request_kwargs["reasoning_effort"] = summary_reasoning_effort
     response = await model.chat(summarizer_messages, tools=None,
                                 **request_kwargs)
-    prompt_tokens, completion_tokens = response_usage(response)
+    prompt_tokens, completion_tokens, _ = response_usage(response)
     reasoning = response.get("reasoning_content") or ""
     return _SummaryCall(
         content=response.get("content") or "",

@@ -499,5 +499,31 @@ class ApplyContextStrategyLLMRoutingTests(unittest.IsolatedAsyncioTestCase):
             await apply_context_strategy([], ContextGenome(strategy="bogus"))
 
 
+class _RecordingTrace:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict]] = []
+
+    def emit(self, event_type: str, iteration: int = 0, **data) -> None:
+        self.events.append((event_type, data))
+
+
+class ContextTimingTests(unittest.IsolatedAsyncioTestCase):
+    """``run.metrics`` sums the summarizer time from this event."""
+
+    async def test_a_compaction_reports_its_own_duration(self) -> None:
+        trace = _RecordingTrace()
+
+        await apply_context_strategy(
+            build_rounds(20, 5_000),
+            ContextGenome(strategy="compact_observations",
+                          context_budget=10_000, window_rounds=6),
+            trace=trace, iteration=1)
+
+        name, data = trace.events[0]
+        self.assertEqual(name, "context.compact_observations")
+        self.assertIsInstance(data["duration_ms"], float)
+        self.assertGreaterEqual(data["duration_ms"], 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

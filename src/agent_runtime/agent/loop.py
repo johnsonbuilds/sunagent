@@ -138,12 +138,12 @@ class AgentTurn:
                                  iteration, len(content))
                     events.emit("agent.completed", iteration,
                                 iterations=iteration, answer=content)
-                    agent_meta.update(history.token_totals)
+                    agent_meta.update(history.token_totals, iterations=iteration)
                     return content
                 stop = await self.tool_runner.dispatch(
                     outcomes, iteration, history)
                 if stop is not None:
-                    agent_meta.update(history.token_totals)
+                    agent_meta.update(history.token_totals, iterations=iteration)
                     return stop
 
             return await self._summary_turn(history, agent_meta)
@@ -162,35 +162,26 @@ class AgentTurn:
             logger.debug(
                 "llm.request.start iteration=%d messages=%d tools=%d stream=%s",
                 iteration, len(history.messages), len(schemas), self.stream)
-            with trace.span("llm", iteration,
-                            message_count=len(history.view),
-                            tool_count=len(schemas),
-                            messages=list(history.view)) as span_meta:
-                response = await chat_with_recovery(
-                    self.llm, history.view, schemas, iteration,
-                    harness, stream=self.stream, trace=trace, events=events,
-                    refresh=self.guard.context_window_refresh(
-                        history, iteration),
-                    runtime=self.runtime)
-                tool_calls = response.get("tool_calls") or []
-                content = response.get("content") or ""
-                prompt_tokens, completion_tokens = response_usage(response)
-                history.record_usage(prompt_tokens, completion_tokens)
-
-                span_meta.update(
-                    tool_count=len(tool_calls),
-                    tools=[tool_trace_metadata(call).get("tool")
-                           for call in tool_calls],
-                    final=not tool_calls,
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    total_tokens=prompt_tokens + completion_tokens,
-                )
-                logger.debug(
-                    "llm.request.end iteration=%d content_chars=%d tool_calls=%s",
-                    iteration, len(content),
-                    [tool_trace_metadata(call).get("tool") for call in tool_calls])
-                return response
+            # ``chat_with_recovery`` owns the per-attempt llm.start/llm.end
+            # events: a retry gets its own pair instead of inflating one
+            # span, and the request payload is written once.
+            response = await chat_with_recovery(
+                self.llm, history.view, schemas, iteration,
+                harness, stream=self.stream, trace=trace, events=events,
+                refresh=self.guard.context_window_refresh(
+                    history, iteration),
+                runtime=self.runtime)
+            tool_calls = response.get("tool_calls") or []
+            content = response.get("content") or ""
+            prompt_tokens, completion_tokens, cached_tokens = response_usage(
+                response)
+            history.record_usage(prompt_tokens, completion_tokens,
+                                 cached_tokens)
+            logger.debug(
+                "llm.request.end iteration=%d content_chars=%d tool_calls=%s",
+                iteration, len(content),
+                [tool_trace_metadata(call).get("tool") for call in tool_calls])
+            return response
         except ReasoningBudgetExceeded as exc:
             # The model spiralled into thinking without acting. Append
             # an assistant placeholder plus a nudge and retry on the
@@ -237,23 +228,18 @@ class AgentTurn:
                                        trace=trace, iteration=iteration)
             logger.debug("llm.request.start iteration=%d messages=%d tools=0 stream=%s",
                          iteration, len(history.view), self.stream)
-            with trace.span("llm", iteration,
-                            message_count=len(history.view), tool_count=0,
-                            messages=list(history.view)) as span_meta:
-                response = await chat_with_recovery(
-                    self.llm, history.view, None, iteration, harness,
-                    stream=self.stream, trace=trace, events=events,
-                    refresh=self.guard.context_window_refresh(
-                        history, iteration),
-                    runtime=self.runtime)
-                prompt_tokens, completion_tokens = response_usage(response)
-                history.record_usage(prompt_tokens, completion_tokens)
-                span_meta.update(tool_count=0, tools=[], final=True,
-                                 prompt_tokens=prompt_tokens,
-                                 completion_tokens=completion_tokens,
-                                 total_tokens=prompt_tokens + completion_tokens)
-                logger.debug("llm.request.end iteration=%d content_chars=%d tool_calls=[]",
-                             iteration, len(response.get("content") or ""))
+            response = await chat_with_recovery(
+                self.llm, history.view, None, iteration, harness,
+                stream=self.stream, trace=trace, events=events,
+                refresh=self.guard.context_window_refresh(
+                    history, iteration),
+                runtime=self.runtime)
+            prompt_tokens, completion_tokens, cached_tokens = response_usage(
+                response)
+            history.record_usage(prompt_tokens, completion_tokens,
+                                 cached_tokens)
+            logger.debug("llm.request.end iteration=%d content_chars=%d tool_calls=[]",
+                         iteration, len(response.get("content") or ""))
         except ReasoningBudgetExceeded as exc:
             # The forced summary turn has no tools, so nudging makes no
             # sense; surface the partial reasoning as the final answer
@@ -267,6 +253,7 @@ class AgentTurn:
                          len(answer))
             events.emit("agent.completed", iteration, iterations=iteration,
                         answer=answer)
+            agent_meta.update(iterations=iteration)
             return answer
         except Exception as exc:
             logger.error("llm.request.error iteration=%d error=%s", iteration, exc)
@@ -277,6 +264,7 @@ class AgentTurn:
         history.append({"role": "assistant", "content": answer})
         logger.debug("agent.final iteration=%d answer_chars=%d", iteration, len(answer))
         events.emit("agent.completed", iteration, iterations=iteration, answer=answer)
+        agent_meta.update(iterations=iteration)
         return answer
 
 

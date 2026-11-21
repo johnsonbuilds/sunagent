@@ -42,7 +42,22 @@ class TurnOutcome:
 
 
 EnsureSession = Callable[[str], str]
-RunTurn = Callable[[Session, str], Awaitable[TurnOutcome]]
+
+
+@dataclass(frozen=True)
+class RunRequest:
+    """Identity of the board run being executed.
+
+    The board owns ``run_id``/``run_index``; the turn and its trace reuse
+    them so ``board.json``, the trace file and ``runs.jsonl`` agree.
+    """
+
+    task_id: str
+    run_id: str
+    run_index: int
+
+
+RunTurn = Callable[[Session, str, RunRequest], Awaitable[TurnOutcome]]
 
 
 @dataclass
@@ -223,8 +238,11 @@ class BoardExecutor:
 
             if not self.board.mark_prompt_started(task.id, task.run_id):
                 return
+            request = RunRequest(task_id=task.id, run_id=task.run_id,
+                                 run_index=len(task.runs) + 1)
             self._turn_task = asyncio.create_task(
-                self._run_turn(session, _task_prompt(task, resuming=resuming)),
+                self._run_turn(session, _task_prompt(task, resuming=resuming),
+                               request),
                 name=f"board-task-{task.id}",
             )
             session.task = self._turn_task
@@ -251,6 +269,13 @@ class BoardExecutor:
             finally:
                 if session.task is turn_task:
                     session.task = None
+
+            if outcome.run_id and outcome.run_id != task.run_id:
+                # ``board.json`` and the trace/metrics record would then
+                # point at different runs; keep the board's identity.
+                logger.warning("webui.board.executor.run_id_mismatch "
+                               "task=%s board=%s outcome=%s",
+                               task.id, task.run_id, outcome.run_id)
 
             if outcome.status == "completed":
                 self.board.finish_run(task.id, task.run_id,
@@ -289,4 +314,4 @@ class BoardExecutor:
                              task.id)
 
 
-__all__ = ["BoardExecutor", "TurnOutcome", "TurnStatus"]
+__all__ = ["BoardExecutor", "RunRequest", "TurnOutcome", "TurnStatus"]

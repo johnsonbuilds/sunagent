@@ -72,6 +72,109 @@ class FrameBusTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SessionStoreTests(unittest.TestCase):
+    def test_ids_do_not_collide_within_one_second(self) -> None:
+        store = SessionStore(Path("/tmp/does-not-matter"))
+
+        ids = {store.create().id for _ in range(50)}
+
+        self.assertEqual(len(ids), 50)
+
+    def test_a_diagnosis_session_round_trips_its_metadata(self) -> None:
+        with TemporaryDirectory() as root:
+            store = SessionStore(Path(root))
+            session = store.create(
+                "诊断: task-1", harness="evaluation-v1", origin="diagnosis",
+                target={"type": "task", "id": "task-1"},
+                diagnosis_id="diag-1", bundle_hash="sha256:abc")
+            session.append_user_message("diagnose")
+            session.append_segment({"id": "s1", "type": "assistant",
+                                    "content": "## 结论"})
+            store.save(session)
+
+            reloaded = SessionStore(Path(root))
+            reloaded.load()
+            restored = reloaded.get(session.id)
+
+            self.assertEqual(restored.origin, "diagnosis")
+            self.assertEqual(restored.target, {"type": "task", "id": "task-1"})
+            self.assertEqual(restored.diagnosis_id, "diag-1")
+            self.assertEqual(restored.bundle_hash, "sha256:abc")
+            self.assertEqual(restored.summary()["origin"], "diagnosis")
+            self.assertEqual(restored.summary()["target"],
+                             {"type": "task", "id": "task-1"})
+
+    def test_a_legacy_record_is_an_ordinary_web_ui_session(self) -> None:
+        with TemporaryDirectory() as root:
+            path = Path(root) / "sess-legacy.json"
+            path.write_text(json.dumps({
+                "id": "sess-legacy", "title": "old",
+                "created_at": 1.0, "updated_at": 1.0,
+                "segments": [{"id": "s1", "type": "user",
+                              "content": "hi"}],
+                "messages": [],
+            }), encoding="utf-8")
+
+            store = SessionStore(Path(root))
+            store.load()
+            restored = store.get("sess-legacy")
+
+            self.assertEqual(restored.origin, "webui")
+            self.assertIsNone(restored.target)
+            self.assertIsNone(restored.report_segment_id)
+
+    def test_the_diagnosis_report_is_frozen_on_its_first_segment(self) -> None:
+        store = SessionStore(Path("/tmp/does-not-matter"))
+        session = store.create(origin="diagnosis")
+
+        self.assertTrue(session.mark_report_segment("s1"))
+        self.assertFalse(session.mark_report_segment("s2"))
+
+        self.assertEqual(session.report_segment_id, "s1")
+
+    def test_a_blank_report_segment_is_never_frozen(self) -> None:
+        store = SessionStore(Path("/tmp/does-not-matter"))
+        session = store.create(origin="diagnosis")
+
+        self.assertFalse(session.mark_report_segment(""))
+        self.assertFalse(session.mark_report_segment("   "))
+        self.assertIsNone(session.report_segment_id)
+
+        # A blank id must not block the real report from being recorded.
+        self.assertTrue(session.mark_report_segment(" s1 "))
+        self.assertEqual(session.report_segment_id, "s1")
+
+    def test_a_target_is_detached_from_the_caller_and_the_output(self) -> None:
+        store = SessionStore(Path("/tmp/does-not-matter"))
+        target = {"type": "cohort", "filters": {"harness": "coding-v1"}}
+
+        session = store.create(origin="diagnosis", target=target)
+        target["filters"]["harness"] = "general-v1"
+
+        self.assertEqual(session.target["filters"], {"harness": "coding-v1"})
+        session.target["filters"]["harness"] = "gone"
+        self.assertEqual(target["filters"], {"harness": "general-v1"})
+
+    def test_an_empty_target_is_stored_as_none(self) -> None:
+        store = SessionStore(Path("/tmp/does-not-matter"))
+
+        self.assertIsNone(store.create(origin="diagnosis", target={}).target)
+
+    def test_a_stored_empty_target_loads_as_none(self) -> None:
+        with TemporaryDirectory() as root:
+            path = Path(root) / "sess-empty-target.json"
+            path.write_text(json.dumps({
+                "id": "sess-empty-target", "title": "diag",
+                "created_at": 1.0, "updated_at": 1.0,
+                "origin": "diagnosis", "target": {},
+                "segments": [{"id": "s1", "type": "user", "content": "hi"}],
+                "messages": [],
+            }), encoding="utf-8")
+
+            store = SessionStore(Path(root))
+            store.load()
+
+            self.assertIsNone(store.get("sess-empty-target").target)
+
     def test_sessions_round_trip_through_disk(self) -> None:
         with TemporaryDirectory() as root:
             store = SessionStore(Path(root))

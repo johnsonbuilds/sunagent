@@ -121,7 +121,7 @@ class AgentLoopErrorHandlingTests(unittest.IsolatedAsyncioTestCase):
             [{"content": "It is sunny", "tool_calls": []},
              {"finish_reason": "stop"}],
         ])
-        trace = RunTrace(run_id="streaming")
+        trace = RunTrace(run_id="streaming", trace_chunks=True)
 
         self.assertEqual(await run_turn("weather", llm, make_registry(), stream=True,
                                         trace=trace, harness=NEUTRAL_HARNESS),

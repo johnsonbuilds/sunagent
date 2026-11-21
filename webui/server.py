@@ -23,7 +23,7 @@ from uuid import uuid4
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictBool
 
 from dotenv import load_dotenv
 
@@ -32,6 +32,7 @@ from agent_runtime.agent import RunTrace, run_turn
 from agent_runtime.runtime_config import RuntimeConfig
 from agent_runtime.channels.webui import WebUIChannel
 from agent_runtime.events import EventEmitter
+from agent_runtime.metrics import afinalize_run
 from agent_runtime.harness import (
     HarnessError,
     HarnessSpec,
@@ -51,7 +52,7 @@ from .board import (
     BoardStore,
     BoardValidationError,
 )
-from .executor import BoardExecutor, TurnOutcome
+from .executor import BoardExecutor, RunRequest, TurnOutcome
 from .sessions import STREAM_STOP, Session, SessionStore
 from .turn_context import TurnSnapshot, resolve_turn
 from .workspace import WorkspaceBrowser, WorkspaceError
@@ -157,6 +158,10 @@ class CreateTaskRequest(BaseModel):
     tags: list[str] = Field(default_factory=list)
     model: str | None = Field(default=None, max_length=200)
     harness: str | None = Field(default=None, max_length=200)
+    # ``null`` lets the harness decide; an explicit value wins.  Strict:
+    # a string boolean would silently flip whether a run is judged on
+    # producing files at all.
+    expects_artifact: StrictBool | None = None
 
 
 class PatchTaskRequest(BaseModel):
@@ -168,6 +173,7 @@ class PatchTaskRequest(BaseModel):
     tags: list[str] | None = None
     model: str | None = Field(default=None, max_length=200)
     harness: str | None = Field(default=None, max_length=200)
+    expects_artifact: StrictBool | None = None
 
 
 class ExecutorStateRequest(BaseModel):
@@ -261,7 +267,8 @@ def create_app(store: SessionStore | None = None,
         )
         return session_id
 
-    async def run_board_task(session: Session, message: str) -> TurnOutcome:
+    async def run_board_task(session: Session, message: str,
+                             run: RunRequest) -> TurnOutcome:
         if session.busy:
             return TurnOutcome("busy", error="Session is busy")
         session.model = session.model or runner.catalog.default
@@ -269,7 +276,9 @@ def create_app(store: SessionStore | None = None,
         try:
             snapshot = _resolve_snapshot(session, runner)
             trace, events, channel, _ = _prepare_turn(
-                session, message, snapshot, sessions)
+                session, message, snapshot, sessions,
+                run_id=run.run_id, task_id=run.task_id,
+                run_index=run.run_index)
         except HTTPException as exc:
             return TurnOutcome("error", error=str(exc.detail))
         except Exception as exc:
@@ -278,7 +287,7 @@ def create_app(store: SessionStore | None = None,
             return TurnOutcome("error",
                                error=str(exc) or "could not start the run")
         return await _execute_turn(session, message, snapshot, trace, events,
-                                   channel, sessions)
+                                   channel, sessions, run=run)
 
     executor = BoardExecutor(
         tasks, sessions,
@@ -511,7 +520,8 @@ def create_app(store: SessionStore | None = None,
             tasks.create(payload.title, description=payload.description,
                          status=payload.status, priority=payload.priority,
                          tags=payload.tags,
-                         model=payload.model, harness=payload.harness)
+                         model=payload.model, harness=payload.harness,
+                         expects_artifact=payload.expects_artifact)
         except (BoardValidationError, BoardStorageError) as exc:
             raise _board_http_error(exc) from exc
         if payload.status == "todo":
@@ -526,7 +536,9 @@ def create_app(store: SessionStore | None = None,
             raise HTTPException(status_code=404, detail="task not found")
         patch = {key: value for key, value in
                  payload.model_dump(exclude_unset=True).items()
-                 if value is not None}
+                 # ``expects_artifact: null`` is a real edit ("let the
+                 # harness decide"), not "field omitted".
+                 if value is not None or key == "expects_artifact"}
         if patch.get("model"):
             _require_model(runner.catalog, patch["model"])
         if patch.get("harness"):
@@ -687,13 +699,35 @@ def create_app(store: SessionStore | None = None,
 
 
 def _prepare_turn(session: Session, message: str, snapshot: TurnSnapshot,
-                  store: SessionStore
+                  store: SessionStore, *, run_id: str | None = None,
+                  task_id: str | None = None,
+                  run_index: int | None = None
                   ) -> tuple[RunTrace, EventEmitter, WebUIChannel, str]:
-    """Record the user message and build one turn's I/O objects."""
-    run_id = f"run-{uuid4().hex[:12]}"
+    """Record the user message and build one turn's I/O objects.
+
+    A board run arrives with its own ``run_id``; a chat turn gets a fresh
+    one.  The trace carries the same join keys as ``runs.jsonl`` so the
+    two can always be matched, and ``origin`` comes from the session (a
+    diagnosis follow-up must not be counted as a plain chat run).
+    """
+    run_id = run_id or f"run-{uuid4().hex[:12]}"
     trace = RunTrace(run_id=run_id,
                      output_path=_trace_path(run_id),
-                     harness=snapshot.harness)
+                     harness=snapshot.harness,
+                     retain_events="control",
+                     origin=session.origin,
+                     session_id=session.id,
+                     task_id=task_id,
+                     run_index=run_index,
+                     model=snapshot.model)
+    trace.record_config(
+        runtime=snapshot.runtime,
+        model_params={"model": snapshot.model,
+                      "temperature": snapshot.runtime.temperature,
+                      "stream": snapshot.stream,
+                      "max_iterations": snapshot.harness.control.max_iterations},
+        tools=snapshot.tools.schemas,
+    )
     events = EventEmitter(run_id=trace.run_id)
     channel = WebUIChannel(sink=_session_sink(session))
     events.subscribe(channel)
@@ -707,13 +741,19 @@ def _prepare_turn(session: Session, message: str, snapshot: TurnSnapshot,
 async def _execute_turn(session: Session, message: str,
                         snapshot: TurnSnapshot, trace: RunTrace,
                         events: EventEmitter, channel: WebUIChannel,
-                        store: SessionStore) -> TurnOutcome:
+                        store: SessionStore,
+                        run: RunRequest | None = None) -> TurnOutcome:
     """Run one agent turn and report whether it completed cleanly."""
-    errors: list[str] = []
+    errors: list[tuple[str, str]] = []
+    outcome: TurnOutcome | None = None
+    failure: dict[str, str] | None = None
 
     def collect_error(event: Any) -> None:
         if event.event_type == "runtime.error":
-            errors.append(str(event.data.get("error") or "run failed"))
+            # Keep the stage (``llm``, ``agent``, …): Phase 2 splits
+            # failure causes by it, and a blanket ``runtime`` erases that.
+            stage = str(event.data.get("stage") or "runtime")
+            errors.append((stage, str(event.data.get("error") or "run failed")))
 
     unsubscribe = events.subscribe(collect_error)
     try:
@@ -732,21 +772,72 @@ async def _execute_turn(session: Session, message: str,
         logger.exception("webui.run.failed session=%s", session.id)
         session.bus.publish({"type": "run.error", "stage": "runtime",
                              "error": str(exc)})
-        return TurnOutcome("error", trace.run_id,
-                           error=str(exc) or "run failed")
+        outcome = TurnOutcome("error", trace.run_id,
+                              error=str(exc) or "run failed")
+        failure = {"stage": "runtime", "code": str(exc) or "run failed"}
+        return outcome
     else:
         if errors:
-            return TurnOutcome("error", trace.run_id, answer=answer,
-                               error=errors[-1])
-        return TurnOutcome("completed", trace.run_id, answer=answer)
+            stage, message = errors[-1]
+            outcome = TurnOutcome("error", trace.run_id, answer=answer,
+                                  error=message)
+            failure = {"stage": stage, "code": message}
+            return outcome
+        outcome = TurnOutcome("completed", trace.run_id, answer=answer)
+        return outcome
     finally:
-        unsubscribe()
-        channel.close()
-        events.close()
-        session.busy = False
-        session.updated_at = time.time()
-        session.task = None
-        store.save(session)
+        # Every exit path (success, error, cancel) writes exactly one
+        # metrics record; the trace event and the JSONL line come from
+        # the same call so they cannot disagree.
+        #
+        # The nested ``try`` matters: recording awaits, so a second
+        # ``cancel()`` (double-click on Cancel, cancel-then-delete,
+        # shutdown) would otherwise skip the synchronous cleanup below
+        # and leave the session stuck ``busy`` forever.
+        try:
+            await _record_run_metrics(trace, outcome, session, run, failure)
+        finally:
+            unsubscribe()
+            channel.close()
+            events.close()
+            session.busy = False
+            session.updated_at = time.time()
+            session.task = None
+            store.save(session)
+
+
+async def _record_run_metrics(trace: RunTrace, outcome: TurnOutcome | None,
+                              session: Session, run: RunRequest | None,
+                              failure: dict[str, str] | None = None) -> None:
+    """Close the run's metrics record, never masking the run's error."""
+    try:
+        await afinalize_run(
+            trace,
+            status=_metrics_status(outcome),
+            answer=outcome.answer if outcome is not None else "",
+            error=failure,
+            origin=session.origin,
+            session_id=session.id,
+            task_id=run.task_id if run is not None else None,
+            run_index=run.run_index if run is not None else None,
+            # The trace is the run's real model; the session's is only a
+            # default and can differ after a per-request override.
+            model=trace.model or session.model or "",
+        )
+    except Exception:
+        logger.exception("webui.run.metrics_failed session=%s run=%s",
+                         session.id, trace.run_id)
+
+
+def _metrics_status(outcome: TurnOutcome | None) -> str:
+    if outcome is None:
+        return "cancelled"
+    if outcome.status == "completed":
+        return "completed"
+    if outcome.status == "cancelled":
+        return "cancelled"
+    # ``busy`` never starts a run; anything else is a failed run.
+    return "error"
 
 
 async def _cancel_session_turn(session: Session) -> None:

@@ -74,12 +74,17 @@ class UserEventSequenceTests(unittest.IsolatedAsyncioTestCase):
              {"finish_reason": "stop"}],
         ])
         events = EventEmitter(run_id="r1")
+        received: list[AgentEvent] = []
+        events.subscribe(received.append)
 
         self.assertEqual(await run_turn("weather", llm, make_registry(), stream=True,
                                         events=events),
                          "It is sunny")
+        # Deltas reach subscribers live but are never retained (memory).
+        self.assertNotIn("assistant.delta",
+                         [event.event_type for event in events.events])
         self.assertEqual(
-            [event.event_type for event in events.events],
+            [event.event_type for event in received],
             ["agent.started",
              "assistant.started",
              "assistant.delta", "assistant.delta", "assistant.delta",
@@ -90,26 +95,26 @@ class UserEventSequenceTests(unittest.IsolatedAsyncioTestCase):
              "assistant.completed",
              "agent.completed"],
         )
-        self.assertEqual({event.run_id for event in events.events}, {"r1"})
-        self.assertEqual(events.events[0].data, {"message": "weather"})
-        self.assertEqual(events.events[2].data,
+        self.assertEqual({event.run_id for event in received}, {"r1"})
+        self.assertEqual(received[0].data, {"message": "weather"})
+        self.assertEqual(received[2].data,
                          {"content": "", "reasoning": "thinking about weather"})
-        self.assertEqual(events.events[3].data, {"content": "Checking ", "reasoning": ""})
-        completed_rounds = [event for event in events.events
+        self.assertEqual(received[3].data, {"content": "Checking ", "reasoning": ""})
+        completed_rounds = [event for event in received
                             if event.event_type == "assistant.completed"]
         self.assertEqual(completed_rounds[0].data, {"tool_calls": ["weather"]})
         self.assertEqual(completed_rounds[1].data, {"tool_calls": []})
-        tool_started = next(event for event in events.events
+        tool_started = next(event for event in received
                             if event.event_type == "tool.started")
         self.assertEqual(tool_started.call_id, "1")
         self.assertEqual(tool_started.data["tool"], "weather")
         self.assertEqual(tool_started.data["arguments"], {"location": "Singapore"})
-        tool_completed = next(event for event in events.events
+        tool_completed = next(event for event in received
                               if event.event_type == "tool.completed")
         self.assertEqual(tool_completed.call_id, "1")
         self.assertEqual(tool_completed.data["result"], "Singapore")
         self.assertIn("duration", tool_completed.data)
-        agent_completed = events.events[-1]
+        agent_completed = received[-1]
         self.assertEqual(agent_completed.iteration, 2)
         self.assertEqual(agent_completed.data,
                          {"iterations": 2, "answer": "It is sunny"})
@@ -121,10 +126,12 @@ class UserEventSequenceTests(unittest.IsolatedAsyncioTestCase):
             {"content": "It is sunny", "tool_calls": []},
         ])
         events = EventEmitter(run_id="r1")
+        received: list[AgentEvent] = []
+        events.subscribe(received.append)
 
         self.assertEqual(await run_turn("weather", llm, make_registry(), events=events),
                          "It is sunny")
-        deltas = [event for event in events.events
+        deltas = [event for event in received
                   if event.event_type == "assistant.delta"]
         self.assertEqual(len(deltas), 1)
         self.assertEqual(deltas[0].data, {"content": "It is sunny", "reasoning": ""})

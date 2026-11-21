@@ -8,6 +8,7 @@ parameter-driven.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from agent_runtime.harness import ContextGenome
@@ -79,6 +80,9 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
             and _view_size(working, count, unit, usage_anchor) <= budget):
         return working
 
+    # Wall time spent building the view: summarizer calls plus the
+    # deterministic compactor.  ``run.metrics`` sums it from this event.
+    started = time.monotonic()
     request = ContextStrategyRequest(
         messages=messages,
         working=working,
@@ -150,6 +154,7 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
 
     if trace is not None and result is not working and result is not messages:
         trace.emit(f"context.{strategy}", iteration,
+                   duration_ms=round((time.monotonic() - started) * 1000, 3),
                    original_chars=total_chars(messages, count),
                    request_chars=total_chars(result, count),
                    original_count=len(messages),

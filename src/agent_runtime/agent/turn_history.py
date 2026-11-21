@@ -101,6 +101,7 @@ class TurnHistory:
         # anchor). ``token_totals`` is what ``agent.end`` reports.
         self._main_prompt_tokens: int = 0
         self._main_completion_tokens: int = 0
+        self._main_cached_tokens: int = 0
         self._summarizer_prompt_tokens: int = 0
         self._summarizer_completion_tokens: int = 0
 
@@ -122,7 +123,8 @@ class TurnHistory:
         return resolve_echo_reasoning(None)
 
     def record_usage(self, prompt_tokens: int,
-                     completion_tokens: int = 0) -> None:
+                     completion_tokens: int = 0,
+                     cached_tokens: int = 0) -> None:
         """Anchor the token estimate at the provider's billed usage.
 
         ``prompt_tokens`` is the measured size of the request the
@@ -140,6 +142,7 @@ class TurnHistory:
         completion_tokens = int(completion_tokens or 0)
         self._main_prompt_tokens += prompt_tokens
         self._main_completion_tokens += completion_tokens
+        self._main_cached_tokens += int(cached_tokens or 0)
         if prompt_tokens > 0:
             self._usage_anchor = (prompt_tokens, len(self.view),
                                   total_chars(self.view, self._resolve_count_reasoning()))
@@ -165,6 +168,8 @@ class TurnHistory:
             "prompt_tokens": prompt,
             "completion_tokens": completion,
             "total_tokens": prompt + completion,
+            # A subset of prompt_tokens, reported not summed.
+            "cached_tokens": self._main_cached_tokens,
             "summarizer_prompt_tokens": self._summarizer_prompt_tokens,
             "summarizer_completion_tokens": self._summarizer_completion_tokens,
         }

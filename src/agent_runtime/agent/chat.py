@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import os
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from typing import Any, Protocol
 
@@ -15,6 +18,28 @@ from agent_runtime.runtime_config import RuntimeConfig
 from agent_runtime.trace import RunTrace
 
 logger = logging.getLogger(__name__)
+
+
+def _fingerprint(value: Any) -> str:
+    """Stable short hash of a request payload, for prefix comparison."""
+    try:
+        encoded = json.dumps(value, ensure_ascii=False, default=str, sort_keys=True)
+    except (TypeError, ValueError):
+        encoded = repr(value)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
+
+
+def _request_chars(messages: list[dict[str, Any]]) -> int:
+    total = 0
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, str):
+            total += len(content)
+        for call in message.get("tool_calls") or ():
+            function = call.get("function") if isinstance(call, Mapping) else None
+            if isinstance(function, Mapping):
+                total += len(str(function.get("arguments") or ""))
+    return total
 
 
 def _stream_idle_timeout(runtime: RuntimeConfig | None = None) -> float | None:
@@ -194,6 +219,8 @@ async def _consume_stream(llm: ChatModel, messages: list[dict[str, Any]],
     tool_calls: list[dict[str, Any]] = []
     finish_reason: str | None = None
     usage: dict[str, Any] | None = None
+    ttft_ms: float | None = None
+    stream_started = time.monotonic()
     reasoning_budget = _reasoning_budget_chars(runtime)
     logger.debug("llm.stream.start iteration=%d", iteration)
     stream_iterator = llm.stream(messages, tools).__aiter__()
@@ -220,8 +247,8 @@ async def _consume_stream(llm: ChatModel, messages: list[dict[str, Any]],
         # the token-budget anchor is fed on streaming turns too.
         chunk_usage = chunk.get("usage")
         if isinstance(chunk_usage, Mapping) and chunk_usage:
-            usage = {"prompt_tokens": int(chunk_usage.get("prompt_tokens") or 0),
-                     "completion_tokens": int(chunk_usage.get("completion_tokens") or 0)}
+            usage = {key: value for key, value in chunk_usage.items()
+                     if isinstance(value, int) and not isinstance(value, bool)}
         reason = chunk.get("finish_reason")
         if isinstance(reason, str) and reason:
             finish_reason = reason
@@ -254,13 +281,15 @@ async def _consume_stream(llm: ChatModel, messages: list[dict[str, Any]],
             if events is not None:
                 events.emit("assistant.delta", iteration,
                             content=text, reasoning=reasoning_text)
+        if ttft_ms is None and (text or reasoning_text or chunk.get("tool_calls")):
+            ttft_ms = round((time.monotonic() - stream_started) * 1000, 3)
         # NOTE: per-chunk logging intentionally disabled: a stuck run can
         # stream tens of thousands of whitespace-only chunks and each one
         # printed a log line. Full content stays available in trace
         # llm.chunk records and the assembled llm.end message.
         # logger.debug("llm.chunk iteration=%d content=%r reasoning=%r tool_calls=%r",
         #              iteration, text, reasoning_text, chunk.get("tool_calls") or [])
-        if trace is not None:
+        if trace is not None and trace.trace_chunks:
             trace.emit("llm.chunk", iteration,
                        content=text, tool_call_count=len(chunk.get("tool_calls") or []),
                        reasoning_chars=len(reasoning_text))
@@ -273,6 +302,10 @@ async def _consume_stream(llm: ChatModel, messages: list[dict[str, Any]],
         response["reasoning_content"] = "".join(reasoning)
     if usage is not None:
         response["usage"] = usage
+    if finish_reason is not None:
+        response["finish_reason"] = finish_reason
+    if ttft_ms is not None:
+        response["ttft_ms"] = ttft_ms
     if finish_reason is None:
         # The server cut the stream without a finish marker (observed on
         # free-tier reasoning models after very long thinking). Treat the
@@ -293,27 +326,96 @@ async def _chat_response(llm: ChatModel, messages: list[dict[str, Any]],
                          stream: bool = False,
                          trace: RunTrace | None = None,
                          events: EventEmitter | None = None,
-                         runtime: RuntimeConfig | None = None) -> dict[str, Any]:
-    """Consume either runtime streaming or a single runtime response."""
+                         runtime: RuntimeConfig | None = None,
+                         attempt: int = 1) -> dict[str, Any]:
+    """Consume either runtime streaming or a single runtime response.
+
+    This is one real provider attempt, so it owns the ``llm.start`` /
+    ``llm.end`` pair: the request payload is written once on start, the
+    assembled response plus usage/timing once on end.  A retried attempt
+    (same iteration, ``attempt > 1``) therefore gets its own pair instead
+    of inflating one span's duration.
+    """
+    request = list(messages)
+    started = time.monotonic()
+    if trace is not None:
+        trace.emit("llm.start", iteration, attempt=attempt,
+                   message_count=len(request),
+                   tool_count=len(tools or ()),
+                   request_chars=_request_chars(request),
+                   request_hash=_fingerprint(request),
+                   # The parent chain, not the leaf: a stable hash of the
+                   # conversation minus the newest message is what a
+                   # provider prompt cache can reuse across iterations.
+                   prefix_hash=_fingerprint(request[:-1]),
+                   messages=request)
     if events is not None:
         events.emit("assistant.started", iteration)
-    if not stream:
-        chat = llm.chat
-        response = await chat(messages, tools)
-        content = response.get("content") or ""
-        reasoning = response.get("reasoning_content") or ""
-        if content or reasoning:
-            if events is not None:
-                events.emit("assistant.delta", iteration,
-                            content=content, reasoning=reasoning)
-    else:
-        response = await _consume_stream(llm, messages, tools, iteration,
-                                         trace=trace, events=events,
-                                         runtime=runtime)
+
+    def _end(**data: Any) -> None:
+        if trace is None:
+            return
+        duration_ms = round((time.monotonic() - started) * 1000, 3)
+        trace.emit("llm.end", iteration, attempt=attempt,
+                   duration_ms=duration_ms, **data)
+
+    try:
+        if not stream:
+            response = await llm.chat(request, tools)
+            content = response.get("content") or ""
+            reasoning = response.get("reasoning_content") or ""
+            if content or reasoning:
+                if events is not None:
+                    events.emit("assistant.delta", iteration,
+                                content=content, reasoning=reasoning)
+            ttft_ms = None
+        else:
+            response = await _consume_stream(llm, request, tools, iteration,
+                                             trace=trace, events=events,
+                                             runtime=runtime)
+            ttft_ms = response.pop("ttft_ms", None)
+    except asyncio.CancelledError:
+        # The cancellation must not erase the request from the trace: a
+        # cancelled run is exactly when its last attempt matters.
+        _end(status="cancelled", tool_count=0, final=False,
+             content_chars=0, reasoning_chars=0, tool_calls=[])
+        raise
+    except Exception as exc:
+        if trace is not None:
+            trace.emit("llm.error", iteration, attempt=attempt,
+                       error=str(exc)[:500],
+                       error_type=type(exc).__name__)
+        _end(status="error", error=str(exc)[:500],
+             error_type=type(exc).__name__, tool_count=0, final=False,
+             content_chars=0, reasoning_chars=0, tool_calls=[])
+        raise
+
+    usage = response.get("usage")
+    usage = usage if isinstance(usage, Mapping) else {}
+    prompt_tokens = int(usage.get("prompt_tokens") or 0)
+    completion_tokens = int(usage.get("completion_tokens") or 0)
+    cached_tokens = int(usage.get("cached_tokens") or 0)
+    tool_calls = response.get("tool_calls") or []
+    _end(status="success",
+         content=response.get("content") or "",
+         reasoning_content=response.get("reasoning_content") or "",
+         tool_calls=tool_calls,
+         tool_count=len(tool_calls),
+         tools=[tool_trace_metadata(call).get("tool") for call in tool_calls],
+         final=not tool_calls,
+         finish_reason=response.get("finish_reason"),
+         usage=dict(usage),
+         prompt_tokens=prompt_tokens,
+         completion_tokens=completion_tokens,
+         cached_tokens=cached_tokens,
+         total_tokens=prompt_tokens + completion_tokens,
+         content_chars=len(response.get("content") or ""),
+         reasoning_chars=len(response.get("reasoning_content") or ""),
+         ttft_ms=ttft_ms)
     if events is not None:
         events.emit("assistant.completed", iteration,
                     tool_calls=[tool_trace_metadata(call).get("tool")
-                                for call in response.get("tool_calls") or []])
+                                for call in tool_calls])
     return response
 
 
@@ -346,7 +448,8 @@ async def chat_with_recovery(llm: ChatModel, messages: list[dict[str, Any]],
         try:
             return await _chat_response(llm, messages, tools, iteration,
                                         stream=stream, trace=trace, events=events,
-                                        runtime=runtime)
+                                        runtime=runtime,
+                                        attempt=sum(attempted.values()) + 1)
         except Exception as exc:
             category = _llm_error_category(exc, runtime)
             if category is None:

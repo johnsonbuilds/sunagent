@@ -147,6 +147,26 @@ def _clean_choice(value: Any, field: str) -> str | None:
     return text
 
 
+def _load_expects_artifact(value: Any) -> bool | None:
+    """Read an explicit artifact requirement; anything else means unset."""
+    return value if isinstance(value, bool) else None
+
+
+def _clean_expects_artifact(value: Any) -> bool | None:
+    """Validate a client-supplied artifact requirement.
+
+    ``None`` means "decide from the harness"; a string boolean is
+    rejected rather than guessed, because this flag decides whether a
+    run is judged on producing files at all.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise BoardValidationError(
+            "expects_artifact must be true, false, or null")
+    return value
+
+
 def _clean_comment(value: Any) -> str:
     """Validate one user comment before it enters the board."""
     if not isinstance(value, str):
@@ -273,6 +293,10 @@ class BoardTask:
     started_at: float | None = None
     finished_at: float | None = None
     last_error: str | None = None
+    # Whether finishing this task is supposed to leave a file behind.
+    # ``None`` means "decide from the harness"; only an explicit value
+    # overrides that, so artifact metrics never invent a requirement.
+    expects_artifact: bool | None = None
     # A run was interrupted after the turn started; the next claimed run
     # should continue the conversation instead of resending the description.
     resume_pending: bool = False
@@ -295,6 +319,7 @@ class BoardTask:
             "position": self.position,
             "model": self.model,
             "harness": self.harness,
+            "expects_artifact": self.expects_artifact,
             "session_id": self.session_id,
             "queued_at": self.queued_at,
             "run_id": self.run_id,
@@ -357,6 +382,8 @@ class BoardTask:
                    position=position,
                    model=_load_choice(record.get("model")),
                    harness=_load_choice(record.get("harness")),
+                   expects_artifact=_load_expects_artifact(
+                       record.get("expects_artifact")),
                    session_id=session_id,
                    queued_at=_as_optional_float(record.get("queued_at")),
                    run_id=_as_optional_text(record.get("run_id")),
@@ -416,6 +443,27 @@ def _normalize(tasks: list[BoardTask]) -> list[BoardTask]:
     return ordered
 
 
+def _append_event(path: Path, payload: dict[str, Any]) -> None:
+    """Append one board lifecycle event; history must never break a run."""
+    try:
+        line = json.dumps(payload, ensure_ascii=False, separators=(",", ":"),
+                          default=str, allow_nan=False) + "\n"
+        payload_bytes = memoryview(line.encode("utf-8"))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o644)
+        try:
+            while payload_bytes:
+                written = os.write(descriptor, payload_bytes)
+                if written <= 0:
+                    raise OSError("short write")
+                payload_bytes = payload_bytes[written:]
+        finally:
+            os.close(descriptor)
+    except (OSError, TypeError, ValueError) as exc:
+        logger.warning("webui.board.event_write_failed path=%s error=%s",
+                       path, exc)
+
+
 class BoardStore:
     """Load, mutate, and persist the single web UI board."""
 
@@ -424,8 +472,10 @@ class BoardStore:
         # Without one, the shared storage helper decides the location.
         if root is None:
             self._path = storage.board_path()
+            self._events_path = storage.board_events_path()
         else:
             self._path = Path(root) / "board.json"
+            self._events_path = Path(root) / "board_events.jsonl"
         self._tasks: list[BoardTask] = []
         self._updated_at = 0.0
         self._lock = RLock()
@@ -500,7 +550,8 @@ class BoardStore:
                status: str = "backlog", priority: str = "normal",
                tags: list[str] | None = None,
                model: str | None = None,
-               harness: str | None = None) -> dict[str, Any]:
+               harness: str | None = None,
+               expects_artifact: bool | None = None) -> dict[str, Any]:
         title = _clean_title(title)
         description = _clean_description(description)
         status = _clean_status(status)
@@ -508,6 +559,7 @@ class BoardStore:
         tags = _clean_tags(tags)
         model = _clean_choice(model, "model")
         harness = _clean_choice(harness, "harness")
+        expects_artifact = _clean_expects_artifact(expects_artifact)
         now = time.time()
         with self._lock:
             position = sum(1 for task in self._tasks
@@ -522,6 +574,7 @@ class BoardStore:
                 position=position,
                 model=model,
                 harness=harness,
+                expects_artifact=expects_artifact,
                 queued_at=now if status == "todo" else None,
                 created_at=now,
                 updated_at=now,
@@ -532,6 +585,9 @@ class BoardStore:
             assert created is not None
             logger.debug("webui.board.task_created id=%s status=%s",
                          created.id, created.status)
+            self._event("task_created", task_id=created.id,
+                        status=created.status, harness=created.harness,
+                        model=created.model)
             return created.to_record()
 
     def update(self, task_id: str, patch: dict[str, Any]) -> dict[str, Any]:
@@ -557,6 +613,9 @@ class BoardStore:
                 target.model = _clean_choice(patch["model"], "model")
             if "harness" in patch:
                 target.harness = _clean_choice(patch["harness"], "harness")
+            if "expects_artifact" in patch:
+                target.expects_artifact = _clean_expects_artifact(
+                    patch["expects_artifact"])
 
             new_status = target.status
             if "status" in patch:
@@ -632,6 +691,10 @@ class BoardStore:
             assert updated is not None
             logger.debug("webui.board.task_updated id=%s status=%s position=%s",
                          updated.id, updated.status, updated.position)
+            if updated.status != current.status:
+                self._event("status_changed", task_id=task_id,
+                            **{"from": current.status,
+                               "to": updated.status, "actor": "user"})
             return updated.to_record()
 
     def move(self, task_id: str, status: str,
@@ -664,6 +727,7 @@ class BoardStore:
                 "created_at": now,
                 "run_id": None,
             })
+            from_status = target.status
             deferred = target.status == "doing" and bool(target.run_id)
             if not deferred:
                 todo_count = sum(1 for task in tasks
@@ -682,6 +746,12 @@ class BoardStore:
             assert updated is not None
             logger.debug("webui.board.comment_added id=%s deferred=%s",
                          task_id, deferred)
+            self._event("comment_added", task_id=task_id,
+                        deferred=deferred, actor="user",
+                        # A comment on a card outside Doing/"doing" also
+                        # requeues it; Phase 2 reads rework from this file.
+                        from_status=from_status,
+                        to_status=None if deferred else "todo")
             return updated.to_record(), deferred
 
     def detail(self, task_id: str,
@@ -706,6 +776,7 @@ class BoardStore:
                      if task.id != task_id]
             self._commit(tasks, now)
             logger.debug("webui.board.task_deleted id=%s", task_id)
+            self._event("task_deleted", task_id=task_id)
             return True
 
     def next_todo(self) -> BoardTask | None:
@@ -724,6 +795,7 @@ class BoardStore:
             if not candidates:
                 return None
             chosen = min(candidates, key=_queue_key)
+            queued_at = chosen.queued_at
             tasks = [_copy(task) for task in self._tasks]
             target = next(task for task in tasks if task.id == chosen.id)
             doing_count = sum(1 for task in tasks
@@ -755,6 +827,12 @@ class BoardStore:
             assert claimed is not None
             logger.debug("webui.board.task_claimed id=%s run=%s",
                          claimed.id, claimed.run_id)
+            queue_wait_ms = (round((now - queued_at) * 1000, 3)
+                             if queued_at is not None else None)
+            self._event("run_claimed", task_id=claimed.id,
+                        run_id=claimed.run_id, queued_at=queued_at,
+                        queue_wait_ms=queue_wait_ms,
+                        run_index=len(claimed.runs) + 1)
             return _copy(claimed)
 
     def mark_prompt_started(self, task_id: str, run_id: str) -> bool:
@@ -841,6 +919,9 @@ class BoardStore:
             logger.debug("webui.board.task_finished id=%s status=%s "
                          "result=%s pending_comments=%s error=%s",
                          task_id, target.status, result, pending, bool(error))
+            self._event("run_finished", task_id=task_id, run_id=run_id,
+                        status=result, to=target.status,
+                        run_index=len(target.runs))
             return True
 
     def requeue_run(self, task_id: str, run_id: str, *,
@@ -876,6 +957,8 @@ class BoardStore:
             _release_comments(target, run_id)
             self._commit(tasks, now)
             logger.debug("webui.board.task_requeued id=%s", task_id)
+            self._event("run_requeued", task_id=task_id, run_id=run_id,
+                        resume=resume)
             return True
 
     def recover_interrupted(self) -> int:
@@ -885,8 +968,10 @@ class BoardStore:
             tasks = [_copy(task) for task in self._tasks]
             changed = 0
             todo_count = sum(1 for task in tasks if task.status == "todo")
+            recovered: list[tuple[str, str]] = []
             for task in tasks:
                 if task.status == "doing" and task.run_id:
+                    recovered.append((task.id, task.run_id))
                     task.status = "todo"
                     task.queued_at = now
                     _release_comments(task, task.run_id)
@@ -903,6 +988,12 @@ class BoardStore:
                 self._commit(tasks, now)
                 logger.info("webui.board.recovered tasks=%d path=%s",
                             changed, self._path)
+                # Only the cards this call actually moved: a plain ``todo``
+                # card was never running, so reporting it as requeued would
+                # invent a run that does not exist.
+                for task_id, run_id in recovered:
+                    self._event("run_requeued", task_id=task_id, run_id=run_id,
+                                resume=True, reason="restart")
             return changed
 
     def ensure_session(self, task_id: str, sessions: "SessionStore", *,
@@ -964,6 +1055,11 @@ class BoardStore:
 
     def _find(self, task_id: str) -> BoardTask | None:
         return next((task for task in self._tasks if task.id == task_id), None)
+
+    def _event(self, event_type: str, **fields: Any) -> None:
+        """Record one lifecycle event (board.json stays the authority)."""
+        _append_event(self._events_path, {"type": event_type,
+                                          "at": time.time(), **fields})
 
     def _commit(self, tasks: list[BoardTask], now: float) -> None:
         normalized = _normalize(tasks)

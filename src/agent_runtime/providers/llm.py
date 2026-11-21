@@ -81,6 +81,30 @@ def _looks_like_context_overflow(exc: BaseException) -> bool:
     return False
 
 
+def _usage_field(usage: Any, name: str) -> Any:
+    """Read one ``usage`` field from either an object or a plain dict."""
+    if isinstance(usage, Mapping):
+        return usage.get(name)
+    return getattr(usage, name, None)
+
+
+def _cached_tokens(usage: Any) -> int:
+    """The prompt-cache hit count, however the provider spells it.
+
+    OpenAI nests it under ``prompt_tokens_details.cached_tokens`` (and
+    some gateways flatten it to ``cached_tokens``); DeepSeek-native APIs
+    call it ``prompt_cache_hit_tokens``.  It is a *subset* of the prompt
+    count wherever it appears, so it is reported, never added.
+    """
+    details = _usage_field(usage, "prompt_tokens_details")
+    for value in (_usage_field(usage, "cached_tokens"),
+                  _usage_field(details, "cached_tokens"),
+                  _usage_field(usage, "prompt_cache_hit_tokens")):
+        if isinstance(value, int) and not isinstance(value, bool):
+            return max(0, value)
+    return 0
+
+
 def _usage_dict(usage: Any) -> dict[str, int]:
     """Normalise a provider ``usage`` object to a plain int dict.
 
@@ -89,10 +113,11 @@ def _usage_dict(usage: Any) -> dict[str, int]:
     estimates on.  Missing fields fall back to 0 rather than raising so a
     partial usage object never breaks a successful call.
     """
-    prompt = getattr(usage, "prompt_tokens", None)
-    completion = getattr(usage, "completion_tokens", None)
+    prompt = _usage_field(usage, "prompt_tokens")
+    completion = _usage_field(usage, "completion_tokens")
     return {"prompt_tokens": prompt if isinstance(prompt, int) else 0,
-            "completion_tokens": completion if isinstance(completion, int) else 0}
+            "completion_tokens": completion if isinstance(completion, int) else 0,
+            "cached_tokens": _cached_tokens(usage)}
 
 
 def _stream_usage_enabled() -> bool:

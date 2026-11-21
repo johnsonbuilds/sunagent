@@ -60,6 +60,10 @@ class AgentEvent:
 
 _STREAM_CLOSED: Any = object()
 
+# Streamed token deltas are consumed live (subscribers / SSE); keeping
+# them in ``events`` makes memory grow with output length for no gain.
+_UNRETAINED = frozenset({"assistant.delta"})
+
 
 class EventEmitter:
     """Fan out agent events to synchronous and asynchronous consumers."""
@@ -97,7 +101,8 @@ class EventEmitter:
         """Emit one event without ever blocking the agent run."""
         event = AgentEvent(self.run_id, f"evt-{uuid4().hex}", event_type,
                            time.time(), iteration, call_id, data)
-        self.events.append(event)
+        if event_type not in _UNRETAINED:
+            self.events.append(event)
         for subscriber in list(self._subscribers):
             try:
                 subscriber(event)

@@ -5,23 +5,108 @@ from __future__ import annotations
 import json
 import asyncio
 import logging
+import os
+import subprocess
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Sequence
 from uuid import uuid4
+
+from agent_runtime.metrics import (
+    DEFAULT_ORIGIN,
+    ENV_WHITELIST,
+    PAYLOAD_EVENT_TYPES,
+    RunConfig,
+    RunMetrics,
+    RunStats,
+)
 
 if TYPE_CHECKING:
     from agent_runtime.harness import HarnessSpec
+    from agent_runtime.runtime_config import RuntimeConfig
 
 logger = logging.getLogger(__name__)
 
 # Sentinel queued by ``flush`` to tell the background writer to exit after
 # every real event ahead of it has been persisted.
 _STOP = object()
+
+# Only these may be dropped when the writer queue is full: the stream is
+# also visible to live subscribers, and losing one chunk costs nothing.
+_DROPPABLE = frozenset({"llm.chunk"})
+
+# How many events may sit in the writer queue.  Payload events are not
+# retained in ``events`` any more, so the queue is the only buffer, and a
+# full queue must never lose a control event.
+_DEFAULT_QUEUE_SIZE = 10_000
+
+_GIT_CACHE_SECONDS = 60.0
+_git_cache: tuple[float, dict[str, Any]] = (0.0, {})
+_git_lock = threading.Lock()
+
+
+def git_state() -> dict[str, Any]:
+    """Best-effort ``git commit``/``status`` for ``run.config``.
+
+    Cached for a minute and bounded by a short timeout: the caller is
+    about to start an LLM call, so a slow repository must not delay the
+    run or fail it.  The cache is keyed on the attempt, not on its
+    contents, so a non-repository (Harbor containers, tmp dirs) is not
+    re-probed for every run.
+    """
+    global _git_cache
+    with _git_lock:
+        cached_at, cached = _git_cache
+        if cached_at > 0.0 and time.time() - cached_at < _GIT_CACHE_SECONDS:
+            return dict(cached)
+    state: dict[str, Any] = {}
+    for key, command in (("commit", ["git", "rev-parse", "HEAD"]),
+                         ("branch", ["git", "rev-parse",
+                                     "--abbrev-ref", "HEAD"]),
+                         ("dirty", ["git", "status", "--porcelain"])):
+        try:
+            completed = subprocess.run(command, capture_output=True,
+                                       text=True, timeout=2, check=False)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if completed.returncode != 0:
+            continue
+        if key == "dirty":
+            state["dirty"] = bool(completed.stdout.strip())
+        else:
+            state[key] = completed.stdout.strip()[:200]
+    with _git_lock:
+        _git_cache = (time.time(), dict(state))
+    return state
+
+
+def env_whitelist() -> dict[str, str]:
+    """The runtime environment keys that change how a run executes."""
+    return {name: os.environ[name] for name in ENV_WHITELIST
+            if name in os.environ}
+
+
+def _runtime_snapshot(runtime: "RuntimeConfig | None") -> dict[str, Any]:
+    """Runtime wiring minus credentials: enough to reproduce the run."""
+    if runtime is None:
+        return {}
+    return {
+        "model": runtime.model,
+        "base_url": runtime.base_url,
+        "temperature": runtime.temperature,
+        "streaming": runtime.streaming,
+        "stream_usage": runtime.stream_usage,
+        "stream_idle_timeout": runtime.stream_idle_timeout,
+        "max_reasoning_chars": runtime.max_reasoning_chars,
+        "retry_4xx": runtime.retry_4xx,
+        "reasoning_effort": runtime.reasoning_effort,
+        "reasoning_echo_mode": runtime.reasoning_echo_mode,
+        "summary_model": runtime.summary_model,
+    }
 
 
 @dataclass(frozen=True)
@@ -42,26 +127,51 @@ class RunEvent:
 class RunTrace:
     """Collect events in memory and append them to JSONL asynchronously.
 
-    Events are still kept in ``events`` for post-run inspection, but with an
-    ``output_path`` they are also handed to a single background writer task
-    through a queue. ``emit`` never performs I/O and never awaits, so tracing
-    does not add latency to the agent loop; ``flush`` acts as the drain and
-    stop barrier at the end of a turn (and is idempotent, so callers may flush
-    more than once).
+    ``retain_events`` decides what stays in ``events`` for post-run
+    inspection: ``all`` keeps everything (tests), ``control`` keeps only
+    control events and lets payloads live in the trace file and the
+    counters, ``none`` keeps nothing.  ``RunStats`` is fed regardless, so
+    ``run.metrics`` never depends on what was retained.
+
+    With an ``output_path`` events are also handed to a single
+    background writer task through a queue. ``emit`` never performs I/O
+    and never awaits, so tracing does not add latency to the agent loop;
+    ``flush`` acts as the drain and stop barrier at the end of a turn
+    (and is idempotent, so callers may flush more than once).
     """
 
     def __init__(self, run_id: str | None = None,
                  output_path: str | Path | None = None,
                  sink: Callable[[RunEvent], None] | None = None,
-                 harness: "HarnessSpec | None" = None) -> None:
+                 harness: "HarnessSpec | None" = None, *,
+                 retain_events: str = "all",
+                 origin: str = DEFAULT_ORIGIN,
+                 session_id: str | None = None,
+                 task_id: str | None = None,
+                 run_index: int | None = None,
+                 model: str = "",
+                 trace_chunks: bool = False,
+                 queue_size: int = _DEFAULT_QUEUE_SIZE) -> None:
+        if retain_events not in {"all", "control", "none"}:
+            raise ValueError(f"unknown retain_events: {retain_events!r}")
         self.run_id = run_id or f"run-{uuid4().hex}"
         self.events: list[RunEvent] = []
         self.harness = harness
+        self.retain_events = retain_events
+        self.origin = origin
+        self.session_id = session_id
+        self.task_id = task_id
+        self.run_index = run_index
+        self.model = model
+        self.trace_chunks = trace_chunks
+        self.stats = RunStats(started_at=time.time())
+        self.dropped = 0
         self._output_path = Path(output_path) if output_path else None
         self._sink = sink
         # Events emitted before a running loop (or its writer) is available.
         self._pending: list[RunEvent] = []
         self._queue: asyncio.Queue[Any] | None = None
+        self._queue_size = max(1, queue_size)
         self._writer: asyncio.Task[None] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._write_error: BaseException | None = None
@@ -70,12 +180,41 @@ class RunTrace:
         # and keeps whole lines from interleaving.
         self._write_lock = threading.Lock()
         self._wrote_harness_header = False
+        self._emitted = 0
+        self._last_agent_error: RunEvent | None = None
+
+    @property
+    def output_path(self) -> Path | None:
+        """Where this run's trace is written, if anywhere."""
+        return self._output_path
+
+    @property
+    def started_at(self) -> float:
+        return self.stats.started_at
+
+    @property
+    def event_count(self) -> int:
+        """How many events were emitted (retention does not change it)."""
+        return self._emitted
+
+    def agent_error(self) -> RunEvent | None:
+        """The last ``agent.error`` event, if the run failed.
+
+        Cached at emit time: ``retain_events="none"`` keeps none of the
+        events, and scanning ``self.events`` would then report success.
+        """
+        return self._last_agent_error
 
     def emit(self, event_type: str, iteration: int = 0,
              **data: Any) -> RunEvent:
         event = RunEvent(self.run_id, f"evt-{uuid4().hex}", event_type,
                          time.time(), iteration, data)
-        self.events.append(event)
+        self._emitted += 1
+        if event_type == "agent.error":
+            self._last_agent_error = event
+        self.stats.observe(event_type, iteration, data)
+        if self._retains(event_type):
+            self.events.append(event)
         if self._sink:
             self._sink(event)
         if self._output_path is None:
@@ -88,12 +227,67 @@ class RunTrace:
             self._pending.append(event)
             return event
         if self._ensure_writer(loop):
-            self._queue.put_nowait(event)
+            self._enqueue(event)
         else:
             # A writer already exists on a different loop; writing from a
             # second writer would break ordering, so buffer for ``flush``.
             self._pending.append(event)
         return event
+
+    def _retains(self, event_type: str) -> bool:
+        if self.retain_events == "all":
+            return True
+        if self.retain_events == "none":
+            return False
+        return event_type not in PAYLOAD_EVENT_TYPES
+
+    def _enqueue(self, event: RunEvent) -> None:
+        """Queue one event, dropping only cheap payload when full."""
+        queue = self._queue
+        assert queue is not None
+        try:
+            queue.put_nowait(event)
+        except asyncio.QueueFull:
+            if event.event_type in _DROPPABLE:
+                self.dropped += 1
+                self.stats.dropped_events = self.dropped
+                return
+            # A control event must not be lost; ``flush`` writes it even
+            # if that means writing the tail after the queue drained.
+            logger.warning("run trace queue full; deferring %s to flush",
+                           event.event_type)
+            self._pending.append(event)
+
+    def record_config(self, *, runtime: "RuntimeConfig | None" = None,
+                      model_params: Mapping[str, Any] | None = None,
+                      tools: Sequence[Mapping[str, Any]] | None = None,
+                      extra: Mapping[str, Any] | None = None
+                      ) -> RunConfig:
+        """Emit ``run.config``: the conditions this run executed under."""
+        config = RunConfig(
+            run_id=self.run_id,
+            origin=self.origin,
+            harness_id=getattr(self.harness, "id", "") or "",
+            genes_hash=getattr(self.harness, "genes_hash", "") or "",
+            model=self.model,
+            session_id=self.session_id,
+            task_id=self.task_id,
+            run_index=self.run_index,
+            model_params=dict(model_params or {}),
+            tools=[dict(tool) for tool in tools or ()],
+            runtime=_runtime_snapshot(runtime),
+            env=env_whitelist(),
+            git=git_state(),
+        )
+        payload = config.to_dict()
+        if extra:
+            payload.update(dict(extra))
+        self.emit("run.config", 0, **payload)
+        return config
+
+    def record_metrics(self, record: RunMetrics) -> RunEvent:
+        """Emit ``run.metrics``: the measurements of this run."""
+        return self.emit("run.metrics", 0, **record.to_dict())
 
     def _ensure_writer(self, loop: asyncio.AbstractEventLoop) -> bool:
         """Start the background writer on ``loop`` if it is not running.
@@ -102,7 +296,7 @@ class RunTrace:
         """
         if self._writer is not None:
             return self._loop is loop
-        queue: asyncio.Queue[Any] = asyncio.Queue()
+        queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=self._queue_size)
         self._queue = queue
         self._loop = loop
         if self._pending:
@@ -110,7 +304,9 @@ class RunTrace:
             # first, ahead of anything emitted from now on.
             pending, self._pending = self._pending, []
             for event in pending:
-                queue.put_nowait(event)
+                # ``_enqueue``: a bare ``put_nowait`` would raise
+                # ``QueueFull`` and lose the whole migration.
+                self._enqueue(event)
         self._writer = loop.create_task(self._writer_loop())
         return True
 
@@ -158,7 +354,9 @@ class RunTrace:
             assert queue is not None
             try:
                 await queue.join()
-                queue.put_nowait(_STOP)
+                # ``await put`` (not ``put_nowait``): a full queue is the
+                # one case where the stop sentinel must still land.
+                await queue.put(_STOP)
                 await writer
             except asyncio.CancelledError:
                 # The cleanup itself was cancelled again (double cancel).
@@ -213,10 +411,16 @@ class RunTrace:
             with self._output_path.open("a", encoding="utf-8") as stream:
                 if self.harness and not self._wrote_harness_header:
                     # The first JSONL record tags the file with the harness
-                    # genome that produced every event below it.
+                    # genome that produced every event below it, and carries
+                    # the join keys so a stray trace can still be attributed.
                     header = {
                         "record_type": "harness",
                         "run_id": self.run_id,
+                        "origin": self.origin,
+                        "session_id": self.session_id,
+                        "task_id": self.task_id,
+                        "run_index": self.run_index,
+                        "model": self.model,
                         "harness_id": self.harness.id,
                         "genes_hash": self.harness.genes_hash,
                         "harness": self.harness.to_dict(),
@@ -225,7 +429,8 @@ class RunTrace:
                                             default=str) + "\n")
                     self._wrote_harness_header = True
                 for event in events:
-                    stream.write(json.dumps(event.to_dict(), ensure_ascii=True,
+                    stream.write(json.dumps(event.to_dict(), ensure_ascii=False,
+                                            separators=(",", ":"),
                                             default=str) + "\n")
 
     @contextmanager
@@ -261,4 +466,4 @@ class RunTrace:
             self.emit(f"{name}.end", event_iteration, **span_meta)
 
 
-__all__ = ["RunEvent", "RunTrace"]
+__all__ = ["RunEvent", "RunTrace", "env_whitelist", "git_state"]
