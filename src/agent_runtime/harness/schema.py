@@ -2,11 +2,11 @@
 agent works, expressed as data instead of code.
 
 The runtime engine (loop, trace, events) stays stable; a harness spec
-selects prompt, tools, control flow, context, recovery and verification
+selects prompt, tools, control flow, context, recovery and skills
 behavior.  Specs are loaded from YAML manifests so harness versions can
 be diffed, compared, and later mutated one gene at a time:
 
-    baseline-v0  --(enable verification)-->  baseline-v1
+    baseline-v0  --(raise max_iterations)-->  baseline-v1
 
 Every run records its harness id and a content hash of the genes, so a
 trace can always be traced back to the exact harness that produced it.
@@ -190,11 +190,6 @@ class ControlGenome:
     max_iterations: int = 10
     max_observation_chars: int = DEFAULT_MAX_OBSERVATION_CHARS
     spill_preview_chars: int = DEFAULT_SPILL_PREVIEW_CHARS
-    # Consecutive finish attempts rejected without interleaving work
-    # (plain-text finishes, invalid submissions) tolerated before the
-    # turn aborts. 0 disables the fuse (legacy behavior: burn the whole
-    # iteration budget on prose).
-    finish_violation_limit: int = 3
     budget_reminder: BudgetReminder = field(default_factory=BudgetReminder)
 
 
@@ -232,43 +227,6 @@ class RecoveryGenome:
         default_factory=_default_llm_errors)
 
 
-# Defaults for the submission contract.  Tool names and the test-target
-# pattern are genes because deployments may add write tools, rename the
-# submit tool, or verify a non-Python repository.
-DEFAULT_SUBMIT_TOOL = "submit_result"
-DEFAULT_EDIT_TOOLS: tuple[str, ...] = (
-    "edit_file", "apply_patch", "write_file")
-DEFAULT_TEST_TARGET_PATTERN = (
-    r"[\w\-/]+\.(?:py|sh)\b|tests?/[\w\-/.]+|test_[\w\-/]+")
-
-
-@dataclass(frozen=True)
-class VerificationGenome:
-    """Submission contract checked at the turn boundary.
-
-    The model finishes by calling ``submit_tool`` with
-    ``solution_description / evidence / command_to_verify``.  The gate
-    checks shape (required fields present and non-trivial) and grounding
-    (evidence quotes observed output, the declared command was actually
-    run, and at least one source edit exists).  The declared command is
-    re-executed verbatim and must exit 0.  ``require`` selects the fields;
-    ``mode="off"`` disables the gate.
-    """
-
-    enabled: bool = False
-    mode: str = "off"
-    require: tuple[str, ...] = ()
-    submit_tool: str = DEFAULT_SUBMIT_TOOL
-    edit_tools: tuple[str, ...] = DEFAULT_EDIT_TOOLS
-    test_target_pattern: str = DEFAULT_TEST_TARGET_PATTERN
-
-
-VERIFICATION_MODES: tuple[str, ...] = ("off", "return_contract", "task_result")
-
-DEFAULT_VERIFICATION_REQUIRE: tuple[str, ...] = (
-    "solution_description", "evidence", "command_to_verify")
-
-
 def _hash_genes(genes: Mapping[str, Any]) -> str:
     canonical = json.dumps(genes, sort_keys=True, ensure_ascii=True)
     return hashlib.sha256(canonical.encode()).hexdigest()[:16]
@@ -276,7 +234,7 @@ def _hash_genes(genes: Mapping[str, Any]) -> str:
 
 @dataclass(frozen=True)
 class HarnessSpec:
-    """One harness version: lineage metadata plus seven genes."""
+    """One harness version: lineage metadata plus six genes."""
 
     # The neutral built-in genome mirrors harnesses/baseline-v0.yaml.
     id: str = "baseline-v0"
@@ -288,7 +246,6 @@ class HarnessSpec:
     control: ControlGenome = field(default_factory=ControlGenome)
     context: ContextGenome = field(default_factory=ContextGenome)
     recovery: RecoveryGenome = field(default_factory=RecoveryGenome)
-    verification: VerificationGenome = field(default_factory=VerificationGenome)
     skills: tuple[str, ...] = ()
     source: str | None = None
     genes_hash: str = ""
@@ -312,10 +269,6 @@ class HarnessSpec:
                        "retrieval_exempt_tools":
                            list(self.context.retrieval_exempt_tools)},
             "recovery": asdict(self.recovery),
-            "verification": {
-                **asdict(self.verification),
-                "edit_tools": list(self.verification.edit_tools),
-            },
             "skills": list(self.skills),
         }
 

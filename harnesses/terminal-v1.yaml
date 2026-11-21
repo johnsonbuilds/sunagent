@@ -43,7 +43,6 @@ control:
   max_iterations: 120
   max_observation_chars: 16000
   spill_preview_chars: 4000
-  finish_violation_limit: 3
   budget_reminder:
     enabled: true
     at_fractions: [0.25, 0.6, 0.85]
@@ -86,8 +85,4 @@ recovery:
       max_retries: 2
       backoff: none
       base_delay: 0.0
-verification:
-  enabled: false
-  mode: 'off'
-  require: []
 skills: []

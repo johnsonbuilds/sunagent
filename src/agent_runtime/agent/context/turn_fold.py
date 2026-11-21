@@ -12,9 +12,9 @@ sees:
   including all intermediate assistant / tool messages.
 
 A "task user" is a real user turn boundary. Loop-internal ``user``-role
-nudges (iteration-limit notice, submit/contract nudges, reasoning-budget
-and budget-reminder nudges, compaction snapshots) carry a runtime
-provenance marker and never open a turn.
+nudges (iteration-limit notice, reasoning-budget and budget-reminder
+nudges, compaction snapshots) carry a runtime provenance marker and never
+open a turn.
 """
 
 from __future__ import annotations

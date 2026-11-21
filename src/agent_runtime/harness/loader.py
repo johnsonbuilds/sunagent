@@ -8,7 +8,6 @@ pulls the research tooling into a runtime process.
 from __future__ import annotations
 
 import logging
-import re
 from collections.abc import Mapping
 from functools import lru_cache
 from pathlib import Path
@@ -25,18 +24,14 @@ from .schema import (
     ControlGenome,
     ContextGenome,
     DEFAULT_CONTEXT_BUDGET,
-    DEFAULT_EDIT_TOOLS,
     DEFAULT_HARNESS_ID,
     DEFAULT_HEAD_CHARS,
     DEFAULT_KEEP_RECENT_ROUNDS,
     DEFAULT_MAX_OBSERVATION_CHARS,
     DEFAULT_SPILL_PREVIEW_CHARS,
-    DEFAULT_SUBMIT_TOOL,
     DEFAULT_SUMMARY_MAX_TOKENS,
     DEFAULT_SUMMARY_TAIL_ROUNDS,
-    DEFAULT_TEST_TARGET_PATTERN,
     DEFAULT_USER_PRESERVE_BUDGET,
-    DEFAULT_VERIFICATION_REQUIRE,
     DEFAULT_WINDOW_ROUNDS,
     HarnessError,
     HarnessSpec,
@@ -48,8 +43,6 @@ from .schema import (
     SUMMARY_REASONING_EFFORTS,
     TOOL_ERROR_STRATEGIES,
     ToolGenome,
-    VERIFICATION_MODES,
-    VerificationGenome,
 )
 
 
@@ -159,17 +152,11 @@ def _control_genome(data: Mapping[str, Any]) -> ControlGenome:
     if not isinstance(section, Mapping):
         raise HarnessError("control must be a mapping")
     _check_keys(section, {"max_iterations", "max_observation_chars",
-                          "spill_preview_chars", "finish_violation_limit",
-                          "budget_reminder"},
+                          "spill_preview_chars", "budget_reminder"},
                 "control")
     value = section.get("max_iterations", 10)
     if not isinstance(value, int) or isinstance(value, bool) or value < 1:
         raise HarnessError("control.max_iterations must be an integer >= 1")
-    violation_limit = section.get("finish_violation_limit", 3)
-    if (not isinstance(violation_limit, int)
-            or isinstance(violation_limit, bool) or violation_limit < 0):
-        raise HarnessError(
-            "control.finish_violation_limit must be an integer >= 0")
     return ControlGenome(
         max_iterations=value,
         max_observation_chars=_positive_int(
@@ -178,7 +165,6 @@ def _control_genome(data: Mapping[str, Any]) -> ControlGenome:
         spill_preview_chars=_positive_int(
             section.get("spill_preview_chars"), "control.spill_preview_chars",
             DEFAULT_SPILL_PREVIEW_CHARS),
-        finish_violation_limit=violation_limit,
         budget_reminder=_budget_reminder(section.get("budget_reminder")))
 
 
@@ -319,58 +305,6 @@ def _recovery_genome(data: Mapping[str, Any]) -> RecoveryGenome:
                             llm_errors=llm_errors)
 
 
-def _verification_genome(data: Mapping[str, Any]) -> VerificationGenome:
-    section = data.get("verification") or {}
-    if not isinstance(section, Mapping):
-        raise HarnessError("verification must be a mapping")
-    _check_keys(section, {"enabled", "mode", "require",
-                          "rerun_declared_command", "submit_tool",
-                          "edit_tools", "test_target_pattern"},
-                "verification")
-    # Legacy (code-v10..v12): accepted so old manifests load for lineage,
-    # otherwise ignored — since code-v13 a declared command is always
-    # re-executed, no flag needed.
-    enabled = section.get("enabled", False)
-    if not isinstance(enabled, bool):
-        raise HarnessError("verification.enabled must be a boolean")
-    mode = section.get("mode", "off")
-    if not isinstance(mode, str) or mode not in VERIFICATION_MODES:
-        raise HarnessError(
-            f"verification.mode must be one of {list(VERIFICATION_MODES)}, "
-            f"got {mode!r}")
-    require_raw = section.get("require", [])
-    if require_raw is None:
-        require_raw = []
-    if not isinstance(require_raw, (list, tuple)):
-        raise HarnessError("verification.require must be a list")
-    require: list[str] = []
-    for item in require_raw:
-        if not isinstance(item, str) or not item.strip():
-            raise HarnessError(
-                "verification.require entries must be non-empty text")
-        require.append(item.strip())
-    if mode in ("return_contract", "task_result") and not require:
-        require = list(DEFAULT_VERIFICATION_REQUIRE)
-    submit_tool = _required_text(section, "submit_tool", "verification",
-                                 DEFAULT_SUBMIT_TOOL)
-    edit_tools = (DEFAULT_EDIT_TOOLS if "edit_tools" not in section
-                  else _name_list(section, "edit_tools", "verification"))
-    test_target_pattern = _required_text(
-        section, "test_target_pattern", "verification",
-        DEFAULT_TEST_TARGET_PATTERN)
-    try:
-        re.compile(test_target_pattern)
-    except re.error as exc:
-        raise HarnessError(
-            "verification.test_target_pattern must be a valid regular "
-            f"expression: {exc}") from exc
-    return VerificationGenome(enabled=enabled, mode=mode,
-                              require=tuple(require),
-                              submit_tool=submit_tool,
-                              edit_tools=tuple(edit_tools),
-                              test_target_pattern=test_target_pattern)
-
-
 def from_dict(data: Mapping[str, Any]) -> HarnessSpec:
     """Validate manifest data and build a harness spec."""
     if not isinstance(data, Mapping):
@@ -378,7 +312,7 @@ def from_dict(data: Mapping[str, Any]) -> HarnessSpec:
     # "source" and "genes_hash" are outputs of to_dict(); accepted so a
     # spec can round-trip, but ignored and recomputed here.
     _check_keys(data, {"id", "parent", "mutation", "reason", "prompt", "tools",
-                       "control", "context", "memory", "recovery", "verification", "skills",
+                       "control", "context", "memory", "recovery", "skills",
                        "source", "genes_hash"},
                 "manifest")
     harness_id = data.get("id", "baseline-v0")
@@ -394,7 +328,6 @@ def from_dict(data: Mapping[str, Any]) -> HarnessSpec:
         control=_control_genome(data),
         context=_context_genome(data),
         recovery=_recovery_genome(data),
-        verification=_verification_genome(data),
         skills=_name_list(data, "skills", "manifest"),
     )
 

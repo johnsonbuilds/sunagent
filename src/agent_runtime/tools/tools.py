@@ -26,7 +26,6 @@ from .files import (
 from .patch import apply_patch_spec
 from .search import find_files_spec, grep_search_spec
 from .shell import run_command_spec
-from .submit import submit_result, submit_result_spec
 from .symbols import TreeSitterIndex, find_references_spec, find_symbol_spec
 
 
@@ -101,7 +100,6 @@ def builtin_tool_specs(executor: ShellExecutor | None = None,
         find_symbol_spec(symbol_index),
         find_references_spec(symbol_index),
         execute_code_spec(shell_executor, file_workspace),
-        submit_result_spec(),
     ]
 
 
@@ -136,5 +134,5 @@ def create_default_registry(executor: ShellExecutor | None = None,
 
 __all__ = [
     "ToolExecutor", "ToolRegistry", "ToolSpec",
-    "builtin_tool_specs", "create_default_registry", "submit_result",
+    "builtin_tool_specs", "create_default_registry",
 ]

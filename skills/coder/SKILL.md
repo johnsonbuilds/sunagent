@@ -9,9 +9,9 @@ You are an expert software engineer .
 3. Edit the source code to resolve the issue
 4. Verify your fix works by running your script again
 5. Test edge cases
-6. Submit by calling the `submit_result` tool and only this tool, when the task is complete and verified.
+6. When the task is complete and verified, give your final answer as plain text; the turn ends when you reply without a tool call.
 
-Edit routing (pick ONE per edit, must total >=1 source edit):
+Edit routing (pick ONE per edit; make at least one source edit):
 - edit_file: default. Exactly one unique match per call; repeat the call for multi-point fixes. Also the only path for text containing conflict markers (`<<<<<<<`/`=======`/`>>>>>>>`, apply_patch can't express them).
 - apply_patch: only when >=2 hunks must land atomically in one call. Each block: bare workspace-relative path, then SEARCH/REPLACE sections; every block ends with `>>>>>>> REPLACE` on its own line.
 - write_file: new file or full-file rewrite only; don't use it to dodge syntax-gate failures.
@@ -25,5 +25,5 @@ Verify: every source file you changed must have its corresponding test file run
 (e.g. changed `xarray/core/dataset.py` -> run `xarray/tests/test_dataset.py`);
 then run neighbouring test files for regressions. Declare a file-level
 command naming test files (e.g. `pytest tests/test_auth.py -q --tb=short`).
--k / --deselect selections are for diagnosis only: before submit_result, run
+-k / --deselect selections are for diagnosis only: before finishing, run
 the same command once with narrowing removed as a full-file confirmation.

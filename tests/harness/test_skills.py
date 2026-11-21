@@ -58,14 +58,14 @@ class SkillLoadingTests(unittest.TestCase):
         self.assertEqual(len(skills), 1)
         self.assertEqual(skills[0].name, "coder")
         self.assertEqual(skills[0].version, "v1")
-        self.assertIn("submit_result", skills[0].content)
+        self.assertIn("final answer", skills[0].content)
         self.assertFalse(skills[0].truncated)
 
-    def test_coder_content_carries_submit_contract(self) -> None:
+    def test_coder_content_carries_finish_guidance(self) -> None:
         harness = from_dict({"skills": ["coder"]})
         skills = resolve_skills(["coder"], harness=harness)
         self.assertTrue(skills[0].content.strip())
-        self.assertIn("submit_result", skills[0].content)
+        self.assertIn("final answer", skills[0].content)
 
     def test_empty_names_resolve_to_empty(self) -> None:
         self.assertEqual(resolve_skills([]), [])
@@ -162,7 +162,7 @@ class SkillTurnTests(unittest.IsolatedAsyncioTestCase):
         system = llm.seen[0][0]
         self.assertEqual(system["role"], "system")
         self.assertNotIn("<skill", system["content"])
-        self.assertIn("submit_result", system["content"])
+        self.assertIn("final answer", system["content"])
         loaded = [e for e in trace.events if e.event_type == "skills.loaded"]
         self.assertEqual(len(loaded), 1)
         self.assertEqual(loaded[0].data["skills"], ["coder"])
@@ -198,8 +198,7 @@ class CodeV14Tests(unittest.TestCase):
         self.assertEqual(list(v14.skills), ["coder"])
         skills = resolve_skills(list(v14.skills), harness=v14)
         self.assertTrue(skills[0].content.strip())
-        for gene in ("tools", "control", "context", "recovery",
-                     "verification"):
+        for gene in ("tools", "control", "context", "recovery"):
             self.assertEqual(getattr(v14, gene), getattr(v13, gene))
 
 

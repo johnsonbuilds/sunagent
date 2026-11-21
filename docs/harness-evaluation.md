@@ -62,7 +62,6 @@
 | `llm.chunk` | **默认关闭** | 需要时 `--trace-chunks on` |
 | `tool.end` | 参数、结果（超限落 spill）、`status`、`error_kind`、`exit_code`、`edited_files`、`exec_ms` | 每工具调用一条 |
 | `context.*` | 触发原因、压缩前后大小、summary invalid、成本 | 每次压缩 |
-| `verification.*` | 结果、缺失项、rerun 成本 | 每次验证 |
 | `run.metrics` | 运行级指标汇总，不含 final answer | 每 run 一条 |
 
 关键点：
@@ -177,7 +176,7 @@ runtime_home/  (默认 workspace/)
 - `Partial progress` 不强制用户写 acceptance；没有 checklist 就是 `null`，不臆造。
 - `Groundedness` / `Trajectory quality` 依赖模型判定或人工，默认不自动评分。
 - `Consistency` / `Rephrase robustness` 属于实验，不是日常观测。
-- 产物证据 = 成功的 `write_file` / `edit_file` / `apply_patch` 产生的 `edited_files` 非空，或存在有效 `submit_result`；不依赖事后 git diff。
+- 产物证据 = 成功的 `write_file` / `edit_file` / `apply_patch` 产生的 `edited_files` 非空；不依赖事后 git diff。
 - 没有产物语义的任务（调研、问答、只读）VCR / Hallucinated completion 记 `null`，不判失败。
 - “声明需要产物”的判定：`BoardTask.expects_artifact` 显式 true/false 优先；为 `null` 时按 harness 自动判定（`coding-v1` / `terminal-v1` 视为需要，`general-v1` / `readonly-v1` 视为 `null`）。
 - TSR 分子必须约束“进入过执行”，否则 backlog 直接拖到 done 会让 TSR > 100%。
@@ -386,13 +385,11 @@ Tab: 总览 | 有效性 | 过程 | 效率 | 可靠性 | 任务 | 基准 | 诊断
          "tools": [{"tool": "...", "status": "error",
                     "error": "...", "event_id": "evt-..."}],
          "context": [{"trigger": "...", "before": 0, "after": 0,
-                      "event_id": "evt-..."}],
-         "verification": [{"outcome": "...", "event_id": "evt-..."}]}
+                      "event_id": "evt-..."}]}
       ],
       "tool_errors": [{"tool": "...", "error": "...",
                        "iteration": 12, "event_id": "evt-..."}],
-      "context_events": [],
-      "verification_events": []
+      "context_events": []
     }
   ],
   "environment": {
@@ -456,7 +453,7 @@ cohort 时 `task` 为空，`runs` 换成 `cases`，每个 case 一张紧凑卡�
 一句话结论。
 
 ## 根因
-- 类别：tool_argument | context_loss | loop_stall | runtime | contract | verification | model_capability | task_environment | ambiguity | safety_signal | other
+- 类别：tool_argument | context_loss | loop_stall | runtime | model_capability | task_environment | ambiguity | safety_signal | other
 - 置信度：0.0–1.0
 - 影响 run：`run-...`
 - 说明：...
@@ -642,7 +639,7 @@ cohort 时 `task` 为空，`runs` 换成 `cases`，每个 case 一张紧凑卡�
 | 风险 | 应对 |
 |---|---|
 | 全量 messages 让 trace 变大 | 只写一次、关 chunk、`trace_bytes` 告警；存储不设硬上限 |
-| 指标被“拖卡片”游戏 | TSR 以人工验收为准，但要求产物证据（`edited_files` / `submit_result`）；定期抽样审计 |
+| 指标被“拖卡片”游戏 | TSR 以人工验收为准，但要求产物证据（`edited_files`）；定期抽样审计 |
 | 用户忘记更新状态 | 记录 stale review；指标页显示数据质量提示 |
 | 模型诊断幻觉 | 只读工具自行核实；引用不到标“未验证”；标注置信度；允许人工覆盖；不自动改 harness |
 | 诊断会话污染指标 | `origin` 切片；Run 级不绑 `task_id`；Board 与 Harbor outcome 分视图 |
@@ -680,8 +677,8 @@ cohort 时 `task` 为空，`runs` 换成 `cases`，每个 case 一张紧凑卡�
 
 修正：
 
-- `tool.end` 记录 `edited_files`（成功的 `write_file` / `edit_file` / `apply_patch`，复用 `harness.verification.edit_tools`）；
-- 产物证据 = `edited_files` 非空，或存在有效 `submit_result`；
+- `tool.end` 记录 `edited_files`（成功的 `write_file` / `edit_file` / `apply_patch`，复用编辑工具集合）；
+- 产物证据 = `edited_files` 非空；
 - “声明需要产物”的判定：`BoardTask.expects_artifact` 显式 true/false 优先；`null` 时按 harness 自动判定（coding/terminal = 需要，general/readonly = `null`）；
 - VCR / Hallucinated completion 只对“声明需要产物”的任务/harness 计算；其他任务记 `null`；
 - bundle 的 `environment` 用 `edited_files + diff_summary（若可得）`，不把 git diff 当唯一证据。

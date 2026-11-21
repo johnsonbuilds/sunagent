@@ -826,7 +826,6 @@ class ContextWindowHardGateLoopTests(unittest.IsolatedAsyncioTestCase):
             "recovery": {"llm_errors": {
                 "context_window": {"max_retries": 2, "backoff": "none"},
             }},
-            "verification": {"mode": "off"},
         })
         conversation = Conversation()
         conversation.messages.extend(build_rounds(10, tool_chars=5_000))

@@ -15,7 +15,6 @@ from agent_runtime.agent.tool_dispatch import (
     tool_result_summary,
     tool_trace_metadata,
 )
-from agent_runtime.agent.turn_finisher import TurnFinisher
 from agent_runtime.agent.turn_guard import TurnGuard
 from agent_runtime.agent.turn_history import TurnHistory
 from agent_runtime.events import EventEmitter
@@ -30,33 +29,25 @@ class ToolRunner:
     """Execute the validated tool calls of one iteration, in order."""
 
     def __init__(self, *, tools: ToolExecutor, harness: HarnessSpec,
-                 observations: ObservationFormatter, finisher: TurnFinisher,
+                 observations: ObservationFormatter,
                  guard: TurnGuard, trace: RunTrace,
                  events: EventEmitter) -> None:
         self.tools = tools
         self.harness = harness
         self.observations = observations
-        self.finisher = finisher
         self.guard = guard
         self.trace = trace
         self.events = events
 
     async def dispatch(self, outcomes: list[ToolCallOutcome],
-                       submit_args: dict[str, Any] | None, iteration: int,
+                       iteration: int,
                        history: TurnHistory) -> str | None:
-        """Run the iteration's calls; a returned string is a guard stop.
-
-        A validated submit call is skipped here and validated after dispatch.
-        """
+        """Run the iteration's calls; a returned string is a guard stop."""
         # Rejections are user messages, so defer them until tool messages land.
         deferred_rejections: list[dict[str, Any]] = []
-        submit_tool = self.finisher.rules.submit_tool
         stop: str | None = None
         try:
             for outcome in outcomes:
-                if (submit_args is not None and outcome.validated is not None
-                        and outcome.validated.name == submit_tool):
-                    continue
                 stop = await self._dispatch_one(
                     outcome, iteration, history, deferred_rejections)
                 if stop is not None:
@@ -118,9 +109,6 @@ class ToolRunner:
         assert rejection is not None
         deferred_rejections.append(
             self.guard.rejection_observation(outcome, iteration))
-        if payload["tool"] == self.finisher.rules.submit_tool:
-            # A malformed finish is not work: do not reset the fuse.
-            self.finisher.note_finish_violation(iteration)
         return self.guard.check_tool_error(
             iteration, payload["tool"], rejection)
 
@@ -136,7 +124,6 @@ class ToolRunner:
         observation = self.harness.tool_error_observation(
             exc, tool=payload["tool"])
         history.append(tool_observation_message(tool_call, observation))
-        self.finisher.note_work_executed()
         return self.guard.check_tool_error(iteration, validated.name, exc)
 
     async def _record_result(self, result: Any, validated: ValidatedToolCall,
@@ -147,7 +134,6 @@ class ToolRunner:
         history.append(tool_observation_message(
             tool_call, rendered.text, metadata))
         self.guard.note_success()
-        self.finisher.note_work_executed()
 
 
 __all__ = ["ToolRunner"]

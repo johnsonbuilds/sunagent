@@ -1,7 +1,7 @@
 """Composition root for one agent turn.
 
 The factory resolves defaults, binds the observation spiller to the same
-workspace as the file tools, builds the per-turn finisher, and hands the
+workspace as the file tools, builds the per-turn guard, and hands the
 completed :class:`~agent_runtime.agent.turn_collaborators.TurnCollaborators`
 to :class:`~agent_runtime.agent.loop.AgentTurn`.  The turn itself
 therefore never has to inspect incidental attributes of the tool layer
@@ -19,10 +19,8 @@ from agent_runtime.agent.loop import AgentTurn
 from agent_runtime.agent.observations import ObservationFormatter
 from agent_runtime.agent.tool_runner import ToolRunner
 from agent_runtime.agent.turn_collaborators import TurnCollaborators
-from agent_runtime.agent.turn_finisher import TurnFinisher
 from agent_runtime.agent.turn_guard import TurnGuard
 from agent_runtime.agent.turn_history import Conversation
-from agent_runtime.agent.verification import SubmissionRules
 from agent_runtime.events import EventEmitter
 from agent_runtime.execution.base import Workspace
 from agent_runtime.harness import HarnessSpec, default_harness
@@ -91,19 +89,9 @@ def create_agent_turn(
         max_chars=resolved_harness.control.max_observation_chars,
         spill_preview_chars=resolved_harness.control.spill_preview_chars,
         archive_min_chars=resolved_harness.context.head_chars)
-    # One finisher and one guard per turn: both carry turn-local state
-    # (finish violations, same-tool error counts).
-    rules = SubmissionRules.from_genome(resolved_harness.verification)
-    finisher = TurnFinisher(
-        rules=rules,
-        tools=tools,
-        trace=resolved_trace,
-        events=resolved_events,
-        max_iterations=resolved_max_iterations,
-        finish_violation_limit=resolved_harness.control.finish_violation_limit)
+    # One guard per turn: it carries turn-local error-budget state.
     guard = TurnGuard(
         harness=resolved_harness,
-        rules=rules,
         trace=resolved_trace,
         events=resolved_events,
         max_iterations=resolved_max_iterations)
@@ -111,7 +99,6 @@ def create_agent_turn(
         tools=tools,
         harness=resolved_harness,
         observations=observations,
-        finisher=finisher,
         guard=guard,
         trace=resolved_trace,
         events=resolved_events)
@@ -127,7 +114,6 @@ def create_agent_turn(
         trace=resolved_trace,
         events=resolved_events,
         observations=observations,
-        finisher=finisher,
         guard=guard,
         tool_runner=tool_runner,
         summarizer=resolved_factory,

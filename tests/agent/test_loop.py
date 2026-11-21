@@ -15,6 +15,7 @@ import agent_runtime.agent.chat as chat_module
 from agent_runtime.agent.loop import Conversation, use_streaming
 from agent_runtime.agent.runtime_message import is_runtime_user_message
 from agent_runtime.agent.turn_factory import create_agent_turn, run_turn
+from agent_runtime.events import EventEmitter
 from agent_runtime.harness import (
     BudgetReminder,
     ControlGenome,
@@ -27,7 +28,6 @@ from agent_runtime.harness import (
 )
 from agent_runtime.trace import RunTrace
 from agent_runtime.tools.tools import ToolRegistry, ToolSpec
-
 
 # The runtime-mechanics tests pin the neutral built-in genome: they
 # exercise the loop, not the default manifest, so they must not drift
@@ -672,6 +672,35 @@ class HarnessIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("One iteration is one model turn", reminder["content"])
         self.assertNotIn("Source edit so far", reminder["content"])
 
+    async def test_budget_reminder_reports_source_edit(self) -> None:
+        harness = HarnessSpec(control=ControlGenome(
+            max_iterations=4,
+            budget_reminder=BudgetReminder(enabled=True,
+                                           at_fractions=(0.5,)),
+        ))
+        edit_schema = {"type": "object",
+                       "properties": {"path": {"type": "string"}}}
+
+        async def edit(path: str) -> str:
+            return "ok"
+
+        registry = ToolRegistry(
+            [ToolSpec("edit_file", "", edit_schema, edit)])
+        llm = FakeLLM([
+            {"content": "", "tool_calls": [{"id": "1", "function": {
+                "name": "edit_file", "arguments": '{"path":"x.py"}'}}]},
+            {"content": "done", "tool_calls": []},
+        ])
+        trace = RunTrace(run_id="edit-reminder")
+
+        answer = await run_turn("go", llm, registry,
+                                harness=harness, trace=trace)
+
+        self.assertEqual(answer, "done")
+        reminder = [e for e in trace.events
+                    if e.event_type == "budget.reminder"][-1]
+        self.assertTrue(reminder.data["edited"])
+
     async def test_budget_reminder_turns_urgent_near_the_limit(self) -> None:
         harness = HarnessSpec(control=ControlGenome(
             max_iterations=5,
@@ -696,7 +725,7 @@ class HarnessIntegrationTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("Budget 4/5", reminder["content"])
         self.assertIn("stop exploring", reminder["content"])
-        self.assertIn("producing and verifying", reminder["content"])
+        self.assertIn("producing and testing", reminder["content"])
 
     async def test_max_iterations_defaults_to_harness_control_gene(self) -> None:
         harness = HarnessSpec(control=ControlGenome(max_iterations=1))
@@ -964,6 +993,29 @@ class AgentTurnClassTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(answer, "summarized")
         self.assertEqual(len(llm.messages), 2)
+
+
+class PlainAnswerFinishTests(unittest.IsolatedAsyncioTestCase):
+    async def test_answer_without_tools_ends_turn_immediately(self) -> None:
+        llm = FakeLLM([{"content": "done", "tool_calls": []}])
+        events = EventEmitter(run_id="plain-answer")
+
+        answer = await run_turn("fix it", llm, make_registry(), events=events)
+
+        self.assertEqual(answer, "done")
+        self.assertEqual(len(llm.messages), 1)
+        completed = [e for e in events.events
+                     if e.event_type == "agent.completed"]
+        self.assertEqual(completed[-1].data["answer"], "done")
+
+    async def test_last_iteration_text_is_accepted(self) -> None:
+        llm = FakeLLM([{"content": "done", "tool_calls": []}])
+        harness = HarnessSpec(control=ControlGenome(max_iterations=1))
+
+        answer = await run_turn("fix it", llm, make_registry(), harness=harness)
+
+        self.assertEqual(answer, "done")
+        self.assertEqual(len(llm.messages), 1)
 
 
 if __name__ == "__main__":

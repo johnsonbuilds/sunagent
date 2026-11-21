@@ -4,7 +4,7 @@ The bundle carries already-built objects into
 :class:`~agent_runtime.agent.loop.AgentTurn`; it holds no turn policy
 itself.  Some collaborators are stateless services (the LLM, the event
 emitter), while others are per-turn stateful helpers (the observation
-formatter, the finisher) — the factory creates one of each per turn.
+formatter, the guard) — the factory creates one of each per turn.
 Keeping the bundle separate from both the turn and its factory avoids a
 circular import and makes the wiring explicit — especially
 ``workspace``, which the file tools and the observation spiller must
@@ -22,7 +22,6 @@ if TYPE_CHECKING:
     from agent_runtime.runtime_config import RuntimeConfig
     from agent_runtime.agent.observations import ObservationFormatter
     from agent_runtime.agent.tool_runner import ToolRunner
-    from agent_runtime.agent.turn_finisher import TurnFinisher
     from agent_runtime.agent.turn_guard import TurnGuard
     from agent_runtime.agent.turn_history import Conversation
     from agent_runtime.events import EventEmitter
@@ -44,7 +43,6 @@ class TurnCollaborators:
     trace: RunTrace
     events: EventEmitter
     observations: ObservationFormatter
-    finisher: TurnFinisher
     guard: TurnGuard
     tool_runner: ToolRunner
     summarizer: Any

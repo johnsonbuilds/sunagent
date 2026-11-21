@@ -57,7 +57,7 @@ class RuntimeConfig:
     """Endpoint + transport knobs, resolved once at the composition root.
 
     ``HarnessSpec`` stays the source of truth for behavior genes
-    (prompt/tools/control/context/recovery/verification); this object
+    (prompt/tools/control/context/recovery/skills); this object
     only carries process wiring that used to be scattered ``os.getenv``
     calls: which endpoint to hit and how to talk to it.
     """

@@ -30,7 +30,7 @@ def main(argv: list[str] | None = None) -> int:
                                help="one-line description of the gene change")
     derive_parser.add_argument("--reason", default=None)
     derive_parser.add_argument("--set", action="append", default=[], metavar="PATH=VALUE",
-                               help="gene override, e.g. verification.enabled=true "
+                               help="gene override, e.g. control.max_iterations=60 "
                                     "(repeatable)")
     derive_parser.add_argument("--harnesses-dir", type=Path,
                                default=lineage.DEFAULT_HARNESSES_DIR)

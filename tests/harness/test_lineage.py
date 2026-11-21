@@ -54,10 +54,10 @@ class TempHarnessDir:
 CHILD_ONE_GENE = """
 id: baseline-v1
 parent: baseline-v0
-mutation: enable verification
+mutation: raise max_iterations
 reason: test
-verification:
-  enabled: true
+control:
+  max_iterations: 20
 """
 
 CHILD_TWO_GENES = """
@@ -65,8 +65,8 @@ id: greedy-v1
 parent: baseline-v0
 mutation: everything at once
 reason: test
-verification:
-  enabled: true
+tools:
+  enabled: [run_command]
 control:
   max_iterations: 20
 """
@@ -104,8 +104,8 @@ class ValidateLineageTests(unittest.TestCase):
         parent: no-such-parent
         mutation: something
         reason: test
-        verification:
-          enabled: true
+        control:
+          max_iterations: 20
         """
         with TempHarnessDir(BASELINE, orphan) as directory:
             specs = load_all_harnesses(directory)
@@ -156,7 +156,7 @@ class TreeTests(unittest.TestCase):
             tree = format_tree(specs)
         lines = tree.splitlines()
         self.assertEqual(lines[0].strip(), "baseline-v0  (root)")
-        self.assertEqual(lines[1].strip(), "baseline-v1 <- baseline-v0  enable verification")
+        self.assertEqual(lines[1].strip(), "baseline-v1 <- baseline-v0  raise max_iterations")
         self.assertEqual(lines[2].strip(),
                          "baseline-v2 <- baseline-v1  add stderr-aware recovery")
 
@@ -165,20 +165,20 @@ class GeneDiffTests(unittest.TestCase):
     def test_flatten_uses_dotted_paths(self) -> None:
         flat = flatten_genes(from_dict({}))
         self.assertIn("control.max_iterations", flat)
-        self.assertEqual(flat["verification.enabled"], False)
+        self.assertEqual(flat["control.max_iterations"], 10)
 
     def test_changed_genes_counts_top_level_genes(self) -> None:
         parent = from_dict({})
-        child = from_dict({"verification": {"enabled": True},
+        child = from_dict({"tools": {"enabled": ["run_command"]},
                            "control": {"max_iterations": 20}})
         self.assertEqual(changed_genes(parent, child),
-                         [("control", 1), ("verification", 1)])
+                         [("control", 1), ("tools", 1)])
 
     def test_format_gene_diff_shows_field_changes(self) -> None:
         parent = from_dict({})
-        child = from_dict({"verification": {"enabled": True}})
+        child = from_dict({"control": {"max_iterations": 20}})
         diff = format_gene_diff(parent, child)
-        self.assertIn("verification.enabled: False -> True", diff)
+        self.assertIn("control.max_iterations: 10 -> 20", diff)
 
 
 class ManifestTextTests(unittest.TestCase):
@@ -190,7 +190,6 @@ class ManifestTextTests(unittest.TestCase):
             "max_iterations": 7,
             "max_observation_chars": 1234,
             "spill_preview_chars": 99,
-            "finish_violation_limit": 2,
             "budget_reminder": {"enabled": True,
                                 "at_fractions": [0.5, 0.8]},
         },
@@ -212,12 +211,6 @@ class ManifestTextTests(unittest.TestCase):
             "tool_error_max_retries": 2,
             "llm_errors": {"stream_truncated": {
                 "max_retries": 2, "backoff": "fixed", "base_delay": 0.25}},
-        },
-        "verification": {
-            "enabled": True,
-            "mode": "task_result",
-            "require": ["solution_description", "evidence",
-                        "command_to_verify"],
         },
         "skills": ["python", "shell"],
     }
@@ -249,13 +242,13 @@ class ManifestTextTests(unittest.TestCase):
 class DeriveTests(unittest.TestCase):
     def test_derive_single_gene_change(self) -> None:
         parent = from_dict({})
-        child, diff = derive(parent, "baseline-v1", "enable verification",
-                             "testing", [("verification.enabled", "true")])
+        child, diff = derive(parent, "baseline-v1", "raise max_iterations",
+                             "testing", [("control.max_iterations", "20")])
         self.assertEqual(parent.id, "baseline-v0")
         self.assertEqual(child.id, "baseline-v1")
         self.assertEqual(child.parent, parent.id)
-        self.assertTrue(child.verification.enabled)
-        self.assertIn("verification.enabled: False -> True", diff)
+        self.assertEqual(child.control.max_iterations, 20)
+        self.assertIn("control.max_iterations: 10 -> 20", diff)
         self.assertNotEqual(child.genes_hash, parent.genes_hash)
 
     def test_derive_parses_scalars_and_lists(self) -> None:

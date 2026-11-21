@@ -2,7 +2,6 @@
 
 from .paths import OUTPUTS_DIR, SCRIPTS_DIR
 from .spec import ToolSpec
-from .submit import submit_result
 from .tools import ToolExecutor, ToolRegistry, builtin_tool_specs, create_default_registry
 from .shell import run_command
 from .files import (DEFAULT_READ_LIMIT, edit_file, list_dir, read_file,
@@ -17,5 +16,5 @@ __all__ = [
     "TreeSitterIndex",
     "apply_patch", "create_default_registry", "edit_file", "execute_code",
     "find_references", "find_symbol", "find_files", "grep_search", "list_dir",
-    "read_file", "read_output", "run_command", "submit_result", "write_file",
+    "read_file", "read_output", "run_command", "write_file",
 ]

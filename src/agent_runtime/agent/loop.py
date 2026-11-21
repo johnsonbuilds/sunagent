@@ -59,7 +59,6 @@ class AgentTurn:
         self.conversation = collaborators.conversation
         self.trace = collaborators.trace
         self.events = collaborators.events
-        self.finisher = collaborators.finisher
         self.guard = collaborators.guard
         self.tool_runner = collaborators.tool_runner
         self.summarizer = collaborators.summarizer
@@ -113,10 +112,6 @@ class AgentTurn:
                 content = response.get("content") or ""
 
                 outcomes = classify_tool_calls(tool_calls, tools.schemas)
-                # A submit call is a finish attempt, not work: other
-                # calls in the same turn still execute first, then the first
-                # submission is validated against the updated history.
-                submit_args = self.finisher.take_submit_arguments(outcomes)
 
                 assistant_message: dict[str, Any] = {
                     "role": "assistant",
@@ -125,45 +120,24 @@ class AgentTurn:
                 reasoning_content = response.get("reasoning_content")
                 if reasoning_content:
                     assistant_message["reasoning_content"] = reasoning_content
-                # A submit call is a finish request, not work: it is
-                # never executed (see ToolRunner), so it must not enter
-                # the history as a tool call — otherwise the next request
-                # carries an assistant tool_calls entry with no following
-                # tool message and the provider rejects it with 400
-                # ("must be followed by tool messages").
                 canonical_calls = canonical_tool_calls(outcomes)
-                if submit_args is not None:
-                    submit_tool = self.finisher.rules.submit_tool
-                    submit_ids = {outcome.validated.id for outcome in outcomes
-                                  if outcome.validated is not None
-                                  and outcome.validated.name == submit_tool}
-                    canonical_calls = [call for call in canonical_calls
-                                       if call["id"] not in submit_ids]
                 if canonical_calls:
                     assistant_message["tool_calls"] = canonical_calls
                 if tool_calls or content or reasoning_content:
                     history.append(assistant_message)
 
                 if not tool_calls:
-                    finished = self.finisher.answer_without_tools(response,
-                                                                  iteration, history)
-                    if finished is not None:
-                        agent_meta.update(history.token_totals)
-                        return finished
-                    continue
+                    logger.debug("agent.final iteration=%d answer_chars=%d",
+                                 iteration, len(content))
+                    events.emit("agent.completed", iteration,
+                                iterations=iteration, answer=content)
+                    agent_meta.update(history.token_totals)
+                    return content
                 stop = await self.tool_runner.dispatch(
-                    outcomes, submit_args, iteration, history)
+                    outcomes, iteration, history)
                 if stop is not None:
                     agent_meta.update(history.token_totals)
                     return stop
-
-                if submit_args is not None:
-                    finished = await self.finisher.finish_or_nudge(
-                        submit_args, iteration, history)
-                    if finished is not None:
-                        agent_meta.update(history.token_totals)
-                        return finished
-                    continue
 
             return await self._summary_turn(history, agent_meta)
         finally:
@@ -244,7 +218,7 @@ class AgentTurn:
 
         Appends the harness iteration-limit notice and asks one last time
         with no tools, so the model can only summarise; the turn always
-        ends here, with the contract recorded as a miss.
+        ends here.
         """
         events, trace = self.events, self.trace
         harness = self.harness
@@ -294,7 +268,6 @@ class AgentTurn:
             raise TurnFailure(error) from exc
         answer = response.get("content", "")
         history.append({"role": "assistant", "content": answer})
-        self.finisher.emit_contract_outcome(iteration)
         logger.debug("agent.final iteration=%d answer_chars=%d", iteration, len(answer))
         events.emit("agent.completed", iteration, iterations=iteration, answer=answer)
         return answer

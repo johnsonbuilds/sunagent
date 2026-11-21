@@ -3,13 +3,13 @@
 ## 1. The Idea: Harness as Versioned Data
 
 Everything that decides *how* the agent works — prompt, tools, control
-flow, context, recovery, verification — is a **harness genome**: named
+flow, context, recovery, skills — is a **harness genome**: named
 data in a YAML manifest, not code.
 
 ```text
 Agent Runtime Engine        (stable: loop, trace, events, executors)
         +
-HarnessSpec                 (versioned: 7 genes, one YAML per version)
+HarnessSpec                 (versioned: 6 genes, one YAML per version)
         +
 Benchmark                   (judges how well it works)
 ```
@@ -19,7 +19,7 @@ The research question this enables:
 > Same runtime, same model, same benchmark — flip **one gene**, and what
 > happens to the score?
 
-Seven genes (all extracted from what the code used to hardcode):
+Six genes (all extracted from what the code used to hardcode):
 
 | Gene | Fields | baseline-v0 value |
 |---|---|---|
@@ -28,7 +28,6 @@ Seven genes (all extracted from what the code used to hardcode):
 | `control` | `max_iterations` | `10` |
 | `context` | `strategy` | `full_history` |
 | `recovery` | `tool_error` | `feed_error_and_continue` |
-| `verification` | `enabled`, `mode`, `require`, `submit_tool`, `edit_tools`, `test_target_pattern` | `false` (submit tool `submit_result`; edits via `edit_file`/`apply_patch`/`write_file`; Python test-file pattern) |
 | `skills` | list | `[]` |
 
 > Legacy note: the `context` gene was called `memory` before the rename.
@@ -98,7 +97,7 @@ python -m agent_runtime.harness tree
 
 ```text
 baseline-v0  (root)
-  baseline-v1 <- baseline-v0  enable verification
+  baseline-v1 <- baseline-v0  raise max_iterations
 ```
 
 `tree` also validates the lineage and prints warnings (exit code 1):
@@ -119,9 +118,9 @@ path.
 ```bash
 python -m agent_runtime.harness derive baseline-v1 \
     --from baseline-v0 \
-    --mutation "enable verification" \
-    --reason "H0 failure analysis: 6/10 failures were false-success" \
-    --set verification.enabled=true
+    --mutation "raise max_iterations" \
+    --reason "long tasks hit the iteration cap" \
+    --set control.max_iterations=20
 ```
 
 `derive` copies all parent genes, applies each `--set PATH=VALUE`
@@ -130,7 +129,7 @@ and `skills`), then shows a **field-level diff** before writing:
 
 ```text
 deriving baseline-v1 from baseline-v0
-  verification.enabled: False -> True
+  control.max_iterations: 10 -> 20
 
 write harnesses/baseline-v1.yaml? [y/N]
 ```
@@ -217,7 +216,7 @@ python -m agent_runtime.harness report
 ID           PARENT       MUTATION              RATE   DELTA
 ------------------------------------------------------------
 baseline-v0  -            -                     100%       -
-baseline-v1  baseline-v0  enable verification      -       -
+baseline-v1  baseline-v0  raise max_iterations      -       -
 ```
 
 Rows follow the family tree (parents first). `RATE` is the judged pass

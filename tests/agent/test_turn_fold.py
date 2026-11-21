@@ -66,8 +66,8 @@ class TurnFoldTests(unittest.TestCase):
             {"role": "user", "content": "task1"},
             {"role": "assistant", "content": "work"},
             runtime_user_message(
-                "To finish, call the submit_result tool (and only that tool)",
-                kind="submit_nudge",
+                "The iteration budget is nearly spent; wrap up now.",
+                kind="budget_reminder",
             ),
             {"role": "assistant", "content": "final1"},
             {"role": "user", "content": "task2"},

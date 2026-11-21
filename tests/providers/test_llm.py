@@ -204,7 +204,7 @@ class ProjectMessagesForWireTests(unittest.TestCase):
                  {"id": "work", "type": "function",
                   "function": {"name": "run_command", "arguments": "{}"}},
                  {"id": "stray", "type": "function",
-                  "function": {"name": "submit_result", "arguments": "{}"}},
+                  "function": {"name": "read_file", "arguments": "{}"}},
              ]},
             {"role": "tool", "tool_call_id": "work", "content": "out"},
         ]
@@ -220,9 +220,9 @@ class ProjectMessagesForWireTests(unittest.TestCase):
         history: list[dict[str, Any]] = [
             {"role": "assistant", "content": "done",
              "tool_calls": [{"id": "stray", "type": "function",
-                             "function": {"name": "submit_result",
+                             "function": {"name": "read_file",
                                           "arguments": "{}"}}]},
-            {"role": "user", "content": "contract nudge"},
+            {"role": "user", "content": "runtime nudge"},
         ]
 
         projected = _project_messages_for_wire(history, echo=True)
@@ -234,7 +234,7 @@ class ProjectMessagesForWireTests(unittest.TestCase):
         history: list[dict[str, Any]] = [
             {"role": "assistant", "content": "",
              "tool_calls": [{"id": "stray", "type": "function",
-                             "function": {"name": "submit_result",
+                             "function": {"name": "read_file",
                                           "arguments": "{}"}}]},
         ]
 
@@ -331,7 +331,7 @@ class ProjectMessagesForWireTests(unittest.TestCase):
                 {"id": "a", "type": "function",
                  "function": {"name": "run_command", "arguments": "{}"}},
                 {"id": "stray", "type": "function",
-                 "function": {"name": "submit_result", "arguments": "{}"}},
+                 "function": {"name": "read_file", "arguments": "{}"}},
                 {"id": "b", "type": "function",
                  "function": {"name": "run_command", "arguments": "{}"}},
             ]},

@@ -17,7 +17,7 @@ whether to stop and otherwise continues with the next request.
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from agent_runtime.agent.context import request_view_size
@@ -35,12 +35,30 @@ from agent_runtime.agent.tool_error_budget import (
     resolve_max_retries,
 )
 from agent_runtime.agent.turn_history import TurnHistory
-from agent_runtime.agent.verification import SubmissionRules, has_source_edit
 from agent_runtime.events import EventEmitter
 from agent_runtime.harness import HarnessSpec
 from agent_runtime.trace import RunTrace
 
 logger = logging.getLogger(__name__)
+
+# Tools that change source files; used only to report whether the model has
+# started implementing when a budget reminder fires.
+_EDIT_TOOLS = frozenset({"edit_file", "apply_patch", "write_file"})
+
+
+def _has_source_edit(messages: list[Mapping[str, Any]] | None) -> bool:
+    """Whether the model attempted at least one source-edit tool call."""
+    for message in messages or []:
+        if not isinstance(message, Mapping) or message.get("role") != "assistant":
+            continue
+        for call in message.get("tool_calls") or []:
+            if not isinstance(call, Mapping):
+                continue
+            function = call.get("function")
+            if (isinstance(function, Mapping)
+                    and function.get("name") in _EDIT_TOOLS):
+                return True
+    return False
 
 
 class TurnGuard:
@@ -50,11 +68,10 @@ class TurnGuard:
     guard must never be shared across turns.
     """
 
-    def __init__(self, *, harness: HarnessSpec, rules: SubmissionRules,
+    def __init__(self, *, harness: HarnessSpec,
                  trace: RunTrace, events: EventEmitter,
                  max_iterations: int) -> None:
         self.harness = harness
-        self.rules = rules
         self.trace = trace
         self.events = events
         self.max_iterations = max_iterations
@@ -109,7 +126,7 @@ class TurnGuard:
         Fires once per threshold: reports the remaining iteration budget,
         explains what an iteration is, and points the model back at the
         required result. Early reminders ask for an exploration cutoff;
-        later ones ask for production and verification. The reminder is
+        later ones ask for production and testing. The reminder is
         informational, not a restriction.
         """
         reminder = self.harness.control.budget_reminder
@@ -123,18 +140,18 @@ class TurnGuard:
         )
         if not triggered:
             return
-        edited = has_source_edit(history.messages, self.rules)
+        edited = _has_source_edit(history.messages)
         remaining = self.max_iterations - iteration
         if remaining > self.max_iterations // 2:
             guidance = (
                 "You may still be exploring; set a concrete cutoff for "
                 "exploration and reserve enough iterations for implementation "
-                "and verification."
+                "and testing."
             )
         else:
             guidance = (
                 "You are closer to the limit; stop exploring and spend the "
-                "remaining iterations producing and verifying the required "
+                "remaining iterations producing and testing the required "
                 "result."
             )
         history.append(runtime_user_message(
@@ -142,7 +159,7 @@ class TurnGuard:
             f"({remaining} iterations left). One iteration is one model turn; "
             "a turn may contain multiple tool calls. This is informational, "
             f"not a restriction. {guidance} The required result must exist and "
-            "be verified before the budget runs out.",
+            "be tested before the budget runs out.",
             kind="budget_reminder",
         ))
         self.trace.emit("budget.reminder", iteration,

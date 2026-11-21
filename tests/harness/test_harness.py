@@ -34,9 +34,8 @@ class HarnessDefaultTests(unittest.TestCase):
     def test_genes_hash_ignores_lineage_metadata(self) -> None:
         base = HarnessSpec()
         annotated = HarnessSpec(id="baseline-v1", parent="baseline-v0",
-                                mutation="enable verification",
-                                reason="test the verification gene",
-                                verification=base.verification)
+                                mutation="raise max_iterations",
+                                reason="test the control gene")
         self.assertEqual(base.genes_hash, annotated.genes_hash)
 
     def test_genes_hash_changes_when_a_gene_changes(self) -> None:
@@ -127,48 +126,22 @@ class TranscriptEconomicsGenesTests(unittest.TestCase):
             from_dict({"context": {"head_x": 1}})
 
 
-class SubmissionGenesTests(unittest.TestCase):
-    """Tool names and the test-target pattern are deployment policy."""
+class BudgetReminderGenomeTests(unittest.TestCase):
+    def test_defaults_off(self) -> None:
+        spec = from_dict({})
+        self.assertFalse(spec.control.budget_reminder.enabled)
 
-    def test_defaults_match_runtime_contract(self) -> None:
-        verification = BUILTIN_HARNESS.verification
-        self.assertEqual(verification.submit_tool, "submit_result")
-        self.assertEqual(verification.edit_tools,
-                         ("edit_file", "apply_patch", "write_file"))
-        self.assertTrue(verification.test_target_pattern)
+    def test_enabled_parsed(self) -> None:
+        spec = from_dict({"control": {"budget_reminder": {
+            "enabled": True, "at_fractions": [0.6, 0.85]}}})
+        self.assertTrue(spec.control.budget_reminder.enabled)
+        self.assertEqual(tuple(spec.control.budget_reminder.at_fractions),
+                         (0.6, 0.85))
 
-    def test_custom_tools_and_pattern_are_parsed(self) -> None:
-        spec = from_dict({"verification": {
-            "mode": "task_result",
-            "submit_tool": "finish_task",
-            "edit_tools": ["patch_repo"],
-            "test_target_pattern": r"_test\.go\b",
-        }})
-        self.assertEqual(spec.verification.submit_tool, "finish_task")
-        self.assertEqual(spec.verification.edit_tools, ("patch_repo",))
-        self.assertEqual(spec.verification.test_target_pattern,
-                         r"_test\.go\b")
-
-    def test_empty_edit_tools_is_explicit_and_allowed(self) -> None:
-        spec = from_dict({"verification": {"edit_tools": []}})
-        self.assertEqual(spec.verification.edit_tools, ())
-
-    def test_bad_tool_names_and_pattern_are_rejected(self) -> None:
-        for section in ({"submit_tool": ""},
-                        {"submit_tool": 3},
-                        {"edit_tools": "edit_file"},
-                        {"edit_tools": [""]},
-                        {"test_target_pattern": ""},
-                        {"test_target_pattern": "["}):
-            with self.subTest(section=section):
-                with self.assertRaisesRegex(HarnessError, "verification"):
-                    from_dict({"verification": section})
-
-    def test_submission_genes_are_hashed(self) -> None:
-        base = from_dict({"verification": {"mode": "task_result"}})
-        changed = from_dict({"verification": {
-            "mode": "task_result", "submit_tool": "finish_task"}})
-        self.assertNotEqual(base.genes_hash, changed.genes_hash)
+    def test_bad_fraction_rejected(self) -> None:
+        with self.assertRaises(HarnessError):
+            from_dict({"control": {"budget_reminder": {
+                "enabled": True, "at_fractions": [1.5]}}})
 
 
 class HarnessValidationTests(unittest.TestCase):
@@ -198,6 +171,24 @@ class HarnessValidationTests(unittest.TestCase):
               timeout: 30
             """,
             "unknown control keys: ['timeout']",
+        )
+
+    def test_removed_verification_gene_is_rejected(self) -> None:
+        self.assert_harness_error(
+            """
+            verification:
+              enabled: false
+            """,
+            "unknown manifest keys: ['verification']",
+        )
+
+    def test_removed_finish_violation_limit_is_rejected(self) -> None:
+        self.assert_harness_error(
+            """
+            control:
+              finish_violation_limit: 3
+            """,
+            "unknown control keys: ['finish_violation_limit']",
         )
 
     def test_bad_max_iterations_is_rejected(self) -> None:

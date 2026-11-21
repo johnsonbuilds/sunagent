@@ -13,7 +13,7 @@ from agent_runtime.tools.tools import ToolRegistry, create_default_registry
 BUILTIN_TOOLS = ["run_command", "write_file", "read_file", "read_output",
                  "list_dir", "edit_file", "apply_patch", "grep_search",
                  "find_files", "find_symbol", "find_references",
-                 "execute_code", "submit_result"]
+                 "execute_code"]
 
 
 class DefaultRegistryTests(unittest.TestCase):
@@ -84,28 +84,6 @@ class ToolRoutingGuidanceTests(unittest.TestCase):
         desc = self.descriptions()["apply_patch"]
         self.assertIn("single existing file", desc)
         self.assertIn("all-or-nothing", desc)
-
-
-class SubmissionSchemaTests(unittest.TestCase):
-    """The return-contract gate owns length policy, not the tool schema.
-
-    Declaring ``minLength`` here would enforce it at dispatch, where the
-    rejected call never reaches ``check_submission`` and the model gets no
-    field-level reason; it would also duplicate the gate's thresholds.
-    """
-
-    def test_schema_declares_shape_only_for_submit_result(self) -> None:
-        schema = {entry["function"]["name"]: entry["function"]
-                  for entry in create_default_registry().schemas}
-        parameters = schema["submit_result"]["parameters"]
-
-        self.assertEqual(sorted(parameters["properties"]),
-                         ["command_to_verify", "evidence", "solution_description"])
-        self.assertEqual(parameters["required"],
-                         ["solution_description", "evidence"])
-        for name, definition in parameters["properties"].items():
-            self.assertEqual(definition["type"], "string")
-            self.assertNotIn("minLength", definition, name)
 
 
 class WorkspaceInjectionTests(unittest.IsolatedAsyncioTestCase):

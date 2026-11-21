@@ -37,8 +37,7 @@ class UnknownToolHintTests(unittest.TestCase):
             validate_tool_call(_call("grep"), _schemas())
         message = str(caught.exception)
         for tool in ("run_command", "read_file", "edit_file", "apply_patch",
-                     "write_file", "grep_search", "find_files",
-                     "submit_result"):
+                     "write_file", "grep_search", "find_files"):
             self.assertIn(tool, message)
 
     def test_hint_contains_no_guessing(self) -> None:
@@ -134,7 +133,7 @@ def _run_one_turn_async(directory: str,
     registry = create_default_registry(
         workspace=LocalWorkspace(directory),
         enabled=["write_file", "read_file", "edit_file", "apply_patch"])
-    harness = from_dict({"verification": {"mode": "off"}})
+    harness = from_dict({})
     return run_turn("hi", FakeLLM(tool_calls), registry,
                     harness=harness, max_iterations=3,
                     trace=RunTrace(run_id="t"))
