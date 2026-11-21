@@ -227,6 +227,18 @@ class RecoveryGenome:
         default_factory=_default_llm_errors)
 
 
+@dataclass(frozen=True)
+class VerificationGenome:
+    """Reserved placeholder for the former verification gate.
+
+    The runtime no longer consumes this field.  It stays in the genome so
+    manifests can keep a ``verification`` block for a future gate without
+    failing validation; flipping it has no behavioral effect.
+    """
+
+    enabled: bool = False
+
+
 def _hash_genes(genes: Mapping[str, Any]) -> str:
     canonical = json.dumps(genes, sort_keys=True, ensure_ascii=True)
     return hashlib.sha256(canonical.encode()).hexdigest()[:16]
@@ -234,7 +246,10 @@ def _hash_genes(genes: Mapping[str, Any]) -> str:
 
 @dataclass(frozen=True)
 class HarnessSpec:
-    """One harness version: lineage metadata plus six genes."""
+    """One harness version: lineage metadata plus six behavior genes.
+
+    ``verification`` is a reserved no-op placeholder, not a behavior gene.
+    """
 
     # The neutral built-in genome mirrors harnesses/baseline-v0.yaml.
     id: str = "baseline-v0"
@@ -246,6 +261,7 @@ class HarnessSpec:
     control: ControlGenome = field(default_factory=ControlGenome)
     context: ContextGenome = field(default_factory=ContextGenome)
     recovery: RecoveryGenome = field(default_factory=RecoveryGenome)
+    verification: VerificationGenome = field(default_factory=VerificationGenome)
     skills: tuple[str, ...] = ()
     source: str | None = None
     genes_hash: str = ""
@@ -260,7 +276,7 @@ class HarnessSpec:
             object.__setattr__(self, "genes_hash", _hash_genes(self.genes_dict()))
 
     def genes_dict(self) -> dict[str, Any]:
-        """The behavior-defining genes, excluding lineage and source."""
+        """The serialized genome fields, excluding lineage and source."""
         return {
             "prompt": asdict(self.prompt),
             "tools": {"enabled": list(self.tools.enabled)},
@@ -269,6 +285,7 @@ class HarnessSpec:
                        "retrieval_exempt_tools":
                            list(self.context.retrieval_exempt_tools)},
             "recovery": asdict(self.recovery),
+            "verification": asdict(self.verification),
             "skills": list(self.skills),
         }
 

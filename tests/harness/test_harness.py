@@ -173,13 +173,26 @@ class HarnessValidationTests(unittest.TestCase):
             "unknown control keys: ['timeout']",
         )
 
-    def test_removed_verification_gene_is_rejected(self) -> None:
+    def test_verification_placeholder_is_parsed(self) -> None:
+        spec = from_dict({"verification": {"enabled": False}})
+        self.assertFalse(spec.verification.enabled)
+
+    def test_verification_placeholder_rejects_unknown_fields(self) -> None:
         self.assert_harness_error(
             """
             verification:
-              enabled: false
+              mode: 'off'
             """,
-            "unknown manifest keys: ['verification']",
+            "unknown verification keys: ['mode']",
+        )
+
+    def test_verification_enabled_must_be_boolean(self) -> None:
+        self.assert_harness_error(
+            """
+            verification:
+              enabled: "false"
+            """,
+            "verification.enabled must be a boolean",
         )
 
     def test_removed_finish_violation_limit_is_rejected(self) -> None:

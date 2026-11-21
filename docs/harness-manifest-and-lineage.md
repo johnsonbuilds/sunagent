@@ -19,7 +19,8 @@ The research question this enables:
 > Same runtime, same model, same benchmark — flip **one gene**, and what
 > happens to the score?
 
-Six genes (all extracted from what the code used to hardcode):
+Six behavior genes (all extracted from what the code used to hardcode),
+plus one reserved placeholder:
 
 | Gene | Fields | baseline-v0 value |
 |---|---|---|
@@ -28,6 +29,7 @@ Six genes (all extracted from what the code used to hardcode):
 | `control` | `max_iterations` | `10` |
 | `context` | `strategy` | `full_history` |
 | `recovery` | `tool_error` | `feed_error_and_continue` |
+| `verification` | `enabled` | `false`; reserved, ignored at runtime |
 | `skills` | list | `[]` |
 
 > Legacy note: the `context` gene was called `memory` before the rename.

@@ -96,7 +96,7 @@ Basic auth is not encryption — keep it on localhost, use an SSH tunnel, or ter
 
 ## Harnesses
 
-Six genes define a run: `prompt`, `tools`, `control`, `context`, `recovery`, and `skills`. Lineage lives beside them as `id`, `parent`, `mutation`, and `reason`. `genes_hash` covers genes only, so editing `reason` changes nothing behaviorally. Every trace starts with a harness header, keeping each run attributable.
+Six behavior genes define a run: `prompt`, `tools`, `control`, `context`, `recovery`, and `skills`. Manifests also reserve a no-op `verification: {enabled: false}` block for a future gate; it is parsed and versioned but ignored at runtime. Lineage lives beside them as `id`, `parent`, `mutation`, and `reason`. `genes_hash` covers genes only, so editing `reason` changes nothing behaviorally. Every trace starts with a harness header, keeping each run attributable.
 
 ```bash
 uv run python -m agent_runtime.harness tree      # family tree + warnings

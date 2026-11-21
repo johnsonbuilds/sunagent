@@ -85,4 +85,6 @@ recovery:
       max_retries: 2
       backoff: none
       base_delay: 0.0
+verification:
+  enabled: false
 skills: []

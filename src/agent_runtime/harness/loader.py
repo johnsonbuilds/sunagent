@@ -43,6 +43,7 @@ from .schema import (
     SUMMARY_REASONING_EFFORTS,
     TOOL_ERROR_STRATEGIES,
     ToolGenome,
+    VerificationGenome,
 )
 
 
@@ -305,6 +306,17 @@ def _recovery_genome(data: Mapping[str, Any]) -> RecoveryGenome:
                             llm_errors=llm_errors)
 
 
+def _verification_genome(data: Mapping[str, Any]) -> VerificationGenome:
+    section = data.get("verification") or {}
+    if not isinstance(section, Mapping):
+        raise HarnessError("verification must be a mapping")
+    _check_keys(section, {"enabled"}, "verification")
+    enabled = section.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise HarnessError("verification.enabled must be a boolean")
+    return VerificationGenome(enabled=enabled)
+
+
 def from_dict(data: Mapping[str, Any]) -> HarnessSpec:
     """Validate manifest data and build a harness spec."""
     if not isinstance(data, Mapping):
@@ -312,8 +324,8 @@ def from_dict(data: Mapping[str, Any]) -> HarnessSpec:
     # "source" and "genes_hash" are outputs of to_dict(); accepted so a
     # spec can round-trip, but ignored and recomputed here.
     _check_keys(data, {"id", "parent", "mutation", "reason", "prompt", "tools",
-                       "control", "context", "memory", "recovery", "skills",
-                       "source", "genes_hash"},
+                       "control", "context", "memory", "recovery",
+                       "verification", "skills", "source", "genes_hash"},
                 "manifest")
     harness_id = data.get("id", "baseline-v0")
     if not isinstance(harness_id, str) or not harness_id.strip():
@@ -328,6 +340,7 @@ def from_dict(data: Mapping[str, Any]) -> HarnessSpec:
         control=_control_genome(data),
         context=_context_genome(data),
         recovery=_recovery_genome(data),
+        verification=_verification_genome(data),
         skills=_name_list(data, "skills", "manifest"),
     )
 
