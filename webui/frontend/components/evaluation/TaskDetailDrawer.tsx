@@ -14,10 +14,12 @@ import {
 } from "@/lib/evaluation";
 import type {
   EvalDiagnosisRow,
+  EvalDiagnosisTarget,
   EvalRunDetail,
   EvalTaskDetail,
 } from "@/lib/types";
 
+import MarkdownAnswer from "./MarkdownAnswer";
 import RunTimeline from "./RunTimeline";
 
 interface TaskDetailDrawerProps {
@@ -27,11 +29,14 @@ interface TaskDetailDrawerProps {
   run: EvalRunDetail | null;
   runId: string | null;
   runLoading: boolean;
+  /** A diagnosis request is in flight: the triggers must not fire twice. */
+  diagnosing: boolean;
   onClose: () => void;
   onOpenRun: (runId: string) => void;
   onCloseRun: () => void;
   onOpenConversation: (taskId: string) => void;
   onOpenConversationById: (sessionId: string) => void;
+  onStartDiagnosis: (target: EvalDiagnosisTarget, force?: boolean) => void;
 }
 
 function EvidenceBadge({ value }: { value: string }) {
@@ -46,9 +51,13 @@ function EvidenceBadge({ value }: { value: string }) {
 
 function Diagnoses({
   rows,
+  busy,
+  onStartDiagnosis,
   onOpenConversationById,
 }: {
   rows: EvalDiagnosisRow[];
+  busy: boolean;
+  onStartDiagnosis: (target: EvalDiagnosisTarget, force?: boolean) => void;
   onOpenConversationById: (sessionId: string) => void;
 }) {
   const { t } = useI18n();
@@ -57,26 +66,56 @@ function Diagnoses({
   }
   return (
     <ul className="eval-diagnoses">
-      {rows.map((row) => (
-        <li key={row.session_id} className="eval-diagnosis-item">
-          <span className="eval-diagnosis-title">{row.title || row.session_id}</span>
-          <span className="eval-diagnosis-meta">
-            {row.origin} · {formatDayTime(row.updated_at)}
-            {row.report_segment_id
-              ? ` · ${t("evalReportReady")}`
-              : ` · ${t("evalReportPending")}`}
-          </span>
-          <button
-            type="button"
-            className="eval-link"
-            onClick={() => onOpenConversationById(row.session_id)}
-          >
-            {t("evalOpenSession")}
-          </button>
-        </li>
-      ))}
+      {rows.map((row) => {
+        const target = diagnosisTarget(row);
+        return (
+          <li key={row.session_id} className="eval-diagnosis-item">
+            <span className="eval-diagnosis-title">{row.title || row.session_id}</span>
+            <span className="eval-diagnosis-meta">
+              {row.origin} · {formatDayTime(row.updated_at)}
+              {row.report_segment_id
+                ? ` · ${t("evalReportReady")}`
+                : ` · ${t("evalReportPending")}`}
+            </span>
+            <button
+              type="button"
+              className="eval-link"
+              onClick={() => onOpenConversationById(row.session_id)}
+            >
+              {t("evalOpenSession")}
+            </button>
+            {target ? (
+              <button
+                type="button"
+                className="eval-link"
+                disabled={busy}
+                onClick={() => onStartDiagnosis(target, true)}
+              >
+                {t("evalDiagnosisForce")}
+              </button>
+            ) : null}
+            {row.report_segment_id && row.report ? (
+              <details className="eval-report-details">
+                <summary>{t("evalReportSections")}</summary>
+                <MarkdownAnswer report={row.report} />
+              </details>
+            ) : null}
+          </li>
+        );
+      })}
     </ul>
   );
+}
+
+/** The target a stored diagnosis row was opened for, if it is still known. */
+function diagnosisTarget(row: EvalDiagnosisRow): EvalDiagnosisTarget | null {
+  const target = row.target as { type?: unknown; id?: unknown } | null;
+  const type = target?.type;
+  if ((type === "task" || type === "run")
+      && typeof target?.id === "string" && target.id) {
+    return { type, id: target.id };
+  }
+  return null;
 }
 
 export default function TaskDetailDrawer({
@@ -86,11 +125,13 @@ export default function TaskDetailDrawer({
   run,
   runId,
   runLoading,
+  diagnosing,
   onClose,
   onOpenRun,
   onCloseRun,
   onOpenConversation,
   onOpenConversationById,
+  onStartDiagnosis,
 }: TaskDetailDrawerProps) {
   const { t } = useI18n();
 
@@ -227,6 +268,21 @@ export default function TaskDetailDrawer({
                               {t("evalViewTrace")}
                             </button>
                           ) : null}
+                          {item.run_id ? (
+                            <button
+                              type="button"
+                              className="eval-link"
+                              disabled={diagnosing}
+                              onClick={() =>
+                                onStartDiagnosis({
+                                  type: "run",
+                                  id: item.run_id as string,
+                                })
+                              }
+                            >
+                              {t("evalDiagnosisRun")}
+                            </button>
+                          ) : null}
                         </div>
                         {item.error ? (
                           <div className="eval-run-error">{item.error}</div>
@@ -331,8 +387,20 @@ export default function TaskDetailDrawer({
               />
 
               <h3 className="eval-subhead">{t("evalDiagnoses")}</h3>
+              <button
+                type="button"
+                className="eval-action"
+                disabled={diagnosing}
+                onClick={() =>
+                  onStartDiagnosis({ type: "task", id: detail.task_id })
+                }
+              >
+                {diagnosing ? t("evalDiagnosisBusy") : t("evalDiagnosisStart")}
+              </button>
               <Diagnoses
                 rows={detail.diagnoses}
+                busy={diagnosing}
+                onStartDiagnosis={onStartDiagnosis}
                 onOpenConversationById={onOpenConversationById}
               />
             </>

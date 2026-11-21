@@ -131,7 +131,11 @@ Only ids and labels cross the HTTP boundary: `/api/config` never returns
 `base_url` or `api_key`.
 
 Harness choices come from `harnesses/*.yaml` — a flat scan, so manifests
-under `harnesses/archived/` never appear in the picker.
+under `harnesses/archived/` never appear in the picker.  A manifest marked
+`internal: true` (the diagnosis harness `evaluation-v1`) also stays out of
+`/api/config`, and naming it when creating a session or a board task is
+refused with a 400; it still resolves by id, which is how a diagnosis
+starts one.
 
 ## 4. HTTP API
 
@@ -162,7 +166,8 @@ under `harnesses/archived/` never appear in the picker.
 | `GET` | `/api/evaluation/tasks` | task rows (`range`, `status`, `harness`, `model`, `origin`, `q`, `sort`, `order`, `page`, `page_size`) |
 | `GET` | `/api/evaluation/tasks/{id}` | lifecycle, runs with metrics, evidence, diagnoses |
 | `GET` | `/api/evaluation/runs/{id}` | `run.metrics` plus a bounded trace digest |
-| `GET` | `/api/evaluation/diagnoses` | diagnosis sessions linked through `Session.target` (`task_id`) |
+| `GET` | `/api/evaluation/diagnoses` | diagnosis sessions linked through `Session.target` (`task_id`), each with its frozen report |
+| `POST` | `/api/evaluation/diagnose` | start a diagnosis for `{target, force?}`; returns `session_id` / `bundle_hash` (or `duplicate` + `existing_session_id`) |
 | `POST` | `/api/evaluation/refresh` | rebuild the in-memory evaluation index |
 | `GET` | `/api/workspace/tree` | one directory level of the workspace (`path`, `ignored`) |
 | `GET` | `/api/workspace/file` | text preview of one file (`path`) |

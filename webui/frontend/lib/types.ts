@@ -592,6 +592,33 @@ export interface EvalTimelineEvent {
   queue_wait_ms: number | null;
 }
 
+export interface EvalDiagnosisReportCitation {
+  kind: "event" | "run" | "iteration";
+  value: string;
+  verified: boolean;
+}
+
+export interface EvalDiagnosisVerification {
+  citations: EvalDiagnosisReportCitation[];
+  unverified: string[];
+  missing_sections: string[];
+  order_ok: boolean;
+  complete: boolean;
+  suggestion_count: number;
+}
+
+export interface EvalDiagnosisSuggestion {
+  index: number;
+  text: string;
+}
+
+export interface EvalDiagnosisReport {
+  available: boolean;
+  markdown: string;
+  verification?: EvalDiagnosisVerification;
+  suggestions?: EvalDiagnosisSuggestion[];
+}
+
 export interface EvalDiagnosisRow {
   session_id: string;
   title: string;
@@ -604,6 +631,25 @@ export interface EvalDiagnosisRow {
   diagnosis_id: string | null;
   created_at: number;
   updated_at: number;
+  report?: EvalDiagnosisReport;
+}
+
+export type EvalDiagnosisTargetType = "task" | "run" | "cohort";
+
+export interface EvalDiagnosisTarget {
+  type: EvalDiagnosisTargetType;
+  id?: string;
+  filters?: Record<string, string>;
+}
+
+export interface EvalDiagnosisStart {
+  duplicate: boolean;
+  session_id?: string;
+  existing_session_id?: string;
+  bundle_hash: string;
+  diagnosis_id?: string | null;
+  run_id?: string;
+  bundle_path?: string | null;
 }
 
 export interface EvalTaskDetail {

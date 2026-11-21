@@ -8,7 +8,7 @@ plus one line in :func:`builtin_tool_specs`.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
 
 from agent_runtime.execution.base import ShellExecutor, Workspace
@@ -105,7 +105,9 @@ def builtin_tool_specs(executor: ShellExecutor | None = None,
 
 def create_default_registry(executor: ShellExecutor | None = None,
                             enabled: list[str] | None = None,
-                            workspace: Workspace | None = None) -> ToolRegistry:
+                            workspace: Workspace | None = None, *,
+                            extra_specs: Sequence[ToolSpec] | None = None,
+                            ) -> ToolRegistry:
     """Build the tool registry, optionally filtered by the harness gene.
 
     ``enabled=None`` keeps every built-in tool; otherwise the registry
@@ -114,13 +116,21 @@ def create_default_registry(executor: ShellExecutor | None = None,
     shared workspace; when omitted a default one is created here and
     carried on the registry, so every tool and the observation spiller
     share one instance.
+
+    ``extra_specs`` are tools that live outside the built-ins — the
+    diagnosis harness's read-only ``read_trace`` / ``search_trace`` /
+    ``read_diagnosis``.  They must be named in the harness gene to be
+    exposed, so a generic registry never learns their names.
     """
     shell_executor = executor if executor is not None else LocalShellExecutor()
     file_workspace = workspace if workspace is not None else LocalWorkspace()
     specs = builtin_tool_specs(shell_executor, file_workspace)
-    if enabled is None:
-        return ToolRegistry(specs, workspace=file_workspace)
+    extras = list(extra_specs or [])
     by_name = {spec.name: spec for spec in specs}
+    for spec in extras:
+        by_name.setdefault(spec.name, spec)
+    if enabled is None:
+        return ToolRegistry([*specs, *extras], workspace=file_workspace)
     unknown = [name for name in enabled if name not in by_name]
     if unknown:
         raise ValueError(f"Unknown tools in harness: {unknown}")

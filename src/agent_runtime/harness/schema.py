@@ -256,6 +256,11 @@ class HarnessSpec:
     parent: str | None = None
     mutation: str | None = None
     reason: str | None = None
+    # Not selectable by a user or a board task: the harness exists for one
+    # internal job (``evaluation-v1`` diagnoses runs).  Kept out of
+    # ``genes_dict()`` so flipping it cannot change ``genes_hash``: it
+    # describes who may pick the harness, not how it behaves.
+    internal: bool = False
     prompt: PromptGenome = field(default_factory=PromptGenome)
     tools: ToolGenome = field(default_factory=ToolGenome)
     control: ControlGenome = field(default_factory=ControlGenome)
@@ -295,6 +300,7 @@ class HarnessSpec:
             "parent": self.parent,
             "mutation": self.mutation,
             "reason": self.reason,
+            "internal": self.internal,
             **self.genes_dict(),
             "source": self.source,
             "genes_hash": self.genes_hash,

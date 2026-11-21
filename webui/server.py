@@ -29,6 +29,7 @@ from dotenv import load_dotenv
 
 from agent_runtime import storage
 from agent_runtime.agent import RunTrace, run_turn
+from agent_runtime.diagnosis import delete_bundle
 from agent_runtime.runtime_config import RuntimeConfig
 from agent_runtime.channels.webui import WebUIChannel
 from agent_runtime.events import EventEmitter
@@ -54,6 +55,8 @@ from .board import (
 )
 from .evaluation import (
     DEFAULT_RANGE,
+    DIAGNOSIS_ORIGINS,
+    DiagnosisPlan,
     EvaluationError,
     EvaluationNotFound,
     EvaluationStore,
@@ -186,6 +189,17 @@ class ExecutorStateRequest(BaseModel):
     paused: bool
 
 
+class DiagnoseRequest(BaseModel):
+    """A diagnosis of one task, run, or cohort.
+
+    ``target`` is validated by the evaluation store, not here: the shapes
+    differ (``id`` vs ``filters``) and the store owns the rule.
+    """
+
+    target: dict[str, Any]
+    force: bool = False
+
+
 class AgentRunner:
     """Defaults shared by every web UI session."""
 
@@ -193,8 +207,11 @@ class AgentRunner:
         self.runtime = runtime if runtime is not None else RuntimeConfig.from_env()
         self.catalog: ModelCatalog = load_model_catalog()
         self.harness: HarnessSpec = self._resolve_harness()
-        listed = list_harnesses()
-        if not any(spec.id == self.harness.id for spec in listed):
+        # ``internal: true`` harnesses (the diagnosis one) still resolve by
+        # id, but never show up in the picker or in ``/api/config``.
+        listed = list_harnesses(include_internal=False)
+        if not self.harness.internal and not any(
+                spec.id == self.harness.id for spec in listed):
             listed = [self.harness, *listed]
         self.harnesses: list[HarnessSpec] = listed
         self.stream = self.runtime.streaming
@@ -700,6 +717,47 @@ def create_app(store: SessionStore | None = None,
         return await asyncio.to_thread(
             _evaluation_call, evaluation.run_detail, run_id)
 
+    @app.post("/api/evaluation/diagnose")
+    async def evaluation_diagnose(payload: DiagnoseRequest) -> dict[str, Any]:
+        """Open a diagnosis conversation for one target (manual, one turn).
+
+        The session is an ordinary conversation (``origin=diagnosis``) so it
+        shows up in the sidebar, can be questioned further, and can be
+        re-run with another model.  Nothing here is scheduled: only this
+        call starts a diagnosis.
+        """
+        model = _diagnosis_model(runner)
+        plan = await asyncio.to_thread(_evaluation_call, evaluation.diagnose,
+                                       payload.target, model=model,
+                                       force=payload.force)
+        if plan.duplicate:
+            return {"duplicate": True,
+                    "existing_session_id": plan.existing_session_id,
+                    "bundle_hash": plan.bundle_hash,
+                    "diagnosis_id": plan.diagnosis_id}
+        session = plan.session
+        assert session is not None
+        try:
+            snapshot = _resolve_snapshot(session, runner)
+            trace, events, channel, run_id = _prepare_turn(
+                session, plan.message, snapshot, sessions)
+        except Exception:
+            # Nothing ran: a roster/model problem must not leave a session
+            # without a report (it would block ``duplicate`` checks forever)
+            # or an orphan bundle behind.
+            sessions.delete(session.id)
+            if plan.diagnosis_id:
+                delete_bundle(plan.diagnosis_id, evaluation.diagnosis_dir)
+            raise
+        task = asyncio.create_task(
+            _execute_turn(session, plan.message, snapshot, trace, events,
+                          channel, sessions))
+        session.task = task
+        return {"duplicate": False, "session_id": session.id,
+                "bundle_hash": plan.bundle_hash,
+                "diagnosis_id": plan.diagnosis_id, "run_id": run_id,
+                "bundle_path": plan.bundle_path}
+
     @app.get("/api/evaluation/diagnoses")
     async def evaluation_diagnoses(
             task_id: str | None = None) -> dict[str, Any]:
@@ -882,6 +940,10 @@ async def _execute_turn(session: Session, message: str,
             session.busy = False
             session.updated_at = time.time()
             session.task = None
+            # A diagnosis report is its first *successful* answer: later
+            # follow-up turns append more assistant segments, and a run that
+            # failed midway must not freeze a half-written one.
+            _mark_diagnosis_report(session, outcome)
             store.save(session)
 
 
@@ -906,6 +968,44 @@ async def _record_run_metrics(trace: RunTrace, outcome: TurnOutcome | None,
     except Exception:
         logger.exception("webui.run.metrics_failed session=%s run=%s",
                          session.id, trace.run_id)
+
+
+def _mark_diagnosis_report(session: Session,
+                           outcome: TurnOutcome | None) -> None:
+    """Freeze the first completed answer of a diagnosis session.
+
+    Only a completed turn with non-empty text can be the report: a run that
+    errored, was cancelled, or streamed a preamble before failing leaves an
+    unfrozen session that can be diagnosed again.  ``mark_report_segment``
+    ignores later calls, so a follow-up cannot replace the report.
+    """
+    if outcome is None or outcome.status != "completed":
+        return
+    if session.origin not in DIAGNOSIS_ORIGINS or session.report_segment_id:
+        return
+    for segment in reversed(session.segments):
+        if segment.get("type") != "assistant":
+            continue
+        if not str(segment.get("content") or "").strip():
+            continue
+        session.mark_report_segment(str(segment.get("id") or ""))
+        return
+
+
+def _diagnosis_model(runner: AgentRunner) -> str:
+    """Catalog id a diagnosis runs on (``AGENT_RUNTIME_DIAGNOSIS_MODEL``).
+
+    The variable holds a catalog ``id``, not a wire model name: the entry
+    carries its own endpoint and key, so a diagnosis can be pointed at a
+    stronger model than the default without duplicating secrets.
+    """
+    raw = (os.getenv("AGENT_RUNTIME_DIAGNOSIS_MODEL") or "").strip()
+    if not raw:
+        return runner.catalog.default
+    try:
+        return runner.catalog.require(raw).id
+    except ModelCatalogError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _metrics_status(outcome: TurnOutcome | None) -> str:
@@ -980,9 +1080,15 @@ def _require_model(catalog: ModelCatalog, model_id: str) -> None:
 
 def _require_harness(harness_id: str) -> HarnessSpec:
     try:
-        return resolve_harness(harness_id)
+        spec = resolve_harness(harness_id)
     except HarnessError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if spec.internal:
+        # The diagnosis harness is not a choice a user or a board task
+        # makes; a diagnosis opens it through /api/evaluation/diagnose.
+        raise HTTPException(status_code=400,
+                            detail=f"harness {spec.id!r} is not selectable")
+    return spec
 
 
 def _resolve_snapshot(session: Session, runner: AgentRunner) -> TurnSnapshot:

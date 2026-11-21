@@ -292,3 +292,100 @@ runtime_home/                     # AGENT_RUNTIME_HOME，默认 workspace/
   超出标 `truncated`，并按 `(mtime, size)` 缓存。
 - 诊断会话只从 `SessionStore` 的 `origin`/`target` 建索引（`/diagnoses`），
   不写入 `board_events.jsonl`。
+
+## 9. 诊断：bundle、只读工具与 `/diagnose`（Phase 4）
+
+实现在 `src/agent_runtime/diagnosis.py`（bundle + 只读工具 + 报告解析）与
+`webui/evaluation.py`（`EvaluationStore.diagnose` / `diagnoses`）、`webui/server.py`
+（`POST /api/evaluation/diagnose` 起 turn）。
+
+### 9.1 存储与目标
+
+```
+<runtime_home>/diagnosis/<diagnosis_id>/
+├── bundle.json     # 结构化证据，≤ 1 MB
+└── summary.md      # 指标口径 + 聚合结果，便于模型快速定位
+```
+
+- `diagnosis_id` 形如 `diag-<hex12>`，只接受 `[A-Za-z0-9._-]{1,64}`；路径不能穿越。
+- 产物属 `storage.runtime_home()`（`AGENT_RUNTIME_HOME`），不是 sandbox 根：模型通过
+  `read_diagnosis` 读，不靠 `read_file`。
+- 目标三选一：`{"type":"task","id":...}`、`{"type":"run","id":...}`、
+  `{"type":"cohort","filters":{range,status,harness,model,origin}}`；未知键被丢弃。
+
+### 9.2 bundle 结构
+
+`target` / `task`（或 `cases`）/ `runs` / `environment` / `human_feedback` /
+`aggregate` / `generated_at`，与 `docs/harness-evaluation.md` §5.2 一致，补充：
+
+- 每个 run 带 `metrics`（`status` / `tokens` / `tool_calls` / `tool_errors` /
+  `ttft_ms` / `policy_blocks` / `edited_files` / `reworked`…）、`failure`、
+  `iterations`（每次迭代的 `llm` 汇总、`tools[]`、`context[]`，**每条带 `event_id`**）、
+  `tool_errors`、`context_events` 与 `trace`（`available` / `events` / `bytes` / `truncated`）。
+- `environment.edited_files` 只来自成功的编辑类工具调用；`diff_summary` 保持 `null`
+  （共享 workspace 的后验 `git diff` 会串味，见 9.2）。
+- `human_feedback.verdict` 取 board 现状：`rework` / `accepted` / 其他状态名。
+- `truncated_input=true` 时按 **失败 run > 返工 run > 通过 run** 依次丢细节；
+  通过 run 最先失去 `iterations`。`bundle_hash` 是证据指纹，**不含 `generated_at`**，
+  所以同一份证据隔几分钟再诊断仍命中 `duplicate`。截断标记一旦置位就不再被清除
+  （`write_bundle` 会二次压缩，清除会让落盘证据和 `session.bundle_hash` 各说各话），
+  字节预算按落盘格式（`indent=2`）计算。
+- cohort 的 `cases` 最多 20 张紧凑卡片（`task_id` / `status` / `runs` / `metrics` /
+  `top_signal` / `run_ids` / `evidence[]`），不塞完整 trace；`evidence` 里是每个
+  run 的 `run_id` + 可引用的 `event_id`（从 trace 抽取）。`filters` 支持
+  `range` / `status` / `harness` / `model` / `origin`，后两者口径与任务表一致。
+
+### 9.3 只读工具
+
+`harnesses/evaluation-v1.yaml` 声明 `internal: true`，只在该 harness 下注入
+（`webui/turn_context._turn_tools`），通用 registry 不认识这些名字：
+
+| 工具 | 行为 |
+|---|---|
+| `read_diagnosis(diagnosis_id, file, offset, limit)` | 只读 `bundle.json` / `summary.md`，单次 ≤ 20 000 字符 |
+| `read_trace(run_id, event_type?, event_id?, iteration?, limit?)` | 按条件抽事件，`data` 截断到 600 字符 |
+| `search_trace(run_id, pattern, limit?)` | 大小写不敏感子串搜索，返回 `event_id` + 上下文片段 |
+
+三者都直读 `storage`，绕开 sandbox（`AGENT_RUNTIME_WORKSPACE` 指到子目录时也读得到）。
+
+### 9.4 `/diagnose` 契约
+
+```
+POST /api/evaluation/diagnose  {"target": {...}, "force": false}
+→ {"duplicate": false, "session_id", "bundle_hash", "diagnosis_id", "run_id", "bundle_path"}
+→ {"duplicate": true,  "existing_session_id", "bundle_hash", "diagnosis_id"}
+```
+
+- `force=false` 且同 `target + bundle_hash` 已有**正在运行或已有报告**的会话：不新建，
+  返回 `existing_session_id`。失败/取消且没有报告的会话不参与去重，否则这份证据
+  再也诊断不了。
+- 新建时顺序固定：写 bundle → 建会话（`harness=evaluation-v1`、`origin=diagnosis`、
+  `target`、`diagnosis_id`、`bundle_hash`）→ 发首条消息（短指令 + `diagnosis_id`）→
+  立即返回 `session_id`。turn **正常结束**后才把最后一个非空 assistant segment id
+  写进 `report_segment_id`（仅当为 `None`）；报错/取消不冻结残缺正文，追问不覆盖它。
+- 模型用 `AGENT_RUNTIME_DIAGNOSIS_MODEL`（catalog `id`，`catalog.require()` 解析），
+  未设置时用默认模型；模型不可用返回 400/503，此时已建的会话与 bundle 一并清理。
+- 诊断不写 `board_events.jsonl`，不进 TSR 分母；trace 的 `origin` 从 `session.origin`
+  继承，所以追问 run 仍按 `diagnosis` 切片。
+
+### 9.5 报告解析与证据标注（best-effort）
+
+`diagnosis.parse_report` 按四个二级标题切段并抽取 `Top 5` 的编号条目
+（条目后的续行并入同一条）；`diagnosis.verify_report` 校验 `evt-…` / `run-…`
+引用。校验范围是 **bundle + 相关 trace**：bundle 里找不到的 `event_id` 会再去
+bundle 涉及（以及报告正文引用）的 run trace 里核对，只在两处都不存在时才标
+`verified: false`——模型被要求用 `read_trace` 核实，只查 bundle 会误伤真实引用。
+
+`GET /api/evaluation/diagnoses` 的每行带 `report`：
+
+```json
+{"available": true, "markdown": "## 结论\n…",
+ "verification": {"citations": [{"kind": "event", "value": "evt-…", "verified": false}],
+                  "unverified": ["evt-…"], "missing_sections": [], "order_ok": true,
+                  "complete": true, "suggestion_count": 5},
+ "suggestions": [{"index": 1, "text": "**动作** — 影响指标：…"}]}
+```
+
+标注只影响展示：标题缺失、顺序错、引用找不到都**不拒绝**诊断，报告原样渲染。
+前端 `MarkdownAnswer` 分段渲染并列出未验证引用，第 4 节直接渲染
+`SuggestionList`（父组件不再重复渲染一遍）；不足 5 条时提示实际条数，不补造。

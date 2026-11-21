@@ -7,6 +7,8 @@ import type {
   BoardOverview,
   EvalBenchmarks,
   EvalDiagnosisRow,
+  EvalDiagnosisStart,
+  EvalDiagnosisTarget,
   EvalOverview,
   EvalRunDetail,
   EvalTaskDetail,
@@ -134,6 +136,9 @@ export interface EvaluationState {
   runLoading: boolean;
   openRun: (runId: string) => Promise<void>;
   closeRun: () => void;
+  /** Start a diagnosis; ``true`` while a manual request is in flight. */
+  diagnosing: boolean;
+  startDiagnosis: (target: EvalDiagnosisTarget, force?: boolean) => Promise<EvalDiagnosisStart>;
 }
 
 /**
@@ -163,11 +168,15 @@ export function useEvaluation(): EvaluationState {
   const [run, setRun] = useState<EvalRunDetail | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
   const [runLoading, setRunLoading] = useState(false);
+  const [diagnosing, setDiagnosing] = useState(false);
 
   const mainToken = useRef(0);
   const taskToken = useRef(0);
   const detailToken = useRef(0);
   const runToken = useRef(0);
+  // Which task the drawer shows now, readable from callbacks without
+  // re-creating them on every selection.
+  const detailIdRef = useRef<string | null>(null);
 
   const setFilters = useCallback((patch: Partial<EvalFilters>) => {
     setFiltersState((current) => ({ ...current, ...patch }));
@@ -296,6 +305,7 @@ export function useEvaluation(): EvaluationState {
   const openTask = useCallback(
     async (taskId: string, initialRunId?: string) => {
       const token = ++detailToken.current;
+      detailIdRef.current = taskId;
       setDetailId(taskId);
       setDetailLoading(true);
       setDetail(null);
@@ -318,11 +328,49 @@ export function useEvaluation(): EvaluationState {
 
   const closeTask = useCallback(() => {
     detailToken.current += 1;
+    detailIdRef.current = null;
     setDetailId(null);
     setDetail(null);
     setDetailLoading(false);
     resetRun();
   }, [resetRun]);
+
+  // Re-read the open drawer without closing it or dropping its run digest:
+  // a diagnosis started from here must show up in its history at once.
+  const refreshDetail = useCallback(async () => {
+    const open = detailIdRef.current;
+    if (!open) return;
+    const token = ++detailToken.current;
+    try {
+      const next = await api<EvalTaskDetail>(
+        `/api/evaluation/tasks/${encodeURIComponent(open)}`,
+      );
+      if (token !== detailToken.current || detailIdRef.current !== open) return;
+      setDetail(next);
+    } catch {
+      // Keep what the drawer already shows; the next open re-reads it.
+    }
+  }, []);
+
+  const startDiagnosis = useCallback(
+    async (target: EvalDiagnosisTarget, force = false) => {
+      setDiagnosing(true);
+      try {
+        const result = await api<EvalDiagnosisStart>(
+          "/api/evaluation/diagnose",
+          { method: "POST", body: JSON.stringify({ target, force }) },
+        );
+        // A new session (or a reused one) changes the diagnosis lists and
+        // the task drawer; both must reflect it immediately.
+        setSeq((value) => value + 1);
+        await refreshDetail();
+        return result;
+      } finally {
+        setDiagnosing(false);
+      }
+    },
+    [refreshDetail],
+  );
 
   return {
     filters,
@@ -348,5 +396,7 @@ export function useEvaluation(): EvaluationState {
     runLoading,
     openRun,
     closeRun,
+    diagnosing,
+    startDiagnosis,
   };
 }

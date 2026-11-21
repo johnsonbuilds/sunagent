@@ -13,6 +13,7 @@ under one root:
       sessions/   one JSON document per browser conversation
       traces/     one JSONL file per agent turn
       metrics/    one JSONL index of run-level measurements
+      diagnosis/  one evidence bundle per diagnosis (bundle.json + summary.md)
       memory/     persistent cross-session memory (AGENT_RUNTIME_MEMORY)
       board.json  the single web UI task board
       board_events.jsonl  board lifecycle events (append-only history)
@@ -92,6 +93,16 @@ def metrics_dir() -> Path:
     return runtime_home() / "metrics"
 
 
+def diagnosis_dir() -> Path:
+    """Evidence bundles written for model-driven diagnosis.
+
+    These live in the runtime home, not in the agent sandbox: the
+    diagnosis tools read them directly, and a sandbox narrowed to a
+    subdirectory must not be able to hide or rewrite them.
+    """
+    return runtime_home() / "diagnosis"
+
+
 def metrics_path() -> Path:
     """The append-only index of one metrics record per run."""
     return metrics_dir() / "runs.jsonl"
@@ -99,6 +110,7 @@ def metrics_path() -> Path:
 
 __all__ = [
     "DEFAULT_HOME_DIRNAME", "runtime_home",
-    "board_path", "board_events_path", "metrics_dir", "metrics_path",
+    "board_path", "board_events_path", "diagnosis_dir", "metrics_dir",
+    "metrics_path",
     "sessions_dir", "trace_path", "traces_dir",
 ]

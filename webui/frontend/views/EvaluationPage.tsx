@@ -35,7 +35,11 @@ import { useSessions } from "@/lib/stores/sessions";
 import { useRuntimeConfig } from "@/lib/stores/runtime-config";
 import { useToast } from "@/lib/stores/toast";
 import { useEvaluation, useStickyOptions } from "@/lib/useEvaluation";
-import type { EnsureSessionResult, EvalTab } from "@/lib/types";
+import type {
+  EnsureSessionResult,
+  EvalDiagnosisTarget,
+  EvalTab,
+} from "@/lib/types";
 
 const TAB_LABELS: Record<EvalTab, MessageKey> = {
   overview: "evalTabOverview",
@@ -91,6 +95,37 @@ export default function EvaluationPage() {
         );
       });
   };
+
+  const startDiagnosis = (target: EvalDiagnosisTarget, force = false) => {
+    // Manual only: nothing on this page starts a diagnosis by itself.
+    void ev
+      .startDiagnosis(target, force)
+      .then(async (result) => {
+        await refreshSessions();
+        if (result.duplicate && result.existing_session_id) {
+          // The toast says the existing session was opened; open it.
+          showToast(t("evalDiagnosisDuplicate"), "info");
+          openConversation(result.existing_session_id);
+          return;
+        }
+        showToast(t("evalDiagnosisStarted"), "success");
+      })
+      .catch((failure: unknown) => {
+        showToast(
+          `${t("evalDiagnosisFailed")} ` +
+            (failure instanceof Error ? failure.message : String(failure)),
+          "error",
+        );
+      });
+  };
+
+  const cohortFilters = useMemo(() => {
+    const filters: Record<string, string> = { range: ev.filters.range };
+    if (ev.filters.origin) filters.origin = ev.filters.origin;
+    if (ev.filters.harness) filters.harness = ev.filters.harness;
+    if (ev.filters.model) filters.model = ev.filters.model;
+    return filters;
+  }, [ev.filters]);
 
   const bestAccuracy = useMemo(() => {
     const values = Object.values(ev.benchmarks?.latest_accuracy ?? {});
@@ -684,6 +719,9 @@ export default function EvaluationPage() {
           <Section title={t("evalTabDiagnosis")} hint={t("evalDiagnosisHint")}>
             <DiagnosisPanel
               rows={ev.diagnoses}
+              busy={ev.diagnosing}
+              cohortFilters={cohortFilters}
+              onStart={startDiagnosis}
               onOpenConversation={openConversation}
             />
           </Section>
@@ -697,11 +735,13 @@ export default function EvaluationPage() {
         run={ev.run}
         runId={ev.runId}
         runLoading={ev.runLoading}
+        diagnosing={ev.diagnosing}
         onClose={ev.closeTask}
         onOpenRun={(runId) => void ev.openRun(runId)}
         onCloseRun={ev.closeRun}
         onOpenConversation={openTaskConversation}
         onOpenConversationById={openConversation}
+        onStartDiagnosis={startDiagnosis}
       />
     </div>
   );

@@ -13,6 +13,7 @@ from dataclasses import dataclass, replace
 
 from agent_runtime.agent.chat import ChatModel
 from agent_runtime.agent.turn_factory import SummarizerFactory
+from agent_runtime.diagnosis import EVALUATION_HARNESS_ID, diagnosis_tool_specs
 from agent_runtime.harness import HarnessSpec, resolve_harness
 from agent_runtime.model_catalog import ModelCatalog, ModelEntry
 from agent_runtime.providers import OpenAICompatibleLLM
@@ -43,6 +44,19 @@ def _summarizer_factory(runtime: RuntimeConfig) -> SummarizerFactory:
     return _build
 
 
+def _turn_tools(harness: HarnessSpec) -> ToolExecutor:
+    """Tools of one harness, plus the read-only diagnosis tools.
+
+    The extra specs are named in ``harnesses/evaluation-v1.yaml``; a
+    generic harness never advertises ``read_trace`` / ``search_trace`` /
+    ``read_diagnosis``, so a task agent cannot read the recorded evidence.
+    """
+    extra = (diagnosis_tool_specs()
+             if harness.id == EVALUATION_HARNESS_ID else None)
+    return create_default_registry(enabled=list(harness.tools.enabled),
+                                   extra_specs=extra)
+
+
 def resolve_turn(*, catalog: ModelCatalog, model_id: str | None,
                  harness_id: str | None,
                  base_runtime: RuntimeConfig) -> TurnSnapshot:
@@ -56,7 +70,7 @@ def resolve_turn(*, catalog: ModelCatalog, model_id: str | None,
         runtime=runtime,
         harness=harness,
         llm=OpenAICompatibleLLM(config=runtime),
-        tools=create_default_registry(enabled=list(harness.tools.enabled)),
+        tools=_turn_tools(harness),
         stream=runtime.streaming,
         summarizer_factory=_summarizer_factory(runtime),
     )

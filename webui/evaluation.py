@@ -48,13 +48,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from threading import RLock
 from typing import Any, Iterable, Mapping, Sequence
+from uuid import uuid4
 
 from agent_runtime import storage
+from agent_runtime import diagnosis as diagnosis_mod
+from agent_runtime.diagnosis import EVALUATION_HARNESS_ID
 from agent_runtime.evaluation import DEFAULT_RECORDS_DIR, load_records
 from agent_runtime.metrics import ORIGINS, RunMetrics
 
 from .board import BoardStore
-from .sessions import SessionStore
+from .sessions import Session, SessionStore
 
 
 logger = logging.getLogger(__name__)
@@ -102,6 +105,36 @@ _MAX_PAGE_SIZE = 200
 _MAX_TOOL_ROWS = 50
 _MAX_DIGEST_BYTES = 32 * 1024 * 1024
 _DIGEST_CACHE_ENTRIES = 256
+# Event ids read from a trace for citation checks: one report cites a handful,
+# and a cohort bundle cites two runs per case.
+_MAX_TRACE_EVENT_IDS = 50_000
+_TRACE_ID_CACHE_ENTRIES = 32
+# Traces scanned to verify one report's citations; a bundle names at most a
+# handful of runs, and a cohort report rarely cites more.
+_MAX_CITATION_TRACES = 8
+_MAX_REPORT_CHARS = 40_000
+
+# Targets a diagnosis can be started for; task and run name one case, a
+# cohort names a filter over the board (docs/evaluation.md §7).
+DIAGNOSIS_TARGET_TYPES: tuple[str, ...] = ("task", "run", "cohort")
+
+
+@dataclass(frozen=True)
+class DiagnosisPlan:
+    """What the API needs to start a diagnosis turn.
+
+    ``duplicate`` plans carry no session: the same target produced the same
+    evidence before, so the caller reopens the existing conversation
+    instead of paying for a second run.
+    """
+
+    bundle_hash: str
+    diagnosis_id: str | None = None
+    session: Session | None = None
+    message: str = ""
+    bundle_path: str | None = None
+    duplicate: bool = False
+    existing_session_id: str | None = None
 
 
 def _percentile_sorted(ordered: Sequence[float],
@@ -450,11 +483,13 @@ class EvaluationStore:
             self._runs_path = storage.metrics_path()
             self._events_path = storage.board_events_path()
             self._traces_dir = storage.traces_dir()
+            self._diagnosis_dir = storage.diagnosis_dir()
         else:
             base = Path(root)
             self._runs_path = base / "metrics" / "runs.jsonl"
             self._events_path = base / "board_events.jsonl"
             self._traces_dir = base / "traces"
+            self._diagnosis_dir = base / "diagnosis"
         self._records_dir = (Path(records_dir) if records_dir is not None
                              else Path(DEFAULT_RECORDS_DIR))
         self._lock = RLock()
@@ -472,6 +507,8 @@ class EvaluationStore:
         self._records: list[dict[str, Any]] = []
         self._records_signature: tuple[Any, ...] | None = None
         self._digests: dict[str, tuple[tuple[Any, ...], dict[str, Any]]] = {}
+        # Event ids per trace, for report citation checks (bounded cache).
+        self._trace_ids: dict[str, tuple[tuple[Any, ...], set[str]]] = {}
         self._skipped_lines = 0
         self.last_refresh_at = 0.0
 
@@ -484,6 +521,11 @@ class EvaluationStore:
     @property
     def events_path(self) -> Path:
         return self._events_path
+
+    @property
+    def diagnosis_dir(self) -> Path:
+        """Where this store reads and writes diagnosis bundles."""
+        return self._diagnosis_dir
 
     @property
     def run_count(self) -> int:
@@ -591,7 +633,7 @@ class EvaluationStore:
         """Index diagnosis sessions (``origin`` + ``target``)."""
         sessions = self._sessions.list()
         signature = tuple(
-            (session.id, session.origin, session.updated_at,
+            (session.id, session.origin, session.updated_at, session.busy,
              session.report_segment_id, json.dumps(session.target,
                                                   sort_keys=True, default=str))
             for session in sessions
@@ -613,6 +655,7 @@ class EvaluationStore:
                 "target_type": _text(target.get("type")),
                 "target_id": _text(target.get("id")),
                 "report_segment_id": session.report_segment_id,
+                "busy": bool(session.busy),
                 "bundle_hash": session.bundle_hash,
                 "diagnosis_id": session.diagnosis_id,
                 "created_at": session.created_at,
@@ -1243,7 +1286,8 @@ class EvaluationStore:
                 "updated_at": fact.updated_at,
                 "runs": runs,
                 "timeline": timeline,
-                "diagnoses": self._diagnoses_by_target.get(task_id, []),
+                "diagnoses": self._decorate_diagnoses(
+                    self._diagnoses_by_target.get(task_id, [])),
                 "generated_at": time.time(),
             }
 
@@ -1484,14 +1528,388 @@ class EvaluationStore:
         self._records_signature = signature
         return self._records
 
+    # -- diagnosis -------------------------------------------------------
+
+    def diagnose(self, target: Mapping[str, Any], *, model: str | None,
+                 force: bool = False,
+                 now: float | None = None) -> DiagnosisPlan:
+        """Build the evidence bundle and open a diagnosis session.
+
+        Never starts the turn itself: a diagnosis is one ordinary run, so
+        the caller owns the turn machinery.  ``force=False`` reuses an
+        existing session when the target produced the same evidence
+        (same ``bundle_hash``).
+        """
+        normalized = _normalize_target(target)
+        with self._lock:
+            self.refresh()
+            bundle = self._diagnosis_bundle(normalized, now=now)
+            compacted = diagnosis_mod.compact_bundle(bundle)
+            fingerprint = diagnosis_mod.compute_hash(compacted)
+            if not force:
+                existing = self._existing_diagnosis(normalized, fingerprint)
+                if existing is not None:
+                    return DiagnosisPlan(
+                        bundle_hash=fingerprint, duplicate=True,
+                        existing_session_id=existing["session_id"],
+                        diagnosis_id=existing.get("diagnosis_id"))
+            diagnosis_id = f"diag-{uuid4().hex[:12]}"
+            written = diagnosis_mod.write_bundle(
+                compacted, diagnosis_id, self._diagnosis_dir)
+            session = self._sessions.create(
+                title=_diagnosis_title(normalized),
+                model=model,
+                harness=EVALUATION_HARNESS_ID,
+                origin="diagnosis",
+                target=normalized,
+                diagnosis_id=diagnosis_id,
+                bundle_hash=written["bundle_hash"],
+            )
+            self._sessions.save(session)
+            self._refresh_sessions(force=True)
+        return DiagnosisPlan(
+            bundle_hash=written["bundle_hash"], diagnosis_id=diagnosis_id,
+            session=session, bundle_path=written["path"],
+            message=diagnosis_mod.first_message(diagnosis_id, compacted))
+
+    def _existing_diagnosis(self, target: Mapping[str, Any],
+                            fingerprint: str) -> dict[str, Any] | None:
+        """An earlier session over the same evidence that is worth reusing.
+
+        A session that errored or was cancelled before producing a report
+        left the same evidence undiagnosed: reusing it would make the
+        target undiagnosable, since only a report answers the question.
+        """
+        for row in self._diagnosis_sessions:
+            if row.get("bundle_hash") != fingerprint:
+                continue
+            if _target_key(row.get("target")) != _target_key(target):
+                continue
+            if not (row.get("busy") or row.get("report_segment_id")):
+                continue
+            return row
+        return None
+
+    def _diagnosis_bundle(self, target: Mapping[str, Any], *,
+                          now: float | None = None) -> dict[str, Any]:
+        """The evidence document of one target (docs/evaluation.md §7)."""
+        moment = now if now is not None else time.time()
+        kind = target["type"]
+        if kind == "run":
+            run_id = str(target["id"])
+            record = self._runs_by_id.get(run_id)
+            if record is None:
+                raise EvaluationNotFound(f"run not found: {run_id}")
+            fact = self._fact_for_run(run_id)
+            run_row = next((run for run in (fact.runs if fact else [])
+                            if run.get("run_id") == run_id), {"run_id": run_id})
+            runs = [self._run_evidence(run_row, fact)]
+            return diagnosis_mod.build_bundle(
+                target=target,
+                task=self._task_section(fact),
+                runs=runs,
+                environment=_environment(runs),
+                human_feedback=_human_feedback(fact),
+                aggregate=self._aggregate_section(runs, facts=[fact] if fact else []),
+                generated_at=moment)
+        if kind == "task":
+            task_id = str(target["id"])
+            fact = self._fact(task_id)
+            runs = [self._run_evidence(run, fact) for run in fact.runs]
+            # Failure first: a truncated bundle must keep what went wrong.
+            runs.sort(key=lambda row: 0 if row.get("failure") else 1)
+            return diagnosis_mod.build_bundle(
+                target=target,
+                task=self._task_section(fact),
+                runs=runs,
+                environment=_environment(runs),
+                human_feedback=_human_feedback(fact),
+                aggregate=self._aggregate_section(runs, facts=[fact]),
+                generated_at=moment)
+        return self._cohort_bundle(target, now=moment)
+
+    def _cohort_bundle(self, target: Mapping[str, Any], *,
+                       now: float) -> dict[str, Any]:
+        """One compact card per task, never the traces of every case."""
+        filters = target.get("filters") if isinstance(target.get("filters"),
+                                                       Mapping) else {}
+        _, window = parse_range(filters.get("range"))
+        cutoff = now - window if window is not None else None
+        status = _text(filters.get("status"))
+        harness = _text(filters.get("harness"))
+        model = _text(filters.get("model"))
+        origin = _text(filters.get("origin"))
+        scope = self._run_scope([origin] if origin else None)
+        facts = self._task_facts()
+        selected = [fact for fact in facts
+                    if (cutoff is None or fact.updated_at >= cutoff)
+                    and (status is None or fact.status == status)
+                    and (harness is None or fact.harness == harness)
+                    and (model is None or fact.model == model)
+                    # An explicit origin names the runs at fault; a card no
+                    # such run ever worked on is not part of the cohort.
+                    and (scope is None or self._task_metrics(fact, scope))]
+        cases = [self._case_card(fact) for fact in selected
+                 if fact.executed or fact.runs]
+        cases.sort(key=lambda case: (case.get("tsr") is not None,
+                                     case.get("tsr") or 0.0))
+        cases = cases[:diagnosis_mod.MAX_COHORT_CASES]
+        executed = [fact for fact in selected if fact.executed]
+        accepted = [fact for fact in executed if fact.done]
+        reviewed = [fact for fact in selected if fact.reached_review]
+        reworked = [fact for fact in reviewed if fact.reworked]
+        signals: Counter[str] = Counter()
+        for case in cases:
+            signal = _text(case.get("top_signal"))
+            if signal:
+                signals[signal] += 1
+        return diagnosis_mod.build_bundle(
+            target=target,
+            cases=cases,
+            aggregate={
+                "cohort_size": len(cases),
+                "selected_tasks": len(selected),
+                "tsr": _ratio(len(accepted), len(executed)),
+                "rework_rate": _ratio(len(reworked), len(reviewed)),
+                "top_failure_signals": [
+                    {"signal": signal, "count": count}
+                    for signal, count in signals.most_common(10)],
+            },
+            generated_at=now)
+
+    def _case_card(self, fact: TaskFacts) -> dict[str, Any]:
+        metrics = self._fact_metrics(fact)
+        runs = [row for row in fact.runs if row.get("run_id") in
+                self._runs_by_id]
+        errors: Counter[str] = Counter()
+        for record in metrics:
+            for kind, count in record.error_kinds.items():
+                errors[kind] += count
+        tool_errors = sum(record.tool_errors for record in metrics)
+        return {
+            "task_id": fact.task_id,
+            "title": fact.title,
+            "status": fact.status,
+            "harness": fact.harness,
+            "model": fact.model,
+            "runs": fact.run_count,
+            "tsr": 1.0 if fact.done and fact.executed else 0.0,
+            "rework_count": fact.rework_count,
+            "metrics": {
+                "tsr": 1.0 if fact.done and fact.executed else 0.0,
+                "tokens": sum(record.tokens.total for record in metrics),
+                "tool_errors": tool_errors,
+                "iterations": sum(record.iterations for record in metrics),
+            },
+            "top_signal": (("%s (x%d)" % errors.most_common(1)[0])
+                           if errors else fact.last_error),
+            "run_ids": [str(run.get("run_id") or "") for run in runs[-2:]],
+            # The ids a report is allowed to cite: a cohort bundle carries no
+            # per-iteration detail, so only the trace knows them.
+            "evidence": [self._trace_evidence(run) for run in runs[-2:]],
+        }
+
+    def _trace_evidence(self, run_row: Mapping[str, Any]) -> dict[str, Any]:
+        """One run's citable event ids, read from its trace."""
+        run_id = str(run_row.get("run_id") or "")
+        return {"run_id": run_id,
+                "event_ids": sorted(self._trace_event_ids(run_id))}
+
+    def _trace_event_ids(self, run_id: str, *,
+                         wanted: set[str] | None = None,
+                         max_events: int = _MAX_TRACE_EVENT_IDS) -> set[str]:
+        """``event_id``s of one trace, cached on ``(mtime, size)``.
+
+        ``wanted`` stops the scan early (a report usually cites a handful
+        of ids); a partial scan is not cached, so the next call is honest.
+        """
+        path = self._trace_path(run_id)
+        if path is None:
+            return set()
+        try:
+            stat = path.stat()
+        except OSError:
+            return set()
+        key = (str(path), stat.st_mtime_ns, stat.st_size)
+        cached = self._trace_ids.get(run_id)
+        if cached is not None and cached[0] == key:
+            if wanted is None or wanted <= cached[1]:
+                return set(cached[1])
+        found: set[str] = set()
+        complete = True
+        for event in diagnosis_mod.iter_trace(path):
+            event_id = event.get("event_id")
+            if isinstance(event_id, str) and event_id:
+                found.add(event_id)
+            if len(found) >= max_events or (wanted is not None
+                                            and wanted <= found):
+                complete = False
+                break
+        if complete:
+            if len(self._trace_ids) >= _TRACE_ID_CACHE_ENTRIES:
+                self._trace_ids.pop(next(iter(self._trace_ids)))
+            self._trace_ids[run_id] = (key, found)
+        return set(found)
+
+    def _run_evidence(self, run_row: Mapping[str, Any],
+                      fact: TaskFacts | None) -> dict[str, Any]:
+        """One run's metrics plus per-iteration evidence with event ids."""
+        run_id = str(run_row.get("run_id") or "")
+        record = self._runs_by_id.get(run_id)
+        evidence = diagnosis_mod.collect_run_evidence(
+            run_id, trace_path=self._trace_path(run_id))
+        failure = evidence.pop("failure", None)
+        edited = evidence.pop("edited_files", [])
+        metrics = {
+            "status": (record.status if record else run_row.get("status")),
+            "iterations": record.iterations if record else None,
+            "tokens": record.tokens.total if record else 0,
+            "prompt_tokens": record.tokens.prompt if record else 0,
+            "completion_tokens": record.tokens.completion if record else 0,
+            "cached_tokens": record.tokens.cached if record else 0,
+            "tool_calls": record.tool_calls if record else 0,
+            "tool_errors": record.tool_errors if record else 0,
+            "error_kinds": dict(record.error_kinds) if record else {},
+            "ttft_ms": record.ttft_ms if record else None,
+            "duration_ms": record.duration_ms if record else None,
+            "policy_blocks": record.policy_blocks if record else 0,
+            "summary_invalid": record.summary_invalid if record else 0,
+            "summary_attempts": record.summary_attempts if record else 0,
+            "has_answer": record.has_answer if record else False,
+            "edited_files": list(record.edited_files) if record else list(edited),
+            "reworked": bool(fact.reworked) if fact is not None else False,
+            "tsr": (1.0 if fact is not None and fact.done and fact.executed
+                    else 0.0),
+        }
+        return {
+            "run_id": run_id,
+            "harness": record.harness_id if record else None,
+            "model": record.model if record else None,
+            "status": metrics["status"],
+            "metrics": metrics,
+            "failure": failure or (record.error if record else None),
+            "response_chars": len(str(run_row.get("response") or "")),
+            "iterations": evidence.get("iterations") or [],
+            "tool_errors": evidence.get("tool_errors") or [],
+            "context_events": evidence.get("context_events") or [],
+            "trace": {"available": evidence.get("trace_available"),
+                      "events": evidence.get("events"),
+                      "bytes": evidence.get("trace_bytes"),
+                      "truncated": evidence.get("truncated")},
+        }
+
+    def _task_section(self, fact: TaskFacts | None) -> dict[str, Any] | None:
+        if fact is None:
+            return None
+        record = self._board.get(fact.task_id)
+        comments = [str(item.get("body") or "")[:500]
+                    for item in (record.comments if record is not None else [])
+                    if isinstance(item, Mapping)]
+        return {
+            "task_id": fact.task_id,
+            "title": fact.title,
+            "description": str(record.description if record else "")[:4000],
+            "status": fact.status,
+            "harness": fact.harness,
+            "model": fact.model,
+            "expects_artifact": fact.expects_artifact,
+            "tags": [str(tag) for tag in (record.tags if record else [])],
+            "comments": comments[-5:],
+            "runs": fact.run_count,
+            "rework_count": fact.rework_count,
+            "last_error": fact.last_error,
+        }
+
+    def _aggregate_section(self, runs: Sequence[Mapping[str, Any]], *,
+                           facts: Sequence[TaskFacts]) -> dict[str, Any]:
+        metrics = [run.get("metrics") or {} for run in runs]
+        signals: Counter[str] = Counter()
+        for entry in metrics:
+            for kind, count in (entry.get("error_kinds") or {}).items():
+                signals[str(kind)] += int(count)
+            failure = entry.get("status")
+            if failure == "error":
+                signals["run_error"] += 1
+            elif failure == "cancelled":
+                signals["cancelled"] += 1
+        executed = [fact for fact in facts if fact.executed]
+        accepted = [fact for fact in executed if fact.done]
+        return {
+            "runs": len(runs),
+            "tsr": (1.0 if facts and len(accepted) == len(executed) and executed
+                    else (0.0 if facts else None)),
+            "rework_count": sum(fact.rework_count for fact in facts),
+            "tokens": sum(int((entry.get("tokens") or 0))
+                          for entry in metrics),
+            "tool_errors": sum(int(entry.get("tool_errors") or 0)
+                               for entry in metrics),
+            "top_failure_signals": [{"signal": signal, "count": count}
+                                    for signal, count in signals.most_common(10)],
+        }
+
+    def _fact(self, task_id: str) -> TaskFacts:
+        fact = next((item for item in self._task_facts()
+                     if item.task_id == task_id), None)
+        if fact is None:
+            raise EvaluationNotFound(f"task not found: {task_id}")
+        return fact
+
+    def _fact_for_run(self, run_id: str) -> TaskFacts | None:
+        for fact in self._task_facts():
+            if any(run.get("run_id") == run_id for run in fact.runs):
+                return fact
+        return None
+
+    def _decorate_diagnoses(self,
+                            rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+        """Attach the frozen report and its best-effort verification."""
+        return [{**row, "report": self._report_payload(row)} for row in rows]
+
+    def _report_payload(self, row: Mapping[str, Any]) -> dict[str, Any]:
+        session = self._sessions.get(str(row.get("session_id") or ""))
+        if session is None:
+            return {"available": False, "markdown": ""}
+        markdown = ""
+        segment_id = session.report_segment_id
+        if segment_id:
+            for segment in session.segments:
+                if segment.get("id") == segment_id:
+                    markdown = str(segment.get("content") or "")
+                    break
+        parsed = diagnosis_mod.parse_report(markdown)
+        bundle = (diagnosis_mod.read_bundle(str(row.get("diagnosis_id")),
+                                           self._diagnosis_dir)
+                  if row.get("diagnosis_id") else None)
+        events, runs = diagnosis_mod.collect_event_ids(bundle or {})
+        # The harness tells the model to verify claims against the *trace*, and
+        # a compacted bundle no longer carries every ``event_id``.  A citation
+        # that exists in the trace is verified, not invented.
+        missing = set(diagnosis_mod.EVENT_ID_RE.findall(markdown)) - events
+        candidates = sorted(set(runs)
+                            | set(diagnosis_mod.RUN_ID_RE.findall(markdown)))
+        for run_id in candidates[:_MAX_CITATION_TRACES]:
+            if not missing:
+                break
+            missing -= self._trace_event_ids(run_id, wanted=missing)
+        events |= (set(diagnosis_mod.EVENT_ID_RE.findall(markdown)) - missing)
+        return {
+            "available": bool(markdown),
+            "markdown": markdown[:_MAX_REPORT_CHARS],
+            "verification": diagnosis_mod.verify_report(
+                parsed, event_ids=events, run_ids=runs),
+            "suggestions": parsed.get("suggestions") or [],
+        }
+
     def diagnoses(self, *, task_id: str | None = None) -> dict[str, Any]:
         """Diagnosis sessions of one task (or all of them)."""
         with self._lock:
             self.refresh()
             if task_id is not None:
                 return {"task_id": task_id,
-                        "sessions": self._diagnoses_by_target.get(task_id, [])}
-            return {"sessions": list(self._diagnosis_sessions)}
+                        "sessions": self._decorate_diagnoses(
+                            self._diagnoses_by_target.get(task_id, []))}
+            return {"sessions": self._decorate_diagnoses(
+                self._diagnosis_sessions)}
 
     def run_metrics(self, run_ids: Iterable[str]) -> list[RunMetrics]:
         """Metrics records by id, in the given order (missing ones dropped)."""
@@ -1505,10 +1923,86 @@ class EvaluationStore:
             return found
 
 
+def _normalize_target(target: Any) -> dict[str, Any]:
+    """Validate a diagnosis target; only the documented shapes pass.
+
+    ``task`` / ``run`` name one case; ``cohort`` names a filter over the
+    board.  Unknown keys are dropped so a stale client cannot smuggle a
+    path or an evaluator into the bundle.
+    """
+    if not isinstance(target, Mapping):
+        raise EvaluationRequestError("target must be an object")
+    kind = _text(target.get("type"))
+    if kind not in DIAGNOSIS_TARGET_TYPES:
+        raise EvaluationRequestError(
+            "target.type must be one of " + ", ".join(DIAGNOSIS_TARGET_TYPES))
+    if kind == "cohort":
+        raw = target.get("filters")
+        filters: dict[str, str] = {}
+        if isinstance(raw, Mapping):
+            for key in ("range", "status", "harness", "model", "origin"):
+                value = _text(raw.get(key))
+                if value:
+                    filters[key] = value
+        parse_range(filters.get("range"))
+        return {"type": "cohort", "filters": filters}
+    target_id = _text(target.get("id"))
+    if target_id is None:
+        raise EvaluationRequestError("target.id is required")
+    return {"type": kind, "id": target_id}
+
+
+def _target_key(target: Any) -> str:
+    """Stable comparison key for two targets."""
+    return json.dumps(target if isinstance(target, Mapping) else {},
+                      sort_keys=True, ensure_ascii=False, default=str)
+
+
+def _diagnosis_title(target: Mapping[str, Any]) -> str:
+    kind = target.get("type")
+    if kind == "cohort":
+        filters = target.get("filters") or {}
+        shown = ", ".join(f"{key}={value}" for key, value in filters.items())
+        return f"诊断 cohort: {shown or 'board'}"[:80]
+    return f"诊断 {kind}: {target.get('id')}"[:80]
+
+
+def _environment(runs: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """What the run left behind inside the workspace (docs §5.2).
+
+    ``diff_summary`` stays ``None``: a shared workspace makes a posteriori
+    ``git diff`` wrong (9.2), so product evidence is ``edited_files``.
+    """
+    edited: set[str] = set()
+    for run in runs:
+        metrics = run.get("metrics") if isinstance(run.get("metrics"),
+                                                  Mapping) else {}
+        for path in metrics.get("edited_files") or []:
+            if isinstance(path, str) and path.strip():
+                edited.add(path.strip())
+    return {"edited_files": sorted(edited), "diff_summary": None,
+            "tests_seen": []}
+
+
+def _human_feedback(fact: TaskFacts | None) -> dict[str, Any]:
+    """The human verdict the board already encodes."""
+    if fact is None:
+        return {"verdict": None, "comment": None}
+    if fact.reworked:
+        verdict = "rework"
+    elif fact.done:
+        verdict = "accepted"
+    else:
+        verdict = fact.status
+    return {"verdict": verdict, "comment": fact.last_error}
+
+
 __all__ = [
     "ARTIFACT_HARNESSES",
     "BoardEvent",
     "DEFAULT_RANGE",
+    "DIAGNOSIS_TARGET_TYPES",
+    "DiagnosisPlan",
     "EvaluationError",
     "EvaluationNotFound",
     "EvaluationRequestError",

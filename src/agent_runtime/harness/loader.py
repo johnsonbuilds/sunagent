@@ -89,6 +89,14 @@ def _optional_text(data: Mapping[str, Any], key: str, where: str) -> str | None:
     return value
 
 
+def _manifest_flag(data: Mapping[str, Any], key: str) -> bool:
+    """A manifest-level boolean; a string ``"true"`` is a typo, not a yes."""
+    value = data.get(key, False)
+    if not isinstance(value, bool):
+        raise HarnessError(f"manifest.{key} must be a boolean")
+    return value
+
+
 def _summary_reasoning_effort(section: Mapping[str, Any]) -> str | None:
     """Parse ``context.summary_reasoning_effort`` as a normalized token.
 
@@ -323,7 +331,8 @@ def from_dict(data: Mapping[str, Any]) -> HarnessSpec:
         raise HarnessError("harness manifest must be a mapping")
     # "source" and "genes_hash" are outputs of to_dict(); accepted so a
     # spec can round-trip, but ignored and recomputed here.
-    _check_keys(data, {"id", "parent", "mutation", "reason", "prompt", "tools",
+    _check_keys(data, {"id", "parent", "mutation", "reason", "internal",
+                       "prompt", "tools",
                        "control", "context", "memory", "recovery",
                        "verification", "skills", "source", "genes_hash"},
                 "manifest")
@@ -335,6 +344,7 @@ def from_dict(data: Mapping[str, Any]) -> HarnessSpec:
         parent=_optional_text(data, "parent", "manifest"),
         mutation=_optional_text(data, "mutation", "manifest"),
         reason=_optional_text(data, "reason", "manifest"),
+        internal=_manifest_flag(data, "internal"),
         prompt=_prompt_genome(data),
         tools=_tools_genome(data),
         control=_control_genome(data),
@@ -376,13 +386,18 @@ def harnesses_dir() -> Path:
     return local if local.is_dir() else REPO_HARNESSES_DIR
 
 
-def list_harnesses() -> list[HarnessSpec]:
+def list_harnesses(*, include_internal: bool = True) -> list[HarnessSpec]:
     """Every selectable harness, sorted by id.
 
     Only ``harnesses/*.yaml`` is scanned — never subdirectories — so the
     archived manifests under ``harnesses/archived/`` stay out of the
     picker.  A manifest that fails to load is logged and skipped instead
     of hiding the rest of the list.
+
+    ``include_internal=False`` drops manifests marked ``internal: true``
+    (the diagnosis harness).  They still load by id: the diagnosis turn
+    resolves ``evaluation-v1`` through :func:`resolve_harness`, which does
+    not consult this filter.
     """
     directory = harnesses_dir()
     if not directory.is_dir():
@@ -390,9 +405,13 @@ def list_harnesses() -> list[HarnessSpec]:
     specs: list[HarnessSpec] = []
     for path in sorted(directory.glob("*.yaml")):
         try:
-            specs.append(load_harness(path))
+            spec = load_harness(path)
         except HarnessError as exc:
             logger.warning("harness.list.skipped path=%s error=%s", path, exc)
+            continue
+        if spec.internal and not include_internal:
+            continue
+        specs.append(spec)
     return sorted(specs, key=lambda spec: spec.id)
 
 
