@@ -17,7 +17,7 @@ whether to stop and otherwise continues with the next request.
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from agent_runtime.agent.context import request_view_size
@@ -40,25 +40,6 @@ from agent_runtime.harness import HarnessSpec
 from agent_runtime.trace import RunTrace
 
 logger = logging.getLogger(__name__)
-
-# Tools that change source files; used only to report whether the model has
-# started implementing when a budget reminder fires.
-_EDIT_TOOLS = frozenset({"edit_file", "apply_patch", "write_file"})
-
-
-def _has_source_edit(messages: list[Mapping[str, Any]] | None) -> bool:
-    """Whether the model attempted at least one source-edit tool call."""
-    for message in messages or []:
-        if not isinstance(message, Mapping) or message.get("role") != "assistant":
-            continue
-        for call in message.get("tool_calls") or []:
-            if not isinstance(call, Mapping):
-                continue
-            function = call.get("function")
-            if (isinstance(function, Mapping)
-                    and function.get("name") in _EDIT_TOOLS):
-                return True
-    return False
 
 
 class TurnGuard:
@@ -140,7 +121,6 @@ class TurnGuard:
         )
         if not triggered:
             return
-        edited = _has_source_edit(history.messages)
         remaining = self.max_iterations - iteration
         if remaining > self.max_iterations // 2:
             guidance = (
@@ -162,8 +142,7 @@ class TurnGuard:
             "be verified before the budget runs out.",
             kind="budget_reminder",
         ))
-        self.trace.emit("budget.reminder", iteration,
-                        remaining=remaining, edited=edited)
+        self.trace.emit("budget.reminder", iteration, remaining=remaining)
 
     def check_tool_error(self, iteration: int, tool: Any,
                          error: Exception) -> str | None:
