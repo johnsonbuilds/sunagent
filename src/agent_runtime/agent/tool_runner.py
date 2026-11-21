@@ -53,7 +53,8 @@ class ToolRunner:
                 if stop is not None:
                     break
         finally:
-            # Never drop rejections when a guard stop or TurnFailure unwinds.
+            # Never drop rejections on any early exit (guard stop or
+            # cancellation).
             for observation in deferred_rejections:
                 history.append(observation)
         return stop

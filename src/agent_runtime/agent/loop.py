@@ -26,7 +26,6 @@ from agent_runtime.agent.tool_dispatch import (
     tool_trace_metadata,
 )
 from agent_runtime.agent.turn_collaborators import TurnCollaborators
-from agent_runtime.agent.turn_failure import TurnFailure
 from agent_runtime.agent.turn_history import (
     Conversation,
     TurnHistory,
@@ -37,6 +36,14 @@ from agent_runtime.agent.turn_opening import open_turn
 from agent_runtime.tools import ToolExecutor
 
 logger = logging.getLogger(__name__)
+
+
+class TurnFailure(Exception):
+    """An expected turn failure whose message becomes the turn's answer.
+
+    Raised and caught only inside this module: the loop turns an LLM
+    error into a user-facing answer instead of propagating the exception.
+    """
 
 
 class AgentTurn:
