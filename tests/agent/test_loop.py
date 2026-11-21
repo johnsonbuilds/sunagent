@@ -725,7 +725,7 @@ class HarnessIntegrationTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("Budget 4/5", reminder["content"])
         self.assertIn("stop exploring", reminder["content"])
-        self.assertIn("producing and testing", reminder["content"])
+        self.assertIn("producing and verifying", reminder["content"])
 
     async def test_max_iterations_defaults_to_harness_control_gene(self) -> None:
         harness = HarnessSpec(control=ControlGenome(max_iterations=1))

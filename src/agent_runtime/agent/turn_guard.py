@@ -126,7 +126,7 @@ class TurnGuard:
         Fires once per threshold: reports the remaining iteration budget,
         explains what an iteration is, and points the model back at the
         required result. Early reminders ask for an exploration cutoff;
-        later ones ask for production and testing. The reminder is
+        later ones ask for production and verification. The reminder is
         informational, not a restriction.
         """
         reminder = self.harness.control.budget_reminder
@@ -146,12 +146,12 @@ class TurnGuard:
             guidance = (
                 "You may still be exploring; set a concrete cutoff for "
                 "exploration and reserve enough iterations for implementation "
-                "and testing."
+                "and verification."
             )
         else:
             guidance = (
                 "You are closer to the limit; stop exploring and spend the "
-                "remaining iterations producing and testing the required "
+                "remaining iterations producing and verifying the required "
                 "result."
             )
         history.append(runtime_user_message(
@@ -159,7 +159,7 @@ class TurnGuard:
             f"({remaining} iterations left). One iteration is one model turn; "
             "a turn may contain multiple tool calls. This is informational, "
             f"not a restriction. {guidance} The required result must exist and "
-            "be tested before the budget runs out.",
+            "be verified before the budget runs out.",
             kind="budget_reminder",
         ))
         self.trace.emit("budget.reminder", iteration,
