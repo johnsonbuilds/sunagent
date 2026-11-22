@@ -29,7 +29,7 @@ Who writes ``runs.jsonl``: the caller that owns the run (``webui/server.py``,
 :func:`append_run_metrics` once the run has finished.  ``RunTrace`` stays
 a trace writer and never decides where the metrics index lives.  A line
 can be rebuilt from its trace, so deleting ``metrics/`` loses no
-information (see ``scripts/backfill_metrics.py``).
+information (see ``scripts/rebuild_metrics.py``).
 
 Add fields by giving them a default; readers ignore unknown keys and
 missing ones fall back to the default, so old lines stay readable.

@@ -16,6 +16,10 @@ workspace/                     ← AGENT_RUNTIME_HOME (default: <repo>/workspace
 │   └── run-<hex12>.jsonl
 ├── metrics/                   one JSONL index of run-level measurements
 │   └── runs.jsonl
+├── diagnosis/                 evidence bundles handed to a diagnosis run
+│   └── <diagnosis-id>/
+│       ├── bundle.json
+│       └── summary.md
 ├── board_events.jsonl         one JSONL line per board lifecycle change
 └── memory/                    persistent cross-session memory (AGENT_RUNTIME_MEMORY=1)
     └── <whatever the agent organizes>
@@ -40,12 +44,21 @@ so "where does this write?" always has the same answer.  Set
 | Browser conversations | `workspace/sessions/sess-*.json` | `webui/sessions.py` (`SessionStore.save`) |
 | Run traces | `workspace/traces/run-*.jsonl` | `src/agent_runtime/trace.py` (`RunTrace._write_events`), via `webui/server.py` and `run_agent.py` |
 | Run metrics index | `workspace/metrics/runs.jsonl` | the run owner (`webui/server.py`, `run_agent.py`, `integrations/harbor.py`) via `src/agent_runtime/metrics.py` (`afinalize_run` → `finalize_run` → `append_run_metrics`) |
+| Diagnosis bundles | `workspace/diagnosis/<id>/` | `src/agent_runtime/diagnosis.py` (`write_bundle`), from `webui/evaluation.py` when a diagnosis starts |
 | Board lifecycle events | `workspace/board_events.jsonl` | `webui/board.py` (`_append_event`), from every board mutation |
 | Persistent memory | `workspace/memory/**` | the agent itself, with the ordinary file tools (`src/agent_runtime/memory.py` renders the listing) |
 
 An empty conversation is never written: the file appears with the
 first message and disappears with the conversation.  A session that
 never received a message exists only in memory.
+
+`metrics/runs.jsonl` is derived: it can be rebuilt from the
+`run.metrics` event each trace ends with (`scripts/rebuild_metrics.py`,
+see `docs/evaluation.md` §2.2).  `board_events.jsonl` cannot be rebuilt —
+`board.json` holds the authoritative current state, so the event stream is
+history, not a source of truth.  Diagnosis bundles are derived too: the id
+lives on the session, and diagnosing that target again writes a new one
+(unless the evidence is identical — then the earlier session is reused).
 
 ## The agent sandbox
 

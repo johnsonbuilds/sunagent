@@ -31,7 +31,7 @@ runtime_home/                     # AGENT_RUNTIME_HOME，默认 workspace/
 | `board.json` | `BoardStore` | 只存当前状态 |
 | `board_events.jsonl` | `BoardStore` | 只记 board 生命周期，键为 `task_id` |
 
-- `metrics/runs.jsonl` 里的一行可以**由 trace 重建**；删掉 `metrics/` 不丢信息（回填脚本见 Phase 5）。
+- `metrics/runs.jsonl` 里的一行可以**由 trace 重建**；删掉 `metrics/` 不丢信息（见 §2.2）。
 - 追加用 `O_APPEND` 写一行（短写会补完/记录 warning），行内不会被其他进程插入；写入方保证一行不超过 1MB。
 - 脏行（非法 JSON、合法 JSON 但不是对象、截断行）在读取时跳过并记 warning，不会变成幽灵 run。
 - `RunTrace` 只管 trace，不决定 metrics 索引位置。
@@ -50,6 +50,28 @@ runtime_home/                     # AGENT_RUNTIME_HOME，默认 workspace/
 | `guard.block` / `policy.block` | 保留监听的通用拦截事件；当前实现不发这两个事件，拦截以 `tool.end` 的 `status="error"` + `error_kind="command_blocked"` 出现，`RunStats` 按此计 `policy_blocks` |
 | `run.config` / `run.metrics` | 每个 run 各一条；`run.config` 在首个 LLM 请求前发出（git 信息缓存 + 2s 超时） |
 | 丢弃与 flush | 队列满时只丢 `llm.chunk`；控制事件改写进 flush 待写区，不丢；`flush` 用 `await queue.put` 投停止位 |
+
+### 2.2 重建索引（`scripts/rebuild_metrics.py`）
+
+`runs.jsonl` 是派生文件：每条 trace 末尾的 `run.metrics` 事件就是它的那一行。
+所以索引被删、写坏或换机器时，从 `traces/` 重建即可，无需重算任何指标。
+
+```
+uv run python scripts/rebuild_metrics.py                  # dry run，只报告不写
+uv run python scripts/rebuild_metrics.py --write           # 原子替换 runs.jsonl
+uv run python scripts/rebuild_metrics.py --write --keep-existing
+```
+
+| 行为 | 契约 |
+|---|---|
+| 数据源 | 每条 trace 里**最后一条** `run.metrics` 事件；同一个 `run_id` 出现两次时以 `finished_at` 更晚的为准 |
+| 没有 `run.metrics` 的 trace | 跳过并计数（Phase 1 之前的 trace 属于此类）；不重放事件、不估数 |
+| 写入 | 先写 `<name>.tmp` 再 `os.replace`，中断不会留下写了一半的索引；行格式与 `append_run_metrics` 完全一致 |
+| `--keep-existing` | 合并现有行，**已有行优先**（那行是 run 结束时写的，trace 可能已被截断）；不加则只信 trace |
+| 顺序 | 按 `(finished_at, run_id)` 排序，与追加顺序一致 |
+
+默认 dry run：不加 `--write` 只打印将要写多少行、跳过了哪些 trace，
+避免恢复操作把人吓一跳地覆盖掉唯一副本。
 
 ## 3. Join keys 与 `origin` 切片
 

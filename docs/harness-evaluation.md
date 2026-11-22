@@ -599,14 +599,33 @@ cohort 时 `task` 为空，`runs` 换成 `cases`，每个 case 一张紧凑卡�
 | 前端诊断面板 | `DiagnosisPanel.tsx`、`MarkdownAnswer.tsx` | 手动按钮；展示 `report_segment_id` 报告；可打开会话 |
 | 测试 | `tests/test_diagnosis.py` | mock 模型覆盖正常/标题缺失/伪造证据/超预算 |
 
-## Phase 5：回归、回填与文档（3–4 天）
+## Phase 5：回归、回填与文档（实际交付）
 
 | 任务 | 文件 | 验收 |
 |---|---|---|
-| 历史 trace 回填 `runs.jsonl` | `scripts/backfill_metrics.py` | 旧 job 可出现在评测页 |
-| 基线快照 | `evaluation/baselines/` | 有当前 TSR/tokens/p95 |
+| 从 trace 重建 `runs.jsonl` | `scripts/rebuild_metrics.py` | 删除 `metrics/` 后可由 `traces/` 重建；替换是原子的 |
+| 基线快照 | —（未做，见下） | 需要时用 `overview` 返回的 JSON 存档 |
 | 文档 | `docs/evaluation.md`、`docs/storage.md`、`docs/webui.md` | 指标口径、API、页面说明 |
 | 回归测试 | `pytest` + `npm run build` | 全绿 |
+
+与计划的差异，都是收窄而非缩水：
+
+- **回填脚本改名并从「回填历史」收窄为「重建索引」。** 每条 trace 末尾本来就有
+  `run.metrics` 事件，索引是它的派生副本，所以脚本只需把 trace 里的事件搬成一行，
+  不重算任何指标。Phase 1 之前的 trace 没有这个事件（本机 488 条 trace 中 423 条如此），
+  脚本跳过并计数——重放老事件只能近似出数字，而猜出来的行比缺失的行更糟。
+  因此脚本的用途是**灾难恢复**（`metrics/` 被删、写坏、换机器），不是让历史 job
+  出现在评测页；`--keep-existing` 合并时以已有行为准（那一行是 run 结束时写的，
+  trace 可能已被截断）。
+- **基线快照未做。** 没有可拍的历史数据，且它是「跑完真实任务后自己留档」的产物，
+  不是一个需要代码的功能：需要基线时把 `/api/evaluation/overview` 的返回存成
+  JSON 即可。`evaluation/baselines/` 保持不存在。
+- **文档随各阶段同步。** Phase 0–4 每阶段已更新 `docs/evaluation.md`（契约与口径）、
+  `docs/webui.md`（API 与页面）、`docs/webui-frontend.md`（目录结构）；
+  本轮补上此前漏记的 `runtime_home/diagnosis/`（storage 文档）与重建脚本。
+
+验收标准 #12 的「删除 `metrics/` 后可由 trace 重建」由 `scripts/rebuild_metrics.py`
+（`--write` 原子替换 + `tests/scripts/test_rebuild_metrics.py`）落地。
 
 **总工期：单人 4 周左右；后端/前端并行约 2.5 周。**
 
@@ -625,7 +644,7 @@ cohort 时 `task` 为空，`runs` 换成 `cases`，每个 case 一张紧凑卡�
 9. 任务详情能通过 `Session.target` 列出历史诊断；诊断不写 `board_events.jsonl`，不进 TSR 分母。
 10. 诊断/改进 run 在 `runs.jsonl` 中按 `origin` 可切片；默认 harness 指标不混入它们。
 11. cohort 诊断（`target.type=cohort`）在同一会话里输出 Top 5 建议，每条绑定指标、影响面、成本和验证方式。
-12. 无 SQLite；删除 `metrics/` 后可由 trace 重建。
+12. 无 SQLite；删除 `metrics/` 后可由 trace 重建（`scripts/rebuild_metrics.py`）。
 13. `pytest` 与 `npm run build` 全绿。
 14. board run 的 `board.json runs[].run_id` 与 `traces/run-*.jsonl` 的 `run_id` 一致。
 15. VCR / Hallucinated completion 只对声明需要产物的任务计算；产物证据来自 `tool.end`，不依赖事后 git diff。
