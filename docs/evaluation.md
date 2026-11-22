@@ -375,6 +375,9 @@ POST /api/evaluation/diagnose  {"target": {...}, "force": false}
 引用。校验范围是 **bundle + 相关 trace**：bundle 里找不到的 `event_id` 会再去
 bundle 涉及（以及报告正文引用）的 run trace 里核对，只在两处都不存在时才标
 `verified: false`——模型被要求用 `read_trace` 核实，只查 bundle 会误伤真实引用。
+每条 trace 的 `event_id` 集合按 `(mtime, size)` 缓存，**只有完整扫描的结果入缓存**，
+所以缓存命中就足以回答任意引用：报告里引用了一个根本不存在的 `evt-…` 也不会
+让 `/diagnoses` 每次刷新都重扫 trace（模型自造的 id 正好是最常见的情形）。
 
 `GET /api/evaluation/diagnoses` 的每行带 `report`：
 

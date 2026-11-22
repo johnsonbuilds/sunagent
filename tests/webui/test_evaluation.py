@@ -628,6 +628,44 @@ class EvaluationStoreTests(unittest.TestCase):
         write(0.5)
         self.assertEqual(store.benchmarks()["records"][0]["accuracy"], 0.5)
 
+    def test_a_cached_trace_is_not_rescanned_for_a_missing_citation(self):
+        """An id the trace never had must not defeat the trace-id cache."""
+        from agent_runtime import diagnosis as diagnosis_mod
+
+        run_id = "run-cccccccccccc"
+        traces = self.root / "traces"
+        traces.mkdir(parents=True, exist_ok=True)
+        (traces / f"{run_id}.jsonl").write_text(
+            json.dumps({"run_id": run_id, "event_id": "evt-cccccccccccc",
+                        "event_type": "tool.end"}) + "\n",
+            encoding="utf-8")
+        session = self.sessions.create(
+            origin="diagnosis", target={"type": "run", "id": run_id})
+        # ``evt-…`` that no file carries: the citation stays unverified, but
+        # the scan must not repeat on every ``/diagnoses`` refresh.
+        session.append_segment({"id": "seg-report", "type": "assistant",
+                                "content": f"## 证据\n`{run_id}` "
+                                             "`evt-999999999999`"})
+        self.assertTrue(session.mark_report_segment("seg-report"))
+
+        scans: list[Path] = []
+        real = diagnosis_mod.iter_trace
+
+        def counting(path):
+            scans.append(path)
+            return real(path)
+
+        store = self._store()
+        with patch("webui.evaluation.diagnosis_mod.iter_trace", counting):
+            first = store.diagnoses(task_id=run_id)["sessions"][0]
+            second = store.diagnoses(task_id=run_id)["sessions"][0]
+
+        self.assertIn("evt-999999999999",
+                      first["report"]["verification"]["unverified"])
+        self.assertEqual(second["report"]["verification"],
+                         first["report"]["verification"])
+        self.assertEqual(len(scans), 1)
+
 
 class EvaluationApiTests(unittest.TestCase):
     """The HTTP surface the evaluation page talks to."""

@@ -1722,6 +1722,8 @@ class EvaluationStore:
 
         ``wanted`` stops the scan early (a report usually cites a handful
         of ids); a partial scan is not cached, so the next call is honest.
+        Only complete scans enter the cache, hence a hit answers any
+        ``wanted`` set -- including ids the trace does not have at all.
         """
         path = self._trace_path(run_id)
         if path is None:
@@ -1733,8 +1735,7 @@ class EvaluationStore:
         key = (str(path), stat.st_mtime_ns, stat.st_size)
         cached = self._trace_ids.get(run_id)
         if cached is not None and cached[0] == key:
-            if wanted is None or wanted <= cached[1]:
-                return set(cached[1])
+            return set(cached[1])
         found: set[str] = set()
         complete = True
         for event in diagnosis_mod.iter_trace(path):
