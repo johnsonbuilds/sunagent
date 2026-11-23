@@ -6,11 +6,20 @@ import { useI18n } from "@/lib/i18n";
 import { useRuntimeConfig } from "@/lib/stores/runtime-config";
 import { useDraft, useSessions } from "@/lib/stores/sessions";
 
-import { SendIcon, StopIcon } from "./Icons";
+import { DownArrowIcon, SendIcon, StopIcon } from "./Icons";
 
 type PickerKind = "model" | "harness";
 
-export default function Composer() {
+type ComposerProps = {
+  /** Show the jump-to-bottom arrow above the input box. */
+  showScrollToBottom: boolean;
+  onScrollToBottom: () => void;
+};
+
+export default function Composer({
+  showScrollToBottom,
+  onScrollToBottom,
+}: ComposerProps) {
   const { t } = useI18n();
   const { models, harnesses } = useRuntimeConfig();
   const {
@@ -80,6 +89,18 @@ export default function Composer() {
 
   return (
     <div className="composer-wrap">
+      <button
+        type="button"
+        className={`scroll-to-bottom${showScrollToBottom ? " visible" : ""}`}
+        title={t("scrollToBottom")}
+        aria-label={t("scrollToBottom")}
+        aria-hidden={!showScrollToBottom}
+        tabIndex={showScrollToBottom ? 0 : -1}
+        onClick={onScrollToBottom}
+      >
+        <DownArrowIcon />
+      </button>
+
       <div className="composer-box" id="composerBox">
         <textarea
           id="msgInput"

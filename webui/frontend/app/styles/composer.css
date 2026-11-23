@@ -2,8 +2,49 @@
 
 .composer-wrap {
   flex-shrink: 0;
+  position: relative;
   padding: var(--space-3) var(--space-5) var(--space-4);
   background: linear-gradient(to top, var(--bg) 62%, transparent);
+}
+
+/* Floats over the transcript tail, fully clear of the input box: the gap to
+   the composer's top border is (wrap padding-top - --space-2), so the rounded
+   corner and focus ring are never clipped by the button. */
+.scroll-to-bottom {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% - var(--space-3) + var(--space-2));
+  transform: translateX(-50%);
+  z-index: 12;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.18s, visibility 0.18s, background 0.15s, color 0.15s;
+}
+
+.scroll-to-bottom.visible {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.scroll-to-bottom svg { width: 14px; height: 14px; }
+
+.scroll-to-bottom:hover {
+  background: var(--accent-bg);
+  color: var(--accent-strong);
+  border-color: var(--accent);
 }
 
 .composer-box {

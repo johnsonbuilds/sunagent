@@ -302,6 +302,21 @@ export function ChevronIcon() {
   );
 }
 
+export function DownArrowIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M12 19V5M19 12l-7 7-7-7" />
+    </svg>
+  );
+}
+
 export function FolderIcon() {
   return (
     <svg
