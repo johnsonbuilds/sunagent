@@ -328,7 +328,7 @@ def first_message(diagnosis_id: str, bundle: Mapping[str, Any]) -> str:
         "3. 输出 Markdown，四个二级标题固定且顺序不变："
         "## 结论 / ## 根因 / ## 证据 / ## Top 5 改进建议。",
         "4. 每条证据带 run_id / iteration / event_id；引用不到就写明是推断。",
-        "5. 不足 5 条建议时必须说明原因；不要修改任何文件。",
+        "5. 改进建议最多 5 条；不足 5 条就给出实际条数，不要凑数；不要修改任何文件。",
     ])
 
 
