@@ -217,7 +217,7 @@
   padding-top: 1px;
 }
 
-.session-item .session-delete {
+.session-item .session-actions {
   position: absolute;
   right: 4px;
   top: 4px;
@@ -233,8 +233,57 @@
   cursor: pointer;
 }
 
-.session-item:hover .session-delete { display: inline-flex; }
-.session-item .session-delete:hover { color: var(--error); }
+.session-item:hover .session-actions,
+.session-item .session-actions[aria-expanded="true"] {
+  display: inline-flex;
+}
+
+.session-item .session-actions:hover,
+.session-item .session-actions[aria-expanded="true"] {
+  color: var(--text);
+}
+
+/* Portalled to <body> and fixed, so the list's scroll box cannot clip it. */
+.session-menu {
+  position: fixed;
+  z-index: 60;
+  min-width: 168px;
+  max-width: 240px;
+  padding: var(--space-1);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--sidebar);
+  box-shadow: 0 12px 32px var(--shadow);
+}
+
+.session-menu-item {
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--ui-size);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.session-menu-item:hover,
+.session-menu-item:focus-visible {
+  background: var(--surface-subtle);
+}
+
+.session-menu-item.danger { color: var(--error); }
+
+.session-menu-item.danger:hover,
+.session-menu-item.danger:focus-visible {
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+}
 
 /* ----------------------------------------------------------------- main */
 

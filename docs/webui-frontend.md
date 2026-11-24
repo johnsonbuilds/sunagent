@@ -286,7 +286,7 @@ ThemeProvider
   否则每个 token 都会让 Sidebar 跟着重渲染。
 - Provider 只暴露“数据 + action”，不暴露裸 setter。
 - 网络请求统一走 `lib/api.ts`。
-- 页面私有状态（滚动、拖拽、输入框草稿）留在 view 内；
+- 页面私有状态（滚动、拖拽）留在 view 内；
   跨页面要保留的才进 Provider。
 - Provider 不 import view 组件；`lib/views.tsx` 是唯一的
   RouteId → view 映射处，避免循环依赖。
@@ -299,6 +299,9 @@ ThemeProvider
   重建；`seq` 去重、`Last-Event-ID` 重连逻辑从 `page.tsx` 原样迁移。
 - `ChatView` 卸载不影响流；回到聊天时从 store 重新渲染。
 - 切换会话时清空 segments、重置 pinned、重新拉详情、重连 SSE。
+- 输入框草稿按会话存在 `SessionsProvider` 里，并镜像到
+  `localStorage` 的 `sunagent-draft:<sessionId>`：切页、刷新后
+  回来还在，发送或点清空图标就删掉。
 - 会话增删改后刷新列表；`run.completed` 时刷新列表并递增
   `runCompletedSeq`，供看板做即时刷新。
 

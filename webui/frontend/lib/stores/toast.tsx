@@ -15,6 +15,7 @@ export type ToastType = "info" | "success" | "error";
 
 interface ToastContextValue {
   showToast: (message: string, type?: ToastType) => void;
+  hideToast: () => void;
 }
 
 const ToastContext = createContext<ToastContextValue | null>(null);
@@ -36,6 +37,14 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     },
     [],
   );
+
+  const hideToast = useCallback(() => {
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    setToast(null);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -75,7 +84,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     return () => observer.disconnect();
   }, []);
 
-  const value = useMemo(() => ({ showToast }), [showToast]);
+  const value = useMemo(
+    () => ({ showToast, hideToast }),
+    [showToast, hideToast],
+  );
 
   return (
     <ToastContext.Provider value={value}>

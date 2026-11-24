@@ -1,11 +1,15 @@
 "use client";
 
+import { useState } from "react";
+
 import type { SessionSummary } from "@/lib/types";
 import { useI18n, type TFunction } from "@/lib/i18n";
 import { useSessions } from "@/lib/stores/sessions";
 
 import { useShell } from "./shell/AppShell";
-import { CloseIcon, PlusIcon, SearchIcon } from "./Icons";
+import { PlusIcon, SearchIcon } from "./Icons";
+import SessionDetailsDialog from "./sessions/SessionDetailsDialog";
+import SessionMenu from "./sessions/SessionMenu";
 
 function relativeTime(epochSeconds: number, t: TFunction): string {
   const delta = Date.now() / 1000 - epochSeconds;
@@ -32,6 +36,7 @@ export default function SessionsPanel() {
     deleteSession,
     renameSession,
   } = useSessions();
+  const [details, setDetails] = useState<SessionSummary | null>(null);
 
   const needle = filter.trim().toLowerCase();
   const visible = sessions.filter(
@@ -105,20 +110,29 @@ export default function SessionsPanel() {
             <span className="session-time">
               {relativeTime(session.updated_at, t)}
             </span>
-            <button
-              className="session-delete"
-              type="button"
-              title={t("deleteConversation")}
-              onClick={(event) => {
-                event.stopPropagation();
-                remove(session);
-              }}
-            >
-              <CloseIcon size={13} />
-            </button>
+            <SessionMenu
+              label={t("sessionActions")}
+              items={[
+                {
+                  key: "details",
+                  label: t("viewDetails"),
+                  onSelect: () => setDetails(session),
+                },
+                {
+                  key: "delete",
+                  label: t("deleteConversation"),
+                  danger: true,
+                  onSelect: () => remove(session),
+                },
+              ]}
+            />
           </div>
         ))}
       </div>
+      <SessionDetailsDialog
+        session={details}
+        onClose={() => setDetails(null)}
+      />
     </div>
   );
 }

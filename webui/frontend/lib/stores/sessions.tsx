@@ -28,6 +28,28 @@ import { useRuntimeConfig } from "./runtime-config";
 import { useToast } from "./toast";
 
 const NEW_SESSION_TITLE = "New conversation";
+const DRAFT_KEY_PREFIX = "sunagent-draft:";
+
+/** Composer text is kept per conversation so it survives navigation and reload. */
+function readDraft(sessionId: string): string {
+  try {
+    return window.localStorage.getItem(DRAFT_KEY_PREFIX + sessionId) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function writeDraft(sessionId: string, value: string): void {
+  try {
+    if (value) {
+      window.localStorage.setItem(DRAFT_KEY_PREFIX + sessionId, value);
+    } else {
+      window.localStorage.removeItem(DRAFT_KEY_PREFIX + sessionId);
+    }
+  } catch {
+    /* private mode */
+  }
+}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -131,7 +153,8 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
   const [harnessLocked, setHarnessLocked] = useState(false);
   const [boardSyncSeq, setBoardSyncSeq] = useState(0);
   const [focusSeq, setFocusSeq] = useState(0);
-  const [draft, setDraft] = useState("");
+  const [draft, setDraftState] = useState("");
+  const draftSessionRef = useRef<string | null>(null);
 
   const streamRef = useRef<EventSource | null>(null);
   const lastSeqRef = useRef(0);
@@ -144,6 +167,18 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
     setActiveModel((current) => current || config.defaultModel);
     setActiveHarness((current) => current || config.defaultHarness);
   }, [config.loaded, config.defaultModel, config.defaultHarness]);
+
+  useEffect(() => {
+    if (draftSessionRef.current === activeId) return;
+    draftSessionRef.current = activeId;
+    setDraftState(activeId ? readDraft(activeId) : "");
+  }, [activeId]);
+
+  const setDraft = useCallback((value: string) => {
+    setDraftState(value);
+    const sessionId = draftSessionRef.current;
+    if (sessionId) writeDraft(sessionId, value);
+  }, []);
 
   const bumpBoardSync = useCallback(() => {
     setBoardSyncSeq((value) => value + 1);
@@ -260,6 +295,13 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
           method: "PATCH",
           body: JSON.stringify({ model }),
         });
+        // Keep the list summary in sync so the details dialog, which reads
+        // from it, never shows the previous model.
+        setSessions((list) =>
+          list.map((item) =>
+            item.id === activeId ? { ...item, model } : item,
+          ),
+        );
       } catch (error) {
         setActiveModel(previous);
         showToast(errorMessage(error), "error");
@@ -278,6 +320,11 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
           method: "PATCH",
           body: JSON.stringify({ harness }),
         });
+        setSessions((list) =>
+          list.map((item) =>
+            item.id === activeId ? { ...item, harness } : item,
+          ),
+        );
         setHarnessLocked(false);
       } catch (error) {
         setActiveHarness(previous);
@@ -323,6 +370,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
       }
       try {
         await api(`/api/sessions/${session.id}`, { method: "DELETE" });
+        writeDraft(session.id, "");
         const list = await refreshSessions();
         // The server unlinks a deleted conversation from its task.
         bumpBoardSync();
@@ -518,7 +566,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
 
   const draftValue = useMemo<DraftValue>(
     () => ({ draft, setDraft }),
-    [draft],
+    [draft, setDraft],
   );
 
   return (

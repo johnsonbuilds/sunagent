@@ -253,6 +253,22 @@ export function CloseIcon({ size = 17 }: { size?: number }) {
   );
 }
 
+export function MoreVerticalIcon({ size = 15 }: { size?: number }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width={size}
+      height={size}
+      fill="currentColor"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="5" r="1.7" />
+      <circle cx="12" cy="12" r="1.7" />
+      <circle cx="12" cy="19" r="1.7" />
+    </svg>
+  );
+}
+
 export function LanguageIcon() {
   return (
     <svg

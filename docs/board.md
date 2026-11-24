@@ -475,7 +475,7 @@ runner = AgentRunner()
 | `components/BoardView.tsx` | 看板头部、列、拖拽容器、空状态 |
 | `components/TaskCard.tsx` | 单张任务卡、运行指示、快捷操作 |
 | `components/TaskDetail.tsx` | 任务详情：描述、评论时间线、每次 run 的 final response、评论输入 |
-| `components/TaskEditor.tsx` | 新建/编辑弹窗，复用 `Modal` |
+| `components/TaskEditor.tsx` | 新建/编辑弹窗，复用 `Modal`；脏检查、离开拦截、二次取消放弃改动 |
 | `components/BoardPanel.tsx` | 侧栏：搜索、隐藏已完成、新建任务、列计数 |
 | `lib/useBoard.ts` | 数据获取、轮询、乐观更新、CRUD |
 | `lib/stores/board.tsx` | 看板快照、弹窗状态、跨页面常驻 |
@@ -550,7 +550,20 @@ runner = AgentRunner()
 - 保存中禁用按钮
 - 标题为空时行内提示，不发请求
 - 删除使用 `ConfirmDialog`，文案明确“只删除任务，对话会保留”
-- 关闭弹窗不做未保存拦截，保持轻量
+- 有未保存改动时，关闭弹窗（取消、叉图标、点遮罩、Esc）、
+  `Ctrl+K` 新建任务、浏览器后退，一律**拒绝离开并弹一条 toast**
+  （“有未保存的改动，离开会丢失；如需放弃改动，再次点击取消”），
+  弹窗保持打开、编辑内容原样保留。没有改动则静默关闭。
+  - 不叠第二层 `<dialog>`：提示只用 toast，不抢焦点、不打断输入。
+  - 放弃改动不需要额外按钮：**再点一次取消**（或叉 / Esc / 遮罩）
+    即关闭并丢弃。第一次拒绝后如果继续编辑，这次的“确认放弃”
+    会自动失效，下次关闭重新提示，避免误丢新输入的内容。
+  - 后退靠一个标记过的重复历史项拦截；关闭弹窗后该历史项
+    会再被弹掉，平时不会多占一次后退。
+  - 刷新 / 关标签页仍走浏览器原生 `beforeunload` 确认（浏览器
+    自身行为，无法改成 toast）。
+  - toast 是 `pointer-events: none`，恰好压在弹窗底部按钮上时
+    也不会吃掉点击。
 
 ### 6.8 状态管理与乐观更新
 

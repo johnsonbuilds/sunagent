@@ -19,6 +19,7 @@ import Sidebar from "@/components/Sidebar";
 import TitleBar from "@/components/TitleBar";
 import FilesPage from "@/views/FilesPage";
 import { useI18n, type MessageKey } from "@/lib/i18n";
+import { blockLeave } from "@/lib/leaveGuard";
 import { matchRoute } from "@/lib/routes";
 import { useBoardStore } from "@/lib/stores/board";
 import { useSessions } from "@/lib/stores/sessions";
@@ -93,13 +94,20 @@ export default function AppShell({ children }: { children: ReactNode }) {
   }
 
   const primary = onPrimary;
-  const primaryClick = primary
+  // The shortcut and the button share the guard, so neither can drop unsaved
+  // edits: the editor refuses the navigation and stays open.
+  const guardedPrimary = primary
+    ? () => {
+        if (!blockLeave()) primary();
+      }
+    : undefined;
+  const primaryClick = guardedPrimary
     ? () => {
         if (filesDrawerOpen) {
           setFilesDrawerOpen(false);
           return;
         }
-        primary();
+        guardedPrimary();
       }
     : undefined;
 
@@ -148,8 +156,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
     return () => observer.disconnect();
   }, [title]);
 
-  const primaryRef = useRef(onPrimary);
-  primaryRef.current = onPrimary;
+  const primaryRef = useRef(guardedPrimary);
+  primaryRef.current = guardedPrimary;
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!primaryRef.current) return;

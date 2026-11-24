@@ -33,6 +33,9 @@ export interface SessionSummary {
   model?: string | null;
   harness?: string | null;
   harness_locked?: boolean;
+  origin?: string | null;
+  target?: Record<string, unknown> | null;
+  report_segment_id?: string | null;
 }
 
 export interface SessionDetail extends SessionSummary {

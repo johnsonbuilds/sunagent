@@ -83,6 +83,9 @@
   z-index: 1000;
   max-width: 80vw;
   border: 1px solid transparent;
+  /* Informational only: clicks pass through so a toast that happens to land on
+     a modal footer button never eats the click. */
+  pointer-events: none;
 }
 
 .toast--info {

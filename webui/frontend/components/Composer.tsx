@@ -6,7 +6,7 @@ import { useI18n } from "@/lib/i18n";
 import { useRuntimeConfig } from "@/lib/stores/runtime-config";
 import { useDraft, useSessions } from "@/lib/stores/sessions";
 
-import { DownArrowIcon, SendIcon, StopIcon } from "./Icons";
+import { CloseIcon, DownArrowIcon, SendIcon, StopIcon } from "./Icons";
 
 type PickerKind = "model" | "harness";
 
@@ -216,6 +216,20 @@ export default function Composer({
 
           </div>
           <div className="composer-right">
+            {draft ? (
+              <button
+                className="composer-clear"
+                type="button"
+                title={t("composerClear")}
+                aria-label={t("composerClear")}
+                onClick={() => {
+                  setDraft("");
+                  inputRef.current?.focus();
+                }}
+              >
+                <CloseIcon size={13} />
+              </button>
+            ) : null}
             <button
               className={`send-btn${busy ? " stop" : ""}`}
               id="btnSend"

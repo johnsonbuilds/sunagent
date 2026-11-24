@@ -214,6 +214,33 @@
   max-width: 280px;
 }
 
+.composer-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.composer-clear {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.composer-clear:hover {
+  background: var(--accent-bg);
+  color: var(--text);
+}
+
 .send-btn {
   width: 32px;
   height: 32px;
