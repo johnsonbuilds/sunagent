@@ -21,6 +21,7 @@ from uuid import uuid4
 
 from agent_runtime import storage
 from agent_runtime.agent import Conversation
+from agent_runtime.agent.runtime_message import is_runtime_user_message
 
 
 logger = logging.getLogger(__name__)
@@ -188,6 +189,96 @@ class Session:
                 "diagnosis_id": self.diagnosis_id}
 
 
+def _run_id_of(segment_id: str) -> str:
+    """The run that produced a segment (``{run_id}:{kind}:{n}``)."""
+    return segment_id.split(":", 1)[0]
+
+
+def _human_user_indices(messages: list[dict[str, Any]]) -> list[int]:
+    """Indices of the messages a user actually typed.
+
+    Loop-internal nudges ride as ``user`` messages too; counting them would
+    shift every turn boundary, so they are skipped.
+    """
+    return [index for index, message in enumerate(messages)
+            if message.get("role") == "user"
+            and not is_runtime_user_message(message)]
+
+
+def _final_answer_text(segments: list[dict[str, Any]], run_id: str) -> str:
+    """The assistant text a turn's last LLM response produced.
+
+    One response can become several assistant segments when reasoning and
+    content interleave, all of them after the run's last tool block, so the
+    whole tail is joined.  Anything before a tool block belongs to an earlier
+    iteration and already has a message of its own.
+    """
+    run_segments = [segment for segment in segments
+                    if _run_id_of(str(segment.get("id") or "")) == run_id]
+    start = 0
+    for position, segment in enumerate(run_segments):
+        if segment.get("type") == "tool":
+            start = position + 1
+    return "".join(str(segment.get("content") or "")
+                   for segment in run_segments[start:]
+                   if segment.get("type") == "assistant")
+
+
+def branch_point(segments: list[dict[str, Any]],
+                 messages: list[dict[str, Any]],
+                 segment_id: str) -> tuple[int, list[dict[str, Any]]] | None:
+    """Locate the transcript/message boundary a branch starts from.
+
+    Returns ``(segment index, messages up to and including the answer)`` or
+    ``None`` when the block cannot start a branch.  A branch copies the
+    history only: the copied conversation must end on the answer the user
+    picked, so the segment has to be the last block of its turn (cutting mid
+    turn would keep tool calls whose results are gone) and the trailing
+    message has to be the same text.  Transcript and messages drift apart
+    (an interrupted run leaves blocks without a message), and a mismatch is
+    refused instead of guessed at.
+    """
+    target = next((position for position, segment in enumerate(segments)
+                   if str(segment.get("id") or "") == segment_id), None)
+    if target is None:
+        return None
+    segment = segments[target]
+    if segment.get("type") != "assistant":
+        return None
+    if not str(segment.get("content") or "").strip():
+        return None
+    run_id = _run_id_of(segment_id)
+    if not run_id:
+        return None
+    if any(_run_id_of(str(later.get("id") or "")) == run_id
+           for later in segments[target + 1:]):
+        return None
+
+    turn = sum(1 for earlier in segments[:target + 1]
+               if earlier.get("type") == "user")
+    human = _human_user_indices(messages)
+    if turn < 1 or len(human) < turn:
+        return None
+    start = human[turn - 1] + 1
+    end = human[turn] if turn < len(human) else len(messages)
+    answer = next((index for index in range(end - 1, start - 1, -1)
+                   if messages[index].get("role") == "assistant"), None)
+    if answer is None:
+        return None
+
+    expected = _final_answer_text(segments, run_id)
+    if str(messages[answer].get("content") or "") != expected:
+        return None
+
+    head = copy.deepcopy(messages[:answer + 1])
+    # Drop the tool calls (and any reasoning echo) of the cut message: the
+    # results that answered them are gone, so the next request would be an
+    # invalid sequence.  Keeping the text makes the branch resume exactly
+    # where the user pointed.
+    head[-1] = {"role": "assistant", "content": expected}
+    return target, head
+
+
 def _derive_title(message: str) -> str:
     text = " ".join(message.split())
     return text[:48] + ("…" if len(text) > 48 else "")
@@ -292,6 +383,31 @@ class SessionStore:
             self._sessions[session.id] = session
         return session
 
+    def branch(self, parent: Session, segment_id: str, *,
+               title: str | None = None) -> Session | None:
+        """Copy ``parent`` up to one assistant block into a new session.
+
+        The copy is a plain, independent conversation: it keeps the same
+        model, harness and history prefix (the system prompt included) and
+        nothing else, so later turns never write back into the parent.
+        ``None`` means the block cannot start a branch.
+        """
+        messages = parent.messages or parent.conversation.messages
+        point = branch_point(parent.segments, messages, segment_id)
+        if point is None:
+            return None
+        index, head = point
+        child = self.create((title or "").strip()
+                            or f"{parent.title} (branch)",
+                            model=parent.model, harness=parent.harness)
+        child.segments = copy.deepcopy(parent.segments[:index + 1])
+        child.conversation = Conversation()
+        child.conversation.messages = copy.deepcopy(head)
+        self.save(child)
+        logger.info("webui.session.branched parent=%s child=%s segment=%s",
+                    parent.id, child.id, segment_id)
+        return child
+
     def delete(self, session_id: str) -> bool:
         with self._lock:
             session = self._sessions.pop(session_id, None)
@@ -372,4 +488,5 @@ def _session_from_record(record: dict[str, Any]) -> Session | None:
     return session
 
 
-__all__ = ["FrameBus", "Session", "SessionStore", "default_sessions_root"]
+__all__ = ["FrameBus", "Session", "SessionStore", "branch_point",
+           "default_sessions_root"]

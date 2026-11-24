@@ -12,7 +12,7 @@ const PINNED_THRESHOLD = 120;
 const AUTOSCROLL_GRACE_MS = 600;
 
 export default function ChatView() {
-  const { activeId, send } = useSessions();
+  const { activeId, send, busy, branchFrom } = useSessions();
   const blocks = useSegments();
 
   const messagesRef = useRef<HTMLDivElement>(null);
@@ -94,6 +94,8 @@ export default function ChatView() {
         messagesRef={messagesRef}
         onSuggestion={(text) => void send(text)}
         onScroll={handleScroll}
+        onBranch={(segmentId) => void branchFrom(segmentId)}
+        branchDisabled={busy}
       />
 
       <Composer

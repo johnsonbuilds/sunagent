@@ -84,6 +84,22 @@ arrives.  Otherwise every "new chat" click would leave a stub behind
 and the sidebar would fill up with blank conversations.  See
 [storage.md](storage.md) for the full map of what the project writes.
 
+### Branching from an answer
+
+Each assistant bubble carries a branch button next to its copy button:
+`POST /api/sessions/{id}/branch` with the block's `segment_id` copies the
+session up to that answer into a **new, independent** session (same model,
+same harness, same history prefix including the system prompt). The parent
+is not touched, and the two conversations have no link afterwards.
+
+Only the last block of a turn can start a branch: cutting in the middle
+would keep an assistant message whose tool calls never got their results.
+The copy's history ends on that answer with its `tool_calls` dropped, so the
+next message is a legal sequence. The block/message pairing is verified by
+text, because the transcript and the `messages` list have no shared id; a
+session whose two sides drifted apart (an interrupted run) is refused with
+`400` rather than cut at a guess.
+
 ### Model and harness per session
 
 Each session stores a catalog id (`model`) and a harness id (`harness`),
@@ -150,6 +166,7 @@ starts one.
 | `PATCH` | `/api/sessions/{id}` | rename, switch `model`, or pick a `harness` |
 | `DELETE` | `/api/sessions/{id}` | delete a session |
 | `POST` | `/api/sessions/{id}/messages` | send a message, start a turn |
+| `POST` | `/api/sessions/{id}/branch` | copy the conversation up to one answer into a new session |
 | `POST` | `/api/sessions/{id}/cancel` | stop the running turn |
 | `GET` | `/api/sessions/{id}/events` | SSE stream of frames |
 | `GET` | `/api/board` | the task board snapshot |

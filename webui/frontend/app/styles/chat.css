@@ -121,6 +121,16 @@
   background: var(--accent);
 }
 
+.msg-actions .icon-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.msg-actions .icon-btn:disabled:hover {
+  background: transparent;
+  color: var(--muted);
+}
+
 /* ------------------------------------------------------------- markdown */
 
 .md-body {

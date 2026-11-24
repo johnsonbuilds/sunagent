@@ -123,6 +123,8 @@ export interface SessionsValue {
   changeHarness: (harness: string) => Promise<void>;
   renameSession: (session: SessionSummary) => Promise<void>;
   deleteSession: (session: SessionSummary) => Promise<void>;
+  /** Copy the conversation up to one answer into a new, independent one. */
+  branchFrom: (segmentId: string) => Promise<void>;
   send: (text: string) => Promise<void>;
   stop: () => Promise<void>;
 }
@@ -514,6 +516,31 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
   const displayTitle =
     title === NEW_SESSION_TITLE ? t("newConversation") : title;
 
+  const branchFrom = useCallback(
+    async (segmentId: string) => {
+      if (!activeId) return;
+      try {
+        const child = await api<SessionDetail>(
+          `/api/sessions/${activeId}/branch`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              segment_id: segmentId,
+              title: `${displayTitle}${t("branchTitleSuffix")}`,
+            }),
+          },
+        );
+        await refreshSessions();
+        await selectSession(child.id);
+        setFocusSeq((value) => value + 1);
+        showToast(t("branchCreated"), "success");
+      } catch (error) {
+        showToast(errorMessage(error), "error");
+      }
+    },
+    [activeId, displayTitle, refreshSessions, selectSession, showToast, t],
+  );
+
   const value = useMemo<SessionsValue>(
     () => ({
       sessions,
@@ -536,6 +563,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
       changeHarness,
       renameSession,
       deleteSession,
+      branchFrom,
       send,
       stop,
     }),
@@ -559,6 +587,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
       changeHarness,
       renameSession,
       deleteSession,
+      branchFrom,
       send,
       stop,
     ],

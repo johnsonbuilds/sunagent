@@ -6,7 +6,7 @@ import { render as renderMarkdown } from "@/lib/markdown";
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import { useToast } from "@/lib/stores/toast";
 import type { Segment, TextSegment, ToolSegment } from "@/lib/types";
-import { CopyIcon, EmptyMark } from "./Icons";
+import { CopyIcon, BranchIcon, EmptyMark } from "./Icons";
 
 const SUGGESTIONS: MessageKey[] = [
   "suggestionFiles",
@@ -20,6 +20,31 @@ interface TranscriptProps {
   messagesRef: RefObject<HTMLDivElement | null>;
   onScroll: () => void;
   onSuggestion: (text: string) => void;
+  onBranch?: (segmentId: string) => void;
+  branchDisabled?: boolean;
+}
+
+/** The run a segment belongs to (``{run_id}:{kind}:{n}``). */
+function runIdOf(segmentId: string): string {
+  return segmentId.split(":", 1)[0];
+}
+
+/**
+ * Assistant blocks a branch may start from: the last block of its run, with
+ * text in it.  Cutting anywhere else would keep a turn whose tool results
+ * never arrived, so the server would refuse it too.
+ */
+function branchableIds(blocks: Segment[]): Set<string> {
+  const lastOfRun = new Map<string, string>();
+  for (const block of blocks) lastOfRun.set(runIdOf(block.id), block.id);
+  const ids = new Set<string>();
+  for (const block of blocks) {
+    if (block.type !== "assistant") continue;
+    if (!(block.content || "").trim()) continue;
+    if (lastOfRun.get(runIdOf(block.id)) !== block.id) continue;
+    ids.add(block.id);
+  }
+  return ids;
 }
 
 function formatValue(value: unknown): string {
@@ -50,7 +75,31 @@ function CopyButton({ content }: { content: string }) {
   );
 }
 
-function TextBlock({ block }: { block: TextSegment }) {
+function BranchButton({ disabled, onClick }: {
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  const { t } = useI18n();
+
+  return (
+    <button
+      type="button"
+      className="icon-btn medium"
+      aria-label={t("msgBranch")}
+      title={t("msgBranch")}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      <BranchIcon />
+    </button>
+  );
+}
+
+function TextBlock({ block, onBranch, branchDisabled }: {
+  block: TextSegment;
+  onBranch?: () => void;
+  branchDisabled?: boolean;
+}) {
   if (block.type === "user") {
     return (
       <div className="msg-row" data-role="user">
@@ -74,6 +123,12 @@ function TextBlock({ block }: { block: TextSegment }) {
         dangerouslySetInnerHTML={{ __html: renderMarkdown(block.content || "") }}
       />
       <div className="msg-actions">
+        {onBranch ? (
+          <BranchButton
+            disabled={Boolean(branchDisabled)}
+            onClick={onBranch}
+          />
+        ) : null}
         <CopyButton content={block.content || ""} />
       </div>
     </div>
@@ -186,7 +241,11 @@ export default function Transcript({
   messagesRef,
   onScroll,
   onSuggestion,
+  onBranch,
+  branchDisabled,
 }: TranscriptProps) {
+  const branchable = branchableIds(blocks);
+
   return (
     <div className="messages" id="messages" ref={messagesRef} onScroll={onScroll}>
       <div className="messages-inner" id="messagesInner">
@@ -195,7 +254,16 @@ export default function Transcript({
           block.type === "tool" ? (
             <ToolCard key={block.id} block={block} />
           ) : (
-            <TextBlock key={block.id} block={block} />
+            <TextBlock
+              key={block.id}
+              block={block}
+              onBranch={
+                onBranch && branchable.has(block.id)
+                  ? () => onBranch(block.id)
+                  : undefined
+              }
+              branchDisabled={branchDisabled}
+            />
           ),
         )}
       </div>

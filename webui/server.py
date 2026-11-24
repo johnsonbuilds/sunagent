@@ -159,6 +159,13 @@ class CreateSessionRequest(BaseModel):
     harness: str | None = None
 
 
+class BranchSessionRequest(BaseModel):
+    """Where to fork a conversation: one assistant block."""
+
+    segment_id: str = Field(min_length=1, max_length=200)
+    title: str | None = Field(default=None, max_length=200)
+
+
 class CreateTaskRequest(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     description: str = Field(min_length=1, max_length=20_000)
@@ -466,6 +473,21 @@ def create_app(store: SessionStore | None = None,
         except BoardStorageError:
             logger.warning("webui.board.unlink_failed session=%s", session_id)
         return {"ok": True}
+
+    @app.post("/api/sessions/{session_id}/branch", status_code=201)
+    async def branch_session(session_id: str,
+                             payload: BranchSessionRequest) -> dict[str, Any]:
+        """Copy a conversation up to one of its answers into a new session."""
+        session = _require_session(sessions, session_id)
+        if session.busy:
+            raise HTTPException(status_code=409, detail="session is busy")
+        child = sessions.branch(session, payload.segment_id,
+                                title=payload.title)
+        if child is None:
+            raise HTTPException(
+                status_code=400,
+                detail="this message cannot start a branch")
+        return _session_detail(child)
 
     @app.post("/api/sessions/{session_id}/messages")
     async def send_message(session_id: str,
