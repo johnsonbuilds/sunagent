@@ -36,10 +36,8 @@ cd "$ROOT_DIR"
 HOST="${AGENT_RUNTIME_WEBUI_HOST:-127.0.0.1}"
 PORT="${AGENT_RUNTIME_WEBUI_PORT:-8000}"
 PID_FILE="$ROOT_DIR/.webui.pid"
-HARNESS_FILE="$ROOT_DIR/.webui.harness"
 LOG_FILE="$ROOT_DIR/webui.log"
 FRONTEND_DIR="$ROOT_DIR/webui/frontend"
-FRONTEND_OUT="$FRONTEND_DIR/out"
 
 # 启动时默认使用的 harness：显式 --harness > 环境变量 > 不指定（webui 侧回落 common-v0）
 DEFAULT_HARNESS="${AGENT_RUNTIME_HARNESS:-}"
@@ -54,49 +52,26 @@ has_npm() {
   command -v npm >/dev/null 2>&1
 }
 
-# 前端源码是否比上次构建产出的 index.html 新
-frontend_needs_build() {
-  [[ -f "$FRONTEND_OUT/index.html" ]] || return 0
-  local paths=(
-    "$FRONTEND_DIR/app"
-    "$FRONTEND_DIR/components"
-    "$FRONTEND_DIR/lib"
-    "$FRONTEND_DIR/package.json"
-    "$FRONTEND_DIR/package-lock.json"
-    "$FRONTEND_DIR/next.config.mjs"
-    "$FRONTEND_DIR/tsconfig.json"
-  )
-  local existing=()
-  local path
-  for path in "${paths[@]}"; do
-    [[ -e "$path" ]] && existing+=("$path")
-  done
-  [[ -n "$(find "${existing[@]}" -newer "$FRONTEND_OUT/index.html" -print -quit 2>/dev/null)" ]]
-}
-
 # 构建 Next.js 静态导出（webui/frontend/out），由 FastAPI 直接托管。
+# 每次启动都重新构建；依赖缺失时先安装。
 cmd_build_frontend() {
   if ! has_npm; then
     echo "错误: 未找到 npm，请先安装 Node.js/npm 以构建 Next.js 前端" >&2
     return 1
   fi
   if [[ ! -d "$FRONTEND_DIR/node_modules" \
-        || ! -f "$FRONTEND_DIR/node_modules/.package-lock.json" \
-        || "$FRONTEND_DIR/package.json" -nt "$FRONTEND_DIR/node_modules/.package-lock.json" \
-        || "$FRONTEND_DIR/package-lock.json" -nt "$FRONTEND_DIR/node_modules/.package-lock.json" ]]; then
+        || ! -f "$FRONTEND_DIR/node_modules/.package-lock.json" ]]; then
     echo "安装前端依赖 ..."
     (cd "$FRONTEND_DIR" && npm install --no-audit --no-fund) || {
       echo "错误: 前端依赖安装失败" >&2
       return 1
     }
   fi
-  if frontend_needs_build; then
-    echo "构建 Next.js 前端 ..."
-    (cd "$FRONTEND_DIR" && npm run build) || {
-      echo "错误: Next.js 前端构建失败" >&2
-      return 1
-    }
-  fi
+  echo "构建 Next.js 前端 ..."
+  (cd "$FRONTEND_DIR" && npm run build) || {
+    echo "错误: Next.js 前端构建失败" >&2
+    return 1
+  }
   return 0
 }
 
@@ -195,12 +170,6 @@ cmd_start() {
       >> "$LOG_FILE" 2>&1 &
   fi
   echo $! > "$PID_FILE"
-  # 记录本次启动的 harness，供 status 展示；未指定则清理旧记录（即默认 harness）
-  if [[ -n "$harness" ]]; then
-    printf '%s' "$harness" > "$HARNESS_FILE"
-  else
-    rm -f "$HARNESS_FILE"
-  fi
 
   # 短暂等待后确认进程存活即视为启动成功（不做 HTTP 健康检查：
   # /api/health 在开启认证时需要鉴权，curl 探活会误报失败）
@@ -262,11 +231,8 @@ cmd_stop() {
 }
 
 cmd_restart() {
-  # 支持 ./run.sh restart [--harness <harness>]：透传给 start；
-  # 不带参数时沿用上次启动的 harness（若有记录），避免静默回落到默认。
-  if [[ $# -eq 0 && -f "$HARNESS_FILE" ]]; then
-    set -- --harness "$(cat "$HARNESS_FILE")"
-  fi
+  # 支持 ./run.sh restart [--harness <harness>]：参数原样透传给 start。
+  # 不带参数即走 start 的默认逻辑（环境变量 > 内置默认），不回放历史值。
   cmd_stop
   echo "------------------------------"
   cmd_start "$@"
@@ -277,9 +243,7 @@ cmd_status() {
     local pid
     pid="$(cat "$PID_FILE")"
     echo "webui 运行中 (PID: $pid)，地址: http://${HOST}:${PORT}"
-    if [[ -f "$HARNESS_FILE" ]]; then
-      echo "harness: $(cat "$HARNESS_FILE")"
-    elif [[ -n "$DEFAULT_HARNESS" ]]; then
+    if [[ -n "$DEFAULT_HARNESS" ]]; then
       echo "harness: $DEFAULT_HARNESS (来自环境变量)"
     fi
     echo "日志: $LOG_FILE"
@@ -432,11 +396,11 @@ case "$CMD" in
   *)
     echo "用法: $0 {start|stop|restart|status|logs|build|harness|harbor}"
     echo ""
-    echo "  start [--harness <harness>]    启动 webui（后台运行，必要时自动构建 Next.js 前端）"
+    echo "  start [--harness <harness>]    启动 webui（后台运行，启动前构建 Next.js 前端）"
     echo "    例: $0 start --harness tb-v4"
     echo "        $0 start --harness harnesses/tb-v4.yaml"
     echo "  stop         停止 webui"
-    echo "  restart [--harness <harness>]  重启 webui（不带参数时沿用上次的 harness）"
+    echo "  restart [--harness <harness>]  重启 webui（参数原样透传给 start）"
     echo "  status       查看运行状态（含 harness）"
     echo "  logs         查看实时日志"
     echo "  build        重新构建 Next.js 前端（webui/frontend）"
