@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from agent_runtime.agent.chat import ChatModel
+from agent_runtime.agent.llm_request import ChatModel
 from agent_runtime.agent.turn_factory import SummarizerFactory
 from agent_runtime.diagnosis import EVALUATION_HARNESS_ID, diagnosis_tool_specs
 from agent_runtime.harness import HarnessSpec, resolve_harness

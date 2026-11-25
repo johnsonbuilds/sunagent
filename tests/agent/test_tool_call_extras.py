@@ -15,7 +15,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
 
-from agent_runtime.agent.chat import _consume_stream, _merge_stream_tool_call
+from agent_runtime.agent.llm_stream import (
+    consume_stream,
+    merge_stream_tool_call,
+)
 from agent_runtime.agent.tool_dispatch import (
     canonical_tool_calls,
     classify_tool_calls,
@@ -63,7 +66,7 @@ class _FakeStreamLLM:
 class MergeStreamToolCallTests(unittest.TestCase):
     def test_extras_are_kept_and_index_is_not(self) -> None:
         calls: list[dict] = []
-        _merge_stream_tool_call(calls, {"index": 0, **_stream_delta(
+        merge_stream_tool_call(calls, {"index": 0, **_stream_delta(
             "call_a", "a.txt", signature=SIGNATURE)})
 
         self.assertEqual(calls[0]["extra_content"], SIGNATURE)
@@ -72,9 +75,9 @@ class MergeStreamToolCallTests(unittest.TestCase):
 
     def test_an_unsigned_call_in_the_same_batch_stays_unsigned(self) -> None:
         calls: list[dict] = []
-        _merge_stream_tool_call(calls, {"index": 0, **_stream_delta(
+        merge_stream_tool_call(calls, {"index": 0, **_stream_delta(
             "call_a", "a.txt", signature=SIGNATURE)})
-        _merge_stream_tool_call(calls, {"index": 1,
+        merge_stream_tool_call(calls, {"index": 1,
                                         **_stream_delta("call_b", "b.txt")})
 
         self.assertEqual(calls[0]["extra_content"], SIGNATURE)
@@ -83,10 +86,10 @@ class MergeStreamToolCallTests(unittest.TestCase):
 
     def test_a_later_argument_delta_does_not_drop_the_signature(self) -> None:
         calls: list[dict] = []
-        _merge_stream_tool_call(calls, {"index": 0, "id": "call_a",
+        merge_stream_tool_call(calls, {"index": 0, "id": "call_a",
                                         "function": {"name": "read_file"},
                                         "extra_content": SIGNATURE})
-        _merge_stream_tool_call(calls, {"index": 0,
+        merge_stream_tool_call(calls, {"index": 0,
                                         "function": {"arguments": '{"x": 1}'}})
 
         self.assertEqual(calls[0]["extra_content"], SIGNATURE)
@@ -98,7 +101,7 @@ class StreamedExtrasTests(unittest.IsolatedAsyncioTestCase):
         deltas = [_stream_delta("call_a", "a.txt", signature=SIGNATURE),
                   _stream_delta("call_b", "b.txt")]
 
-        response = await _consume_stream(_FakeStreamLLM(deltas), [], None, 1)
+        response = await consume_stream(_FakeStreamLLM(deltas), [], None, 1)
 
         calls = response["tool_calls"]
         self.assertEqual(calls[0]["extra_content"], SIGNATURE)

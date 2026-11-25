@@ -14,7 +14,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from agent_runtime.agent.chat import ChatModel
+from agent_runtime.agent.llm_request import ChatModel
 from agent_runtime.agent.loop import AgentTurn
 from agent_runtime.agent.observations import ObservationFormatter
 from agent_runtime.agent.tool_runner import ToolRunner

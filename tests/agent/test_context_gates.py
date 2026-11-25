@@ -6,7 +6,7 @@ from __future__ import annotations
 import unittest
 from typing import Any
 
-from agent_runtime.agent.chat import chat_with_recovery
+from agent_runtime.agent.llm_request import chat_with_recovery
 from agent_runtime.agent.context import (
     DEFAULT_SUMMARY_MAX_TOKENS,
     DEFAULT_USER_PRESERVE_BUDGET,
@@ -429,7 +429,7 @@ class SummaryCoverageTests(unittest.IsolatedAsyncioTestCase):
 
 class StreamUsageTests(unittest.IsolatedAsyncioTestCase):
     async def test_consume_stream_harvests_usage(self) -> None:
-        from agent_runtime.agent.chat import _consume_stream
+        from agent_runtime.agent.llm_stream import consume_stream
 
         async def fake_stream(messages, tools=None):
             yield {"content": "hi", "reasoning_content": ""}
@@ -441,7 +441,7 @@ class StreamUsageTests(unittest.IsolatedAsyncioTestCase):
             def stream(self, messages, tools=None):
                 return fake_stream(messages, tools)
 
-        response = await _consume_stream(FakeStreamLLM(), [], None, 1)
+        response = await consume_stream(FakeStreamLLM(), [], None, 1)
         self.assertEqual(response["usage"]["prompt_tokens"], 123)
         self.assertEqual(response["usage"]["completion_tokens"], 4)
 

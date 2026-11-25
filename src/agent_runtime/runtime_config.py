@@ -3,7 +3,7 @@
 All ``os.getenv`` reads for endpoint/transport knobs converge here.
 The composition root (``turn_factory`` / ``run_agent`` / web UI / Harbor)
 calls :meth:`RuntimeConfig.from_env` once; deep layers
-(``TurnHistory``, ``context``, ``chat``) receive the resolved value
+(``TurnHistory``, ``context``, ``llm_request``) receive the resolved value
 instead of reading the environment themselves.
 
 This fixes the split-brain where ``OpenAICompatibleLLM(model=...,

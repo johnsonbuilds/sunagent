@@ -104,8 +104,8 @@ AST 全量依赖扫描结果暴露出几个值得关注的架构边界问题：
 | 优先级 | 改动项 | 涉及文件 | 做法（最简方案） |
 | :--- | :--- | :--- | :--- |
 | **P0** | **收口 Run 生命周期包装** | 新增轻量 helper（如 `agent/session.py` 或 `run_session` 函数），简化 `run_agent.py`、`integrations/harbor.py`、`webui/server.py` | 提供一个约 50 行的 `execute_run(...)` async context manager / helper，统一 `record_config`、状态判定（`completed/error/cancelled`）、异常捕获与 `afinalize_run`。顺手修复 Harbor 的 `temperature` 漏记，且把 `memory` 开关改为显式参数传入，消除 `harbor.py` 修改 `os.environ` 的副作用。 |
-| **P0** | **彻底完成 `RuntimeConfig` 收口** | `agent/chat.py`, `providers/llm.py`, `agent/tool_error_budget.py`, `execution/{local,harbor,guard}.py` | 删除 `chat.py` 与 `llm.py` 里重复的 `os.getenv` 回退函数（测试若不传 `RuntimeConfig`，由最外层默认 `RuntimeConfig.from_env()` 一次即可）；把 `workspace_root`、`command_guard_mode`、`memory_enabled` 纳入配置或显式入参，避免深层隐式读环境。 |
-| **P1** | **拆分 `agent/chat.py`（保持 `loop.py` 不动）** | `agent/chat.py` → 拆为 2~3 个小模块 | 仅沿已有清晰边界一刀切：`stream_assembly.py`（纯流式 chunk 合并与超时/截断检测）、`llm_recovery.py`（错误分类、`RecoveryPlan`、nudge 逻辑），让 `chat.py` 只保留 ~200 行的调用+重试主流程，核心循环依赖面不变。 |
+| **P0** | **彻底完成 `RuntimeConfig` 收口** | `agent/llm_request.py`, `providers/llm.py`, `agent/tool_error_budget.py`, `execution/{local,harbor,guard}.py` | 删除 `llm_request.py` / `llm_stream.py` 与 `llm.py` 里重复的 `os.getenv` 回退函数（测试若不传 `RuntimeConfig`，由最外层默认 `RuntimeConfig.from_env()` 一次即可）；把 `workspace_root`、`command_guard_mode`、`memory_enabled` 纳入配置或显式入参，避免深层隐式读环境。 |
+| **P1** | **拆分 `agent/chat.py`（保持 `loop.py` 不动）— ✅ 已完成（2026-11-25）** | `agent/chat.py` → `agent/llm_request.py` + `agent/llm_stream.py` + `agent/llm_recovery.py` | 只沿已有清晰边界三刀切：`llm_stream.py`（纯流式 chunk 合并与超时/截断检测）、`llm_recovery.py`（错误分类、`RecoveryPlan`、nudge 逻辑），`llm_request.py` 只保留调用+重试主流程（`chat_with_recovery`）并从两个 facet 模块再导出，`loop.py` 与各入口的依赖面零改动。三个文件统一 `llm_` 前缀，与 `turn_*` / `tool_*` 命名惯例一致。 |
 | **P1** | **打断 `trace <-> metrics` 与根包循环依赖** | `src/agent_runtime/__init__.py`, `trace.py`, `metrics.py` | 1) 把 `RunStats` 抽成极简独立模块或让 `trace.py` 只接受可选 `observer` 回调（`RunTrace` 不 import `metrics`）；2) `metrics.py` 改为 `from agent_runtime.storage import metrics_path` 避免触发包根 `__init__`。 |
 | **P1** | **统一 `agent.completed` 发射出口** | `agent/loop.py`, `agent/turn_guard.py` | `TurnGuard` 只返回“是否早停 + 停止文案”，不再直接调 `events.emit("agent.completed", ...)`；所有自然结束、超步总结、熔断早停统一在 `AgentTurn._run` 单一出口发射 `agent.completed`，与 `trace.span("agent")` 严格 1:1 对齐。 |
 | **P2** | **理顺 `execution` 与 `tools` 边界** | `execution/base.py`, `execution/harbor.py`, `execution/local.py`, `tools/search.py`, `tools/spec.py` | 1) `LocalShellExecutor` 复用 `CommandGuard.blocked_result()`；2) 若保留远端快速搜索，在 `execution/base.py` 明确一个可选小 Protocol（`FastSearchWorkspace`）并把 shell 搜索脚本独立到 `execution/harbor_search.py`，把纯搜索默认参数放回 `tools/search.py`；3) 在 `ToolSpec` 上增加 1~2 个轻量元信息（如 `mutates_files: bool = False`），替代 `tool_dispatch.py` 里硬编码的 `_EDIT_TOOLS`。 |
@@ -118,4 +118,4 @@ AST 全量依赖扫描结果暴露出几个值得关注的架构边界问题：
 - `execution/local.py` 与 `ShellExecutor` / `Workspace` 基础契约：保持极简，不要往 `Workspace` 主协议里塞过多高级操作。
 - `harness` YAML 基因化 + `genes_hash` + `EventEmitter` 订阅模型：扩展性已经很够用，只需修补策略校验的单一事实源即可。
 
-如果你希望落地其中的某些改进（比如先做最稳妥、收益最高的 **P0：Run 生命周期收口 + `RuntimeConfig` 清理**，或 **P1：拆 `chat.py` + 消除循环依赖**），告诉我从哪一项开始，我可以直接给出具体改动方案并带测试验证落地。
+如果你希望落地其中的某些改进（比如先做最稳妥、收益最高的 **P0：Run 生命周期收口 + `RuntimeConfig` 清理**，或 **P1：消除 `trace <-> metrics` 循环依赖**），告诉我从哪一项开始，我可以直接给出具体改动方案并带测试验证落地。

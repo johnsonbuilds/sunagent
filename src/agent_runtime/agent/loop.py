@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from agent_runtime.agent.chat import (
+from agent_runtime.agent.llm_request import (
     ChatModel,
     ThinkingOnlyTurn,
     chat_with_recovery,
