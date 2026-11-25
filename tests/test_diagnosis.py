@@ -292,6 +292,14 @@ class HarnessInternalTests(unittest.TestCase):
         self.assertEqual(HarnessSpec(id="x", internal=True).genes_hash,
                          HarnessSpec(id="x", internal=False).genes_hash)
 
+    def test_the_picker_payload_carries_the_mutation_note(self):
+        rows = {row["id"]: row
+                for row in server.AgentRunner().status()["harnesses"]}
+        self.assertIn("context.strategy turn_fold -> llm_summary",
+                      rows["coding-v2"]["mutation"])
+        self.assertIsNone(rows["coding-v1"]["mutation"])
+        self.assertTrue(rows["coding-v1"]["reason"])
+
     def test_the_diagnosis_tools_are_only_injected_for_that_harness(self):
         from webui.turn_context import _turn_tools
 

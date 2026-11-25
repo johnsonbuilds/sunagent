@@ -214,6 +214,36 @@
   max-width: 280px;
 }
 
+/* Harness rows keep the id on the left and the info icon on the right. */
+.picker-item-row {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.picker-item-row .picker-item-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.picker-item-info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  color: var(--muted);
+  font-family: Georgia, serif;
+  font-size: 10px;
+  font-style: italic;
+  line-height: 1;
+  cursor: help;
+}
+
 .composer-right {
   display: flex;
   align-items: center;

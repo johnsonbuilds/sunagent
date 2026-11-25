@@ -152,6 +152,10 @@ export interface ModelOption {
 
 export interface HarnessOption {
   id: string;
+  /** The harness yaml's one-gene mutation note, shown as the info tooltip. */
+  mutation?: string | null;
+  /** Falls back to the yaml reason when a base harness has no mutation. */
+  reason?: string | null;
 }
 
 export interface RuntimeConfig {

@@ -5,10 +5,16 @@ import { useEffect, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { useRuntimeConfig } from "@/lib/stores/runtime-config";
 import { useDraft, useSessions } from "@/lib/stores/sessions";
+import type { HarnessOption } from "@/lib/types";
 
 import { CloseIcon, DownArrowIcon, SendIcon, StopIcon } from "./Icons";
 
 type PickerKind = "model" | "harness";
+
+/** The info tooltip: the harness yaml's mutation note.
+ *  Base harnesses carry no mutation, so their reason is shown instead. */
+const harnessMutationNote = (harness: HarnessOption) =>
+  (harness.mutation || harness.reason || "").trim();
 
 type ComposerProps = {
   /** Show the jump-to-bottom arrow above the input box. */
@@ -188,28 +194,43 @@ export default function Composer({
               </button>
               {open === "harness" && !harnessLocked ? (
                 <ul className="picker-menu" role="listbox">
-                  {harnesses.map((harness) => (
-                    <li key={harness.id}>
-                      <button
-                        type="button"
-                        className={`picker-item${
-                          harness.id === activeHarness ? " active" : ""
-                        }`}
-                        role="option"
-                        aria-selected={harness.id === activeHarness}
-                        onClick={() => {
-                          setOpen(null);
-                          if (harness.id !== activeHarness) {
-                            void changeHarness(harness.id);
-                          }
-                        }}
-                      >
-                        <span className="picker-item-label">
-                          {harness.id}
-                        </span>
-                      </button>
-                    </li>
-                  ))}
+                  {harnesses.map((harness) => {
+                    const note = harnessMutationNote(harness);
+                    return (
+                      <li key={harness.id}>
+                        <button
+                          type="button"
+                          className={`picker-item picker-item-row${
+                            harness.id === activeHarness ? " active" : ""
+                          }`}
+                          role="option"
+                          aria-selected={harness.id === activeHarness}
+                          onClick={() => {
+                            setOpen(null);
+                            if (harness.id !== activeHarness) {
+                              void changeHarness(harness.id);
+                            }
+                          }}
+                        >
+                          <span className="picker-item-label">
+                            {harness.id}
+                          </span>
+                          {note ? (
+                            // Hovering the icon reveals the mutation note.
+                            // aria-hidden keeps it out of the option's name.
+                            <span
+                              className="picker-item-info"
+                              title={note}
+                              aria-hidden="true"
+                              onClick={(event) => event.stopPropagation()}
+                            >
+                              i
+                            </span>
+                          ) : null}
+                        </button>
+                      </li>
+                    );
+                  })}
                 </ul>
               ) : null}
             </div>

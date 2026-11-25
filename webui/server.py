@@ -239,7 +239,11 @@ class AgentRunner:
             "harness": self.harness.id,
             "models": self.catalog.public(),
             "default_model": self.catalog.default,
-            "harnesses": [{"id": spec.id} for spec in self.harnesses],
+            # ``mutation`` is what the picker's info icon shows: the one
+            # gene change that produced this harness from its parent.
+            "harnesses": [{"id": spec.id, "mutation": spec.mutation,
+                           "reason": spec.reason}
+                          for spec in self.harnesses],
             "default_harness": self.harness.id,
             "stream": self.stream,
             "tools": list(self.harness.tools.enabled),
