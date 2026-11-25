@@ -108,7 +108,7 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
         # Hard gate with no shrinkage: resending this view would be
         # rejected again, burning a retry. Fall back to the registered
         # ``fallback_strategy`` (deterministic compactor by default) —
-        # if even that cannot shrink, the refresh hook reports
+        # if even that cannot shrink, ``TurnHistory.shrink_view`` reports
         # no-progress by size.
         logger.warning("context.force_budget.no_shrink falling back to %s",
                        fallback_strategy)

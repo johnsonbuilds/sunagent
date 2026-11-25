@@ -268,6 +268,150 @@ class AgentLoopErrorHandlingTests(unittest.IsolatedAsyncioTestCase):
         finally:
             environ.pop("AGENT_RUNTIME_MAX_REASONING_CHARS", None)
 
+    async def test_max_tokens_cut_while_thinking_is_not_a_final_answer(self) -> None:
+        """A `length` cut with reasoning only must not end the turn silently.
+
+        Replays sess-20261123-091716-76ab3b iteration 66: the provider cut
+        a thinking-only response at max_tokens, the loop read "no tool
+        calls" as "final answer" and returned "", so the run finished with
+        status success and no answer — only a thinking block in the UI.
+        """
+        llm = StreamingLLM([
+            # Turn 1: the cut response — 600 chars of reasoning, no
+            # content, no tool calls, finish_reason "length".
+            [{"content": "", "reasoning_content": "x" * 600,
+              "tool_calls": []},
+             {"finish_reason": "length"}],
+            # Turn 2: after the nudge the model delivers the answer.
+            [{"content": "agent-desktop is a desktop-automation CLI",
+              "tool_calls": []},
+             {"finish_reason": "stop"}],
+        ])
+        trace = RunTrace(run_id="truncated-thinking")
+
+        answer = await run_turn("what is agent-desktop", llm,
+                                make_registry(), stream=True, trace=trace)
+
+        self.assertEqual(answer, "agent-desktop is a desktop-automation CLI")
+        # The nudge landed in the conversation before the retry, and the
+        # cut reasoning was dropped from the request instead of replayed.
+        nudges = [m for m in llm.messages[1]
+                  if m["role"] == "user"
+                  and "cut off by the model's output limit" in m["content"]]
+        self.assertEqual(len(nudges), 1)
+        self.assertTrue(is_runtime_user_message(nudges[0]))
+        # The wording has to be true for *this* failure: the model was cut
+        # off, it did not choose to stop thinking.
+        self.assertIn("truncated, not finished", nudges[0]["content"])
+        self.assertNotIn("Stop extending your reasoning",
+                         nudges[0]["content"])
+        self.assertEqual(nudges[0]["metadata"]["kind"], "response_truncated")
+        self.assertNotIn("x" * 600,
+                         json.dumps(llm.messages[1], ensure_ascii=False))
+        # The placeholder describes the truncation instead of claiming the
+        # reasoning was merely omitted.
+        placeholders = [m for m in llm.messages[1]
+                        if m["role"] == "assistant"
+                        and "truncated at the output limit" in m["content"]]
+        self.assertEqual(len(placeholders), 1)
+        # The cut request still records its reasoning on the trace and is
+        # not marked final, so the run is diagnosable after the fact.
+        cut = [e for e in trace.events
+               if e.event_type == "llm.end"
+               and e.data.get("finish_reason") == "length"][0]
+        self.assertFalse(cut.data["final"])
+        self.assertEqual(cut.data["reasoning_chars"], 600)
+        nudged = [e for e in trace.events if e.event_type == "llm.nudge"]
+        self.assertEqual(len(nudged), 1)
+        self.assertEqual(nudged[0].data["kind"], "response_truncated")
+
+    async def test_truncated_turn_tokens_are_still_billed(self) -> None:
+        """A cut turn is the most expensive one: its usage must be billed.
+
+        The provider charged for the completion that hit ``max_tokens``.
+        Because the recovery layer now owns the turn ledger, the rejected
+        attempt cannot slip past ``history.record_usage`` on its way to
+        the nudge.
+        """
+        llm = StreamingLLM([
+            [{"content": "", "reasoning_content": "x" * 600,
+              "tool_calls": []},
+             {"finish_reason": "length"},
+             {"usage": {"prompt_tokens": 69_339,
+                        "completion_tokens": 12_849}}],
+            [{"content": "done", "tool_calls": []},
+             {"finish_reason": "stop"},
+             {"usage": {"prompt_tokens": 10, "completion_tokens": 2}}],
+        ])
+        trace = RunTrace(run_id="billed-cut")
+
+        answer = await run_turn("what is agent-desktop", llm,
+                                make_registry(), stream=True, trace=trace)
+
+        self.assertEqual(answer, "done")
+        end = [e for e in trace.events if e.event_type == "agent.end"][0]
+        self.assertEqual(end.data["prompt_tokens"], 69_349)
+        self.assertEqual(end.data["completion_tokens"], 12_851)
+
+    async def test_cut_with_hidden_reasoning_is_nudged_both_ways(self) -> None:
+        """No ``reasoning_content`` must not become a different failure.
+
+        Endpoints that hide the chain of thought return ``length`` with
+        nothing at all.  Streaming used to raise ``StreamEmpty`` (replay
+        the identical request, hit the same wall); non-streaming read it
+        as a truncated thinking turn.  Both paths now agree: nudge.
+        """
+        streamed = StreamingLLM([
+            [{"finish_reason": "length"}],
+            [{"content": "streamed answer", "tool_calls": []},
+             {"finish_reason": "stop"}],
+        ])
+        answer = await run_turn("weather", streamed, make_registry(),
+                                stream=True)
+        self.assertEqual(answer, "streamed answer")
+        # No replay: the second request is the nudged one, and it says the
+        # cut happened before anything visible came out.
+        self.assertEqual(len(streamed.messages), 2)
+        placeholder = [m for m in streamed.messages[1]
+                       if m["role"] == "assistant"
+                       and "before producing any visible content" in m["content"]]
+        self.assertEqual(len(placeholder), 1)
+
+        non_streamed = FakeLLM([
+            {"content": "", "finish_reason": "length", "tool_calls": []},
+            {"content": "chatted answer", "tool_calls": []},
+        ])
+        answer = await run_turn("weather", non_streamed, make_registry())
+        self.assertEqual(answer, "chatted answer")
+        self.assertEqual(len(non_streamed.messages), 2)
+        kinds = [m["metadata"]["kind"] for m in non_streamed.messages[1]
+                 if m["role"] == "user" and "metadata" in m]
+        self.assertEqual(kinds, ["response_truncated"])
+
+    async def test_summary_turn_cut_at_the_limit_still_answers(self) -> None:
+        """The forced summary turn has no next turn: fall back, don't raise.
+
+        ``allow_nudge=False`` makes the recovery layer re-raise, and the
+        summary turn's own handler turns that into the delivered-work
+        answer instead of failing the task at the finish line.
+        """
+        llm = FakeLLM([
+            {"content": "", "tool_calls": [{
+                "id": "1", "type": "function",
+                "function": {"name": "weather",
+                             "arguments": '{"location":"Singapore"}'}}]},
+            {"content": "", "finish_reason": "length", "tool_calls": []},
+        ])
+
+        answer = await run_turn("weather", llm, make_registry(),
+                                max_iterations=1)
+
+        self.assertIn("summarising turn was cut off at the output limit", answer)
+        self.assertIn("the work above stands as delivered", answer)
+        # The answer is the last thing in the conversation, not an empty
+        # assistant turn.
+        self.assertEqual(llm.messages[1][-1]["role"], "user")
+
     def test_trace_span_records_lifecycle(self) -> None:
         trace = RunTrace(run_id="r1")
         with trace.span("operation", iteration=2, request_id="req-1") as meta:

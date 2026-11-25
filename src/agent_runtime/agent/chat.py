@@ -1,4 +1,12 @@
-"""Reliable LLM communication layer: streaming, recovery retry, and budget guard."""
+"""Reliable LLM communication layer: streaming, recovery retry, and budget guard.
+
+This module owns one request end-to-end: how it is sent (streaming or
+not), what a failed attempt recovers to, and the turn-level bookkeeping
+that every attempt owes regardless of outcome (billed usage).  It knows
+the request view — ``TurnHistory`` — not the tool loop, so all recovery
+that stays inside a request lives here, and nothing that needs a *next*
+turn does.
+"""
 
 from __future__ import annotations
 
@@ -8,10 +16,13 @@ import json
 import logging
 import os
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Mapping
+from dataclasses import dataclass
 from typing import Any, Protocol
 
+from agent_runtime.agent.runtime_message import runtime_user_message
 from agent_runtime.agent.tool_dispatch import tool_trace_metadata
+from agent_runtime.agent.turn_history import TurnHistory
 from agent_runtime.events import EventEmitter
 from agent_runtime.harness import HarnessSpec
 from agent_runtime.runtime_config import RuntimeConfig
@@ -72,15 +83,168 @@ def _reasoning_budget_chars(runtime: RuntimeConfig | None = None) -> int | None:
     return budget if budget > 0 else None
 
 
-class ReasoningBudgetExceeded(RuntimeError):
-    """A thinking-only turn blew the reasoning budget; nudge and retry."""
+# ---------------------------------------------------------------------
+# LLM failure taxonomy: one table, one dispatcher
+#
+# Every failed LLM request resolves to a :class:`RecoveryPlan`, and
+# :func:`chat_with_recovery` is the only place that acts on it.  Three
+# strategies cover every case, including "do not retry":
+#
+#   ``replay``   resend the identical request.  The harness's
+#                ``recovery.llm_errors.<category>`` policy owns the count
+#                and the delay; ``max_retries: 0`` means "fail the turn
+#                now" (the fail-fast path of ``invalid_request``).
+#   ``refresh``  rewrite the request before resending (shrink the
+#                view); an identical replay can only be rejected again.
+#                The same policy owns the count.
+#   ``nudge``    rewrite the *conversation* and continue on the next
+#                turn.  No policy applies: this is not a replay of the
+#                same request, and ``control.max_iterations`` is what
+#                bounds it.
+#
+# Both rewrites are performed by the dispatcher below, through the
+# ``TurnHistory`` it is handed: one object carries the request view, the
+# usage ledger and the append point, so no caller passes callbacks in and
+# no reference to a stale list is held across a retry.
+#
+# Adding a failure mode is therefore one line here plus its wording on
+# the exception, never a second, hidden handling path in the caller.
+REPLAY = "replay"
+REFRESH = "refresh"
+NUDGE = "nudge"
+
+
+@dataclass(frozen=True)
+class RecoveryPlan:
+    """What the recovery layer should do after one failed LLM request."""
+
+    strategy: str
+    category: str | None = None
+    """``recovery.llm_errors`` key; ``None`` when no policy governs it."""
+
+
+# Categories an identical resend cannot fix: the payload itself has to
+# change first.  Everything else is a plain replay whose retry count the
+# harness owns.
+_CATEGORY_STRATEGY = {"context_window": REFRESH}
+
+
+class ThinkingOnlyTurn(RuntimeError):
+    """A response that spent itself thinking and delivered nothing.
+
+    No content and no tool call, so the loop cannot read it as an answer.
+    The remedy is a conversation rewrite — an honest placeholder for the
+    missing turn plus :meth:`guidance` telling the model what went wrong
+    and that the next turn must deliver — never an identical replay:
+    resending the same request reproduces the same turn.
+
+    Subclasses supply the wording; the recovery layer only needs
+    :attr:`llm_strategy` and :attr:`reasoning_chars`.
+    """
+
+    llm_strategy = NUDGE
+    kind = "thinking_only"
+
+    def __init__(self, message: str, reasoning_chars: int) -> None:
+        super().__init__(message)
+        self.reasoning_chars = reasoning_chars
+
+    def placeholder(self) -> str:
+        """Assistant turn recorded in place of the answer that never came."""
+        raise NotImplementedError
+
+    def guidance(self) -> str:
+        """User-role nudge handed back with the next request."""
+        raise NotImplementedError
+
+    def fallback_answer(self) -> str:
+        """Answer used when there is no turn left to continue."""
+        raise NotImplementedError
+
+
+def _thinking_cut_clause(reasoning_chars: int) -> str:
+    """Describe where a truncated turn was cut, for both wordings above.
+
+    Endpoints that hide their chain of thought stream no reasoning back,
+    so the honest description of a 0-char cut is "before anything
+    visible", not "after 0 chars of reasoning".
+    """
+    if reasoning_chars > 0:
+        return f"after {reasoning_chars} chars of reasoning"
+    return "before producing any visible content",
+
+
+class ReasoningBudgetExceeded(ThinkingOnlyTurn):
+    """Our own character budget cut a turn that was still thinking."""
+
+    kind = "reasoning_budget"
 
     def __init__(self, reasoning_chars: int, budget: int) -> None:
         super().__init__(
             f"reasoning exceeded {budget} chars ({reasoning_chars} produced) "
-            f"with no content or tool calls yet")
-        self.reasoning_chars = reasoning_chars
+            f"with no content or tool calls yet", reasoning_chars)
         self.budget = budget
+
+    def placeholder(self) -> str:
+        return "(extended reasoning omitted)"
+
+    def guidance(self) -> str:
+        return (
+            f"Your last turn spent {self.reasoning_chars} characters of "
+            f"reasoning and never emitted content or a tool call, so it was "
+            f"cut off. Stop extending your reasoning. Produce the smallest "
+            f"deliverable that makes progress now: write the minimal "
+            f"artifact, or call the tool that creates it. Do not keep "
+            f"planning, and do not give a final answer unless the task's "
+            f"required result already exists.")
+
+    def fallback_answer(self) -> str:
+        return ("(reasoning budget exceeded while summarising; the work "
+                "above stands as delivered)")
+
+
+class ReasoningTruncated(ThinkingOnlyTurn):
+    """The provider cut a thinking turn at its own output limit.
+
+    ``finish_reason == "length"`` with no content and no tool call: the
+    model did not choose to stop, the maximum token count did it for
+    them, so the truncated thought is not an answer.  Left alone it looks
+    like a legitimate empty final answer and the turn ends with nothing
+    but a reasoning block.
+
+    ``reasoning_chars`` may be 0 when the endpoint hides its reasoning
+    (nothing was streamed back), so the wording never claims a reasoning
+    length it cannot see: it says the response was cut before anything
+    visible came out.
+    """
+
+    kind = "response_truncated"
+
+    def __init__(self, reasoning_chars: int) -> None:
+        super().__init__(
+            "response hit the output limit (finish_reason=length) "
+            f"{_thinking_cut_clause(reasoning_chars)}, with no content or "
+            f"tool calls", reasoning_chars)
+
+    def placeholder(self) -> str:
+        return ("(response truncated at the output limit "
+                f"{_thinking_cut_clause(self.reasoning_chars)}; nothing "
+                f"was delivered)")
+
+    def guidance(self) -> str:
+        return (
+            "Your previous response was cut off by the model's output "
+            f"limit {_thinking_cut_clause(self.reasoning_chars)} and "
+            "delivered nothing: that turn was truncated, not finished. "
+            "Plan less and write sooner. Emit the next deliverable now — "
+            "the minimal artifact, or the tool call that creates it — and "
+            "keep the thinking short enough to fit in one response. Do not "
+            "give a final answer unless the task's required result already "
+            "exists.")
+
+    def fallback_answer(self) -> str:
+        return ("(the summarising turn was cut off at the output limit "
+                "while still thinking; the work above stands as delivered)")
 
 
 class StreamIdleTimeout(RuntimeError):
@@ -133,22 +297,39 @@ def _llm_error_category(exc: BaseException,
                         runtime: RuntimeConfig | None = None) -> str | None:
     """Map an LLM-call failure to its ``recovery.llm_errors`` category.
 
-    Returns ``None`` when the failure has dedicated handling elsewhere and
-    must never be retried here (the reasoning-budget nudge continues the
-    loop by itself).  A deterministic rejection (malformed request,
-    unknown endpoint) is ``invalid_request``; everything else is
-    ``provider_error``, whose policy owns the transient cases (5xx,
-    connection drops, rate limits).
+    Returns ``None`` when the failure has no replay policy at all (a
+    thinking-only turn is rewritten here instead of replayed).  A
+    deterministic rejection (malformed request, unknown endpoint) is
+    ``invalid_request``; everything else is ``provider_error``, whose
+    policy owns the transient cases (5xx, connection drops, rate limits).
     """
     category = getattr(exc, "llm_category", None)
     if isinstance(category, str):
         return category
-    if isinstance(exc, ReasoningBudgetExceeded):
+    if isinstance(exc, ThinkingOnlyTurn):
         return None
     if (_status_code(exc) in _DETERMINISTIC_REJECTION_STATUSES
             and not _retry_4xx_enabled(runtime)):
         return "invalid_request"
     return "provider_error"
+
+
+def _recovery_plan(exc: BaseException,
+                   runtime: RuntimeConfig | None = None) -> RecoveryPlan:
+    """Resolve one LLM failure to the single place that acts on it.
+
+    Precedence is: an error that declared its own strategy (a
+    thinking-only turn) keeps it; otherwise the category decides, and
+    only ``context_window`` needs its payload rewritten before the
+    resend.  Everything else is a plain replay whose retry count and
+    delay come from the harness — including the fail-fast case, which is
+    simply a policy with ``max_retries: 0``.
+    """
+    strategy = getattr(exc, "llm_strategy", None)
+    if isinstance(strategy, str):
+        return RecoveryPlan(strategy)
+    category = _llm_error_category(exc, runtime)
+    return RecoveryPlan(_CATEGORY_STRATEGY.get(category, REPLAY), category)
 
 
 def use_streaming(runtime: RuntimeConfig | None = None) -> bool:
@@ -315,12 +496,20 @@ async def _consume_stream(llm: ChatModel, messages: list[dict[str, Any]],
             "LLM stream ended without a finish_reason "
             "(stream may have been truncated by the server)")
     if not content and not reasoning and not tool_calls:
+        if finish_reason == "length":
+            # Nothing visible was produced *because the output limit was
+            # hit*, most likely while the model was still thinking on an
+            # endpoint that does not stream reasoning back.  That is not
+            # an empty stream (a replay would only hit the same wall):
+            # hand the response on so the caller reads it as a truncated
+            # thinking turn, exactly like the non-streaming path does.
+            return response
         raise StreamEmpty(
             "LLM stream ended without any content, reasoning, or tool calls")
     return response
 
 
-async def _chat_response(llm: ChatModel, messages: list[dict[str, Any]],
+async def _chat_response(llm: ChatModel, history: TurnHistory,
                          tools: list[dict[str, Any]] | None,
                          iteration: int, *,
                          stream: bool = False,
@@ -335,8 +524,14 @@ async def _chat_response(llm: ChatModel, messages: list[dict[str, Any]],
     assembled response plus usage/timing once on end.  A retried attempt
     (same iteration, ``attempt > 1``) therefore gets its own pair instead
     of inflating one span's duration.
+
+    It also owns the turn's usage ledger: every attempt that came back —
+    including one this module then rejects as a truncated thinking turn —
+    was billed, and a rejected turn's tokens are often the largest single
+    charge of the run.  Recording here means no recovery path can drop
+    it, whichever strategy handles the failure.
     """
-    request = list(messages)
+    request = list(history.view)
     started = time.monotonic()
     if trace is not None:
         trace.emit("llm.start", iteration, attempt=attempt,
@@ -396,13 +591,25 @@ async def _chat_response(llm: ChatModel, messages: list[dict[str, Any]],
     completion_tokens = int(usage.get("completion_tokens") or 0)
     cached_tokens = int(usage.get("cached_tokens") or 0)
     tool_calls = response.get("tool_calls") or []
+    # Bill the attempt before deciding whether to accept it: this is the
+    # one place that sees every response, accepted or not.
+    history.record_usage(prompt_tokens, completion_tokens, cached_tokens)
+    # A provider that cuts the response at ``max_tokens`` while the model
+    # is still thinking yields neither content nor a tool call.  Left
+    # alone, the loop reads that as a legitimate final answer and the turn
+    # ends with an empty answer (the UI keeps only the thinking block).
+    # ``reasoning_content`` may be empty too (endpoints that hide it), so
+    # the cut itself is the signal, not the reasoning length.
+    truncated_thinking = (response.get("finish_reason") == "length"
+                          and not (response.get("content") or "").strip()
+                          and not tool_calls)
     _end(status="success",
          content=response.get("content") or "",
          reasoning_content=response.get("reasoning_content") or "",
          tool_calls=tool_calls,
          tool_count=len(tool_calls),
          tools=[tool_trace_metadata(call).get("tool") for call in tool_calls],
-         final=not tool_calls,
+         final=not tool_calls and not truncated_thinking,
          finish_reason=response.get("finish_reason"),
          usage=dict(usage),
          prompt_tokens=prompt_tokens,
@@ -416,51 +623,102 @@ async def _chat_response(llm: ChatModel, messages: list[dict[str, Any]],
         events.emit("assistant.completed", iteration,
                     tool_calls=[tool_trace_metadata(call).get("tool")
                                 for call in tool_calls])
+    if truncated_thinking:
+        # Trace is fully recorded above (reasoning chars, finish_reason,
+        # final=False) and the attempt is already billed; raise so the
+        # dispatcher nudges the model to deliver instead of the caller
+        # accepting the empty response as the answer.
+        raise ReasoningTruncated(
+            len(response.get("reasoning_content") or ""))
     return response
 
 
-async def chat_with_recovery(llm: ChatModel, messages: list[dict[str, Any]],
+def _nudge_thinking_only(history: TurnHistory, exc: ThinkingOnlyTurn, *,
+                         iteration: int, trace: RunTrace | None) -> None:
+    """Rewrite the conversation after a turn that delivered nothing.
+
+    An honest placeholder stands in for the answer that never came, and
+    the guidance tells the model what actually happened — our budget cut
+    it, or the provider's output limit did — and that the next turn must
+    deliver.  Both wordings come from the exception, next to the
+    diagnosis, so a new cause cannot inherit another one's story.
+    """
+    logger.warning("llm.nudge iteration=%d kind=%s %s",
+                   iteration, exc.kind, exc)
+    if trace is not None:
+        trace.emit("llm.nudge", iteration, kind=exc.kind,
+                   reasoning_chars=exc.reasoning_chars)
+    history.append({"role": "assistant", "content": exc.placeholder()})
+    history.append(runtime_user_message(exc.guidance(), kind=exc.kind))
+
+
+async def chat_with_recovery(llm: ChatModel, history: TurnHistory,
                              tools: list[dict[str, Any]] | None,
                              iteration: int,
                              harness: HarnessSpec, *,
                              stream: bool = False,
                              trace: RunTrace | None = None,
                              events: EventEmitter | None = None,
-                             refresh: Callable[[], Awaitable[bool]] | None = None,
+                             allow_nudge: bool = True,
                              runtime: RuntimeConfig | None = None,
-                             ) -> dict[str, Any]:
-    """One chat request, retried per the ``recovery.llm_errors`` gene.
+                             ) -> dict[str, Any] | None:
+    """One chat request, recovered per the plan :func:`_recovery_plan`
+    resolves for the failure.
 
-    Retries replay the identical request in place; they do not consume
-    ``control.max_iterations``. Attempt counts are kept per category so
-    one exhausted policy cannot eat another category's budget.
+    This is the only dispatcher of LLM failures; the three strategies are
+    described once, next to the taxonomy above.
 
-    The ``context_window`` category is the exception: replaying the same
-    over-limit request can never succeed, so when a ``refresh`` hook is
-    supplied the caller compacts the request view *in place* (mutating
-    ``messages``' contents, not rebinding it) before the resend; without
-    a hook — or when the hook reports nothing further to compact — the
-    error propagates.  No backoff sleep on this category: the compaction
-    itself is the delay.
+    It takes the ``history`` rather than a message list because two of the
+    three strategies rewrite it: ``refresh`` shrinks the view
+    (``TurnHistory.shrink_view``) and ``nudge`` appends the placeholder
+    and guidance.  Reading ``history.view`` fresh on every attempt is what
+    makes a second retry see the first retry's compaction — a rebinding
+    compaction can never be applied to a list reference held from before
+    it ran.
+
+    ``replay`` retries replay the identical request in place and do not
+    consume ``control.max_iterations``. Attempt counts are kept per
+    category so one exhausted policy cannot eat another category's
+    budget.
+
+    ``refresh`` (``context_window``) can never succeed as a replay, so it
+    shrinks before the resend; when the view cannot shrink further the
+    error propagates instead of burning retries.  No backoff sleep on
+    this strategy: the compaction itself is the delay.
+
+    ``nudge`` (a thinking-only turn) rewrites the conversation and
+    returns ``None`` so the caller continues with its next turn instead
+    of reading the empty response as an answer.  ``allow_nudge=False``
+    (the forced summary turn, which has no next turn and no tools)
+    re-raises instead, leaving the caller's own fallback to answer.
     """
     attempted: dict[str, int] = {}
     while True:
         try:
-            return await _chat_response(llm, messages, tools, iteration,
-                                        stream=stream, trace=trace, events=events,
-                                        runtime=runtime,
+            return await _chat_response(llm, history, tools, iteration,
+                                        stream=stream, trace=trace,
+                                        events=events, runtime=runtime,
                                         attempt=sum(attempted.values()) + 1)
         except Exception as exc:
-            category = _llm_error_category(exc, runtime)
+            plan = _recovery_plan(exc, runtime)
+            if plan.strategy == NUDGE:
+                if not allow_nudge or not isinstance(exc, ThinkingOnlyTurn):
+                    raise
+                _nudge_thinking_only(history, exc, iteration=iteration,
+                                     trace=trace)
+                return None
+            category = plan.category
             if category is None:
+                # A strategy with no policy key: there is nothing to look
+                # a retry count up in, so it is not recoverable here.
                 raise
             policy = harness.recovery.llm_errors.get(category)
             tried = attempted.get(category, 0)
             if policy is None or tried >= policy.max_retries:
                 raise
-            if category == "context_window":
-                if refresh is None or not await refresh():
-                    raise
+            if plan.strategy == REFRESH and not await history.shrink_view(
+                    harness.context, trace=trace, iteration=iteration):
+                raise
             delay = policy.delay(tried + 1)
             logger.warning(
                 "llm.retry iteration=%d category=%s attempt=%d/%d "
@@ -479,9 +737,12 @@ async def chat_with_recovery(llm: ChatModel, messages: list[dict[str, Any]],
 __all__ = [
     "ChatModel",
     "ReasoningBudgetExceeded",
+    "ReasoningTruncated",
+    "RecoveryPlan",
     "StreamEmpty",
     "StreamIdleTimeout",
     "StreamTruncated",
+    "ThinkingOnlyTurn",
     "chat_with_recovery",
     "use_streaming",
 ]

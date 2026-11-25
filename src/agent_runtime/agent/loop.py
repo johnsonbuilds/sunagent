@@ -12,7 +12,7 @@ from typing import Any
 
 from agent_runtime.agent.chat import (
     ChatModel,
-    ReasoningBudgetExceeded,
+    ThinkingOnlyTurn,
     chat_with_recovery,
     use_streaming,
 )
@@ -30,7 +30,6 @@ from agent_runtime.agent.turn_history import (
     Conversation,
     TurnHistory,
 )
-from agent_runtime.agent.tokens import response_usage
 from agent_runtime.runtime_config import RuntimeConfig, resolve_echo_reasoning
 from agent_runtime.agent.turn_opening import open_turn
 from agent_runtime.tools import ToolExecutor
@@ -114,7 +113,7 @@ class AgentTurn:
                 response = await self._request(history, iteration, tools.schemas,
                                                agent_meta)
                 if response is None:
-                    continue  # reasoning-budget nudge appended; retry next turn
+                    continue  # turn rewritten (placeholder + nudge); retry next turn
                 tool_calls = response.get("tool_calls") or []
                 content = response.get("content") or ""
 
@@ -153,7 +152,7 @@ class AgentTurn:
     async def _request(self, history: TurnHistory, iteration: int,
                        schemas: list[dict[str, Any]],
                        agent_meta: dict[str, Any]) -> dict[str, Any] | None:
-        """One LLM request; ``None`` means a reasoning-budget nudge was added."""
+        """One LLM request; ``None`` means the turn was rewritten (nudged)."""
         events, trace = self.events, self.trace
         harness = self.harness
         try:
@@ -163,46 +162,23 @@ class AgentTurn:
                 "llm.request.start iteration=%d messages=%d tools=%d stream=%s",
                 iteration, len(history.messages), len(schemas), self.stream)
             # ``chat_with_recovery`` owns the per-attempt llm.start/llm.end
-            # events: a retry gets its own pair instead of inflating one
-            # span, and the request payload is written once.
+            # events (a retry gets its own pair instead of inflating one
+            # span), the usage ledger, and every recovery decision
+            # (replay / refresh / nudge).  This caller only says which
+            # history the request reads from and where to put the result.
             response = await chat_with_recovery(
-                self.llm, history.view, schemas, iteration,
-                harness, stream=self.stream, trace=trace, events=events,
-                refresh=self.guard.context_window_refresh(
-                    history, iteration),
+                self.llm, history, schemas, iteration, harness,
+                stream=self.stream, trace=trace, events=events,
                 runtime=self.runtime)
+            if response is None:
+                return None
             tool_calls = response.get("tool_calls") or []
             content = response.get("content") or ""
-            prompt_tokens, completion_tokens, cached_tokens = response_usage(
-                response)
-            history.record_usage(prompt_tokens, completion_tokens,
-                                 cached_tokens)
             logger.debug(
                 "llm.request.end iteration=%d content_chars=%d tool_calls=%s",
                 iteration, len(content),
                 [tool_trace_metadata(call).get("tool") for call in tool_calls])
             return response
-        except ReasoningBudgetExceeded as exc:
-            # The model spiralled into thinking without acting. Append
-            # an assistant placeholder plus a nudge and retry on the
-            # next iteration (consuming one iteration of the budget) —
-            # resending identical input would just reproduce the spiral.
-            logger.warning(
-                "llm.reasoning_budget_exceeded iteration=%d %s", iteration, exc)
-            history.append({"role": "assistant",
-                            "content": "(extended reasoning omitted)"})
-            nudge = runtime_user_message(
-                f"Your last turn produced {exc.reasoning_chars} characters "
-                f"of reasoning without any content or tool calls. Stop "
-                f"extending your reasoning. Produce the smallest deliverable "
-                f"that makes progress now: write the minimal artifact, or "
-                f"call the tool that creates it. Do not keep planning, and "
-                f"do not give a final answer unless the task's required "
-                f"result already exists.",
-                kind="reasoning_budget",
-            )
-            history.append(nudge)
-            return None
         except Exception as exc:
             logger.error("llm.request.error iteration=%d error=%s", iteration, exc)
             error = f"LLM error: {exc}"
@@ -228,26 +204,24 @@ class AgentTurn:
                                        trace=trace, iteration=iteration)
             logger.debug("llm.request.start iteration=%d messages=%d tools=0 stream=%s",
                          iteration, len(history.view), self.stream)
+            # ``allow_nudge=False``: the summary turn has no next turn to
+            # continue, so a thinking-only response must raise and reach
+            # the fallback below instead of rewriting the conversation.
             response = await chat_with_recovery(
-                self.llm, history.view, None, iteration, harness,
+                self.llm, history, None, iteration, harness,
                 stream=self.stream, trace=trace, events=events,
-                refresh=self.guard.context_window_refresh(
-                    history, iteration),
-                runtime=self.runtime)
-            prompt_tokens, completion_tokens, cached_tokens = response_usage(
-                response)
-            history.record_usage(prompt_tokens, completion_tokens,
-                                 cached_tokens)
+                allow_nudge=False, runtime=self.runtime)
             logger.debug("llm.request.end iteration=%d content_chars=%d tool_calls=[]",
                          iteration, len(response.get("content") or ""))
-        except ReasoningBudgetExceeded as exc:
-            # The forced summary turn has no tools, so nudging makes no
-            # sense; surface the partial reasoning as the final answer
-            # instead of failing the whole task at the finish line.
-            logger.warning("llm.reasoning_budget_exceeded iteration=%d %s",
-                           iteration, exc)
-            answer = ("(reasoning budget exceeded while summarising; "
-                      "the work above stands as delivered)")
+        except ThinkingOnlyTurn as exc:
+            # The forced summary turn has no tools and no next turn, so
+            # nudging makes no sense (``allow_nudge=False`` makes the
+            # recovery layer raise instead of rewriting); surface the
+            # partial work as the final answer instead of failing the
+            # whole task at the finish line.
+            logger.warning("llm.nudge.unrecoverable iteration=%d kind=%s %s",
+                           iteration, exc.kind, exc)
+            answer = exc.fallback_answer()
             history.append({"role": "assistant", "content": answer})
             logger.debug("agent.final iteration=%d answer_chars=%d", iteration,
                          len(answer))

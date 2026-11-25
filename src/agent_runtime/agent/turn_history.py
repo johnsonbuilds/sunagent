@@ -25,15 +25,19 @@ never travel on the wire):
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from agent_runtime.agent.context import (
     extract_summary,
     total_chars,
     apply_context_strategy,
+    request_view_size,
 )
 from agent_runtime.harness import ContextGenome
 from agent_runtime.runtime_config import RuntimeConfig, resolve_echo_reasoning
+
+logger = logging.getLogger(__name__)
 
 
 def ensure_system_prompt(conversation: Conversation, system: str,
@@ -217,6 +221,51 @@ class TurnHistory:
             # snapshot forever while history grows past it.
             if new_summary is not None and new_summary != old_summary:
                 self._summary_boundary = len(self.messages)
+
+    async def shrink_view(self, context: ContextGenome, *,
+                          trace: Any = None,
+                          iteration: int | None = None,
+                          factor: float = 0.7) -> bool:
+        """Force the view below the size the provider just rejected.
+
+        The context-window hard gate: estimates can undershoot, and when
+        the provider answers 400 the estimate is not the ruler that
+        matters.  Rebuild the view against 70% of its *measured* size,
+        so the resend is below whatever limit rejected it.
+
+        Returns whether the view actually got strictly smaller.  ``False``
+        means resending would be rejected again — the caller must not
+        spend a retry on it.
+
+        This lives on the history, not on the recovery policy layer,
+        because it only ever touches ``view``/``_usage_anchor``: the
+        caller re-reads ``history.view`` for the next attempt, so no
+        reference to the old list has to be updated from the outside.
+        """
+        current = request_view_size(self.view, context, self._usage_anchor)
+        # Measure the shrink with the PRE-refresh anchor: refresh clears
+        # it (stale mix), and comparing old vs new sizes with different
+        # rulers would misjudge the result.
+        anchor_before = self._usage_anchor
+        target = max(1, int(current * factor))
+        before = self.view
+        try:
+            await self.refresh_view(context, trace=trace, iteration=iteration,
+                                    force_budget=target)
+        except Exception as exc:
+            logger.warning(
+                "llm.context_window.refresh_failed iteration=%s %s",
+                iteration, exc)
+            return False
+        if self.view is before:
+            # The strategy rebuilt nothing: the view is identical, so a
+            # resend would hit the same wall.
+            return False
+        if request_view_size(self.view, context, anchor_before) >= current:
+            logger.warning("llm.context_window.no_shrink iteration=%s",
+                           iteration)
+            return False
+        return True
 
 
 __all__ = ["Conversation", "TurnHistory", "ensure_system_prompt"]

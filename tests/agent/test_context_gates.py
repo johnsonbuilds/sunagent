@@ -227,49 +227,79 @@ class IncrementalSummaryTests(unittest.IsolatedAsyncioTestCase):
 
 
 class HardGateRecoveryTests(unittest.IsolatedAsyncioTestCase):
-    def _spec(self) -> HarnessSpec:
+    def _spec(self, strategy: str = "compact_observations") -> HarnessSpec:
         return from_dict({
+            "context": {"strategy": strategy, "context_budget": 10 ** 9},
             "recovery": {"llm_errors": {
                 "context_window": {"max_retries": 2, "backoff": "none"},
             }},
         })
 
-    async def test_context_window_error_triggers_refresh_and_resend(self) -> None:
+    async def test_context_window_error_shrinks_and_resends(self) -> None:
         spec = self._spec()
-        attempts: list[int] = []
+        sizes: list[int] = []
 
         class FlakyLLM:
             async def chat(self, messages, tools=None, **kwargs):
-                attempts.append(len(messages))
-                if len(attempts) == 1:
+                sizes.append(sum(len(str(m.get("content", "")))
+                                 for m in messages))
+                if len(sizes) == 1:
                     raise ContextWindowExceededError("maximum context length")
                 return {"content": "ok", "tool_calls": []}
 
-        messages = build_rounds(6, tool_chars=100)
-
-        async def refresh() -> bool:
-            messages[:] = messages[:2]  # compact in place
-            return True
+        history = TurnHistory(build_rounds(10, tool_chars=5_000))
 
         response = await chat_with_recovery(
-            FlakyLLM(), messages, None, 1, spec, refresh=refresh)
+            FlakyLLM(), history, None, 1, spec)
         self.assertEqual(response["content"], "ok")
-        self.assertEqual(attempts, [14, 2])  # resent the compacted view
+        self.assertEqual(len(sizes), 2)
+        self.assertLess(sizes[1], sizes[0])  # resent a compacted view
 
-    async def test_refresh_false_propagates(self) -> None:
+    async def test_a_second_overflow_resends_the_second_compaction(self) -> None:
+        """Retry N must see retry N-1's compaction, not the original view.
+
+        The old hook copied the rebuilt view into the *first* attempt's
+        list. ``refresh_view`` rebinds, so the second compaction landed in
+        a list nobody sent, and the third request replayed the request the
+        provider had already rejected — with ``max_retries: 2`` that is a
+        silent no-op retry.
+        """
         spec = self._spec()
+        sizes: list[int] = []
+
+        class OverflowTwiceLLM:
+            async def chat(self, messages, tools=None, **kwargs):
+                sizes.append(sum(len(str(m.get("content", "")))
+                                 for m in messages))
+                if len(sizes) <= 2:
+                    raise ContextWindowExceededError("context window")
+                return {"content": "ok", "tool_calls": []}
+
+        history = TurnHistory(build_rounds(10, tool_chars=5_000))
+
+        response = await chat_with_recovery(
+            OverflowTwiceLLM(), history, None, 1, spec)
+        self.assertEqual(response["content"], "ok")
+        self.assertEqual(len(sizes), 3)
+        self.assertLess(sizes[1], sizes[0])
+        self.assertLess(sizes[2], sizes[1])  # strictly: a fresh compaction
+
+    async def test_unshrinkable_view_propagates_without_burning_retries(
+            self) -> None:
+        spec = self._spec(strategy="full_history")
+        attempts: list[int] = []
 
         class OverflowLLM:
             async def chat(self, messages, tools=None, **kwargs):
+                attempts.append(len(messages))
                 raise ContextWindowExceededError("context window")
 
-        async def refresh() -> bool:
-            return False
+        history = TurnHistory(build_rounds(4, tool_chars=5_000))
 
         with self.assertRaises(ContextWindowExceededError):
-            await chat_with_recovery(
-                OverflowLLM(), build_rounds(2, tool_chars=10), None, 1, spec,
-                refresh=refresh)
+            await chat_with_recovery(OverflowLLM(), history, None, 1, spec)
+        # No shrink, no resend: one attempt, not one per allowed retry.
+        self.assertEqual(len(attempts), 1)
 
 
 class TurnHistoryAnchorTests(unittest.IsolatedAsyncioTestCase):
@@ -792,11 +822,12 @@ class BoundaryChaseTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ContextWindowHardGateLoopTests(unittest.IsolatedAsyncioTestCase):
-    """End-to-end hard gate: provider 400 → refresh hook compacts → resend.
+    """End-to-end hard gate: provider 400 → view shrunk → resend.
 
-    The existing recovery tests hand-roll the refresh hook; this one runs
-    the REAL ``AgentTurn._context_window_refresh`` (genome-driven shrink
-    to 70%, size-based progress) through ``run_turn``.
+    The recovery unit tests drive ``chat_with_recovery`` directly; this
+    one runs the whole turn so the genome-driven shrink
+    (``TurnHistory.shrink_view``, 70% of the rejected size) and the
+    retry bookkeeping are exercised together through ``run_turn``.
     """
 
     async def test_overflow_rejection_compacts_and_resends(self) -> None:

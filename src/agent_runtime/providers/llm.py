@@ -32,7 +32,7 @@ class ContextWindowExceededError(RuntimeError):
     Carries ``llm_category = "context_window"`` so the recovery layer
     routes it to the ``recovery.llm_errors.context_window`` policy.  An
     in-place retry can never succeed: the caller must compact the request
-    view before resending (agent loop's refresh hook).
+    view before resending (``TurnHistory.shrink_view``).
     """
 
     llm_category = "context_window"

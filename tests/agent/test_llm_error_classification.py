@@ -21,7 +21,17 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
 
 import agent_runtime.agent.chat as chat_module
-from agent_runtime.agent.chat import _llm_error_category
+from agent_runtime.agent.chat import _llm_error_category, _recovery_plan
+from agent_runtime.agent.chat import (
+    NUDGE,
+    REFRESH,
+    REPLAY,
+    ReasoningBudgetExceeded,
+    ReasoningTruncated,
+    StreamEmpty,
+    StreamIdleTimeout,
+    StreamTruncated,
+)
 from agent_runtime.agent.turn_factory import run_turn
 from agent_runtime.harness import (
     HarnessSpec,
@@ -162,6 +172,98 @@ class ClassificationTests(unittest.TestCase):
                 environ.pop("AGENT_RUNTIME_RETRY_4XX", None)
             else:
                 environ["AGENT_RUNTIME_RETRY_4XX"] = previous
+
+
+class RecoveryPlanTests(unittest.TestCase):
+    """One table decides every LLM failure, so test the table itself.
+
+    The three strategies are replay (harness owns count and delay),
+    refresh (compact, then resend) and nudge (rewrite the conversation).
+    A failure with no replay policy at all — a thinking-only turn — used
+    to be signalled by ``category is None`` and handled in a second place;
+    the plan is now the single answer to "what happens next".
+    """
+
+    def test_transient_and_rejected_failures_replay(self) -> None:
+        cases = [
+            (StreamIdleTimeout("no chunk"), "stream_idle_timeout"),
+            (StreamTruncated("closed early"), "stream_truncated"),
+            (StreamEmpty("empty"), "stream_empty"),
+            (ProviderError(503), "provider_error"),
+            (ValueError("dns hiccup"), "provider_error"),
+            (ProviderError(400), "invalid_request"),
+        ]
+        for error, category in cases:
+            with self.subTest(error=type(error).__name__, category=category):
+                plan = _recovery_plan(error)
+                self.assertEqual(plan.strategy, REPLAY)
+                self.assertEqual(plan.category, category)
+
+    def test_a_rejection_is_replay_so_the_harness_can_still_fail_fast(self) -> None:
+        """"Do not retry" is a policy (max_retries 0), not a strategy."""
+        plan = _recovery_plan(ProviderError(400))
+
+        self.assertEqual(plan.strategy, REPLAY)
+        self.assertEqual(
+            coding_v1_like_harness().recovery.llm_errors[plan.category].max_retries,
+            0)
+
+    def test_a_context_overflow_refreshes_before_resending(self) -> None:
+        error = ContextWindowExceededError("400 - context_length_exceeded")
+        error.status_code = 400
+
+        plan = _recovery_plan(error)
+
+        self.assertEqual(plan.strategy, REFRESH)
+        self.assertEqual(plan.category, "context_window")
+
+    def test_a_thinking_only_turn_is_nudged_with_no_policy(self) -> None:
+        for error in (ReasoningBudgetExceeded(600, 500), ReasoningTruncated(600)):
+            with self.subTest(error=type(error).__name__):
+                plan = _recovery_plan(error)
+                self.assertEqual(plan.strategy, NUDGE)
+                self.assertIsNone(plan.category)
+                self.assertIsNone(_llm_error_category(error))
+                self.assertEqual(error.reasoning_chars, 600)
+
+    def test_the_two_thinking_only_turns_state_their_own_cause(self) -> None:
+        budget = ReasoningBudgetExceeded(600, 500)
+        truncated = ReasoningTruncated(600)
+
+        self.assertIn("reasoning exceeded 500 chars", str(budget))
+        # A provider-side cut is not our budget being exceeded: the message
+        # must not borrow that diagnosis.
+        self.assertNotIn("exceeded", str(truncated))
+        self.assertIn("finish_reason=length", str(truncated))
+        self.assertIn("600 chars of reasoning", str(truncated))
+        # Distinct guidance and placeholders, because the remedies differ in
+        # what the model is told actually happened.
+        self.assertNotEqual(budget.guidance(), truncated.guidance())
+        self.assertNotEqual(budget.placeholder(), truncated.placeholder())
+        self.assertNotEqual(budget.fallback_answer(),
+                            truncated.fallback_answer())
+        self.assertNotEqual(budget.kind, truncated.kind)
+
+    def test_a_cut_with_no_visible_reasoning_does_not_claim_zero_chars(
+            self) -> None:
+        """Hidden chain of thought: the cut is real, the char count is not.
+
+        Endpoints that do not stream ``reasoning_content`` back report
+        ``finish_reason=length`` with nothing visible, so a wording built
+        around "0 chars of reasoning" would describe a measurement that
+        never happened.
+        """
+        hidden = ReasoningTruncated(0)
+
+        self.assertIn("before producing any visible content", str(hidden))
+        self.assertIn("before producing any visible content",
+                      hidden.placeholder())
+        self.assertIn("before producing any visible content",
+                      hidden.guidance())
+        for text in (str(hidden), hidden.placeholder(), hidden.guidance()):
+            self.assertNotIn("0 chars", text)
+        # It is still the same failure, so the strategy does not change.
+        self.assertEqual(_recovery_plan(hidden).strategy, NUDGE)
 
 
 class GenomeTests(unittest.TestCase):

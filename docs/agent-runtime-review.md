@@ -37,7 +37,7 @@
 1. ✅ **`AgentTurn` 成 God Object（已修复）**：
    - ✅ `loop.py` 从 509 行降到 288 行、5 个方法（`__init__ / run / _run / _request / _summary_turn`）；import 从 11 个模块降到 7 个。
    - ✅ 开场注入移到 `turn_opening.open_turn`（`turn_opening.py:26`）：system prompt / skills / memory 只在这里组装一次。
-   - ✅ 横切策略移到 `TurnGuard`（`turn_guard.py:45`）：预算提醒、同工具同错熔断、上下文窗口刷新、拒绝观察各归其位。
+   - ✅ 横切策略移到 `TurnGuard`（`turn_guard.py:45`）：预算提醒、同工具同错熔断、拒绝观察各归其位；上下文窗口收缩归 `TurnHistory.shrink_view`（它只碰请求视图，与 guard 状态无关）。
    - ✅ 工具执行移到 `ToolRunner.dispatch`（`tool_runner.py:37`）：校验后的调用按序执行、渲染 observation、驱动 guard/finisher。
    - ✅ `__init__` 不再 `getattr(tools, "workspace")` 再造 `ObservationFormatter`。`workspace` 已是 `ToolExecutor` 协议成员（`tools/tools.py:17-31`），`turn_factory.py:58` 显式取 `tools.workspace` 并注入 formatter，"tools ↔ observations 隐式约定"变成显式契约。
    - ✅ `TurnFinisher` 接管 submit 校验 / rerun（`turn_finisher.py:116`）；`turn_factory` 成为组合根，`AgentTurn` 不再自己构造协作者。

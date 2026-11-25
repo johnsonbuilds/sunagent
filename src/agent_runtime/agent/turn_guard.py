@@ -4,23 +4,23 @@ The loop decides *when* to call the model and which tools to run; this
 module owns the cross-cutting policy around those decisions:
 
 * the same-tool / same-error fuse, including its stop answer,
-* the budget reminder injected at configured iteration fractions,
-* the context-window hard-gate hook that shrinks and rebuilds the view
-  after the provider rejects a request, and
+* the budget reminder injected at configured iteration fractions, and
 * the observation returned to the model when a tool call is rejected
   before execution.
 
 Keeping these here lets the loop stay a coordinator: it asks the guard
 whether to stop and otherwise continues with the next request.
+
+The context-window hard gate (shrink after a provider rejects a request)
+is NOT here: it only touches the request view, so it belongs to
+``TurnHistory.shrink_view``.
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
 from typing import Any
 
-from agent_runtime.agent.context import request_view_size
 from agent_runtime.agent.runtime_message import runtime_user_message
 from agent_runtime.agent.tool_dispatch import (
     ToolCallOutcome,
@@ -58,48 +58,6 @@ class TurnGuard:
         self.max_iterations = max_iterations
         self.error_budget = SameToolErrorBudget(
             resolve_max_retries(harness.recovery.tool_error_max_retries))
-
-    def context_window_refresh(self, history: TurnHistory,
-                               iteration: int) -> Callable[[], Awaitable[bool]]:
-        """Build the hard-gate refresh hook handed to chat recovery.
-
-        On a context-window rejection the hook shrinks the working
-        budget to 70% of the rejected request's estimated size, rebuilds
-        the view, and copies the new content into the list reference the
-        recovery loop already holds (mutating in place, not rebinding).
-        Returns False when the strategy cannot shrink further (identity
-        or no size reduction — resending would be rejected again), which
-        lets the recovery loop re-raise instead of burning retries.
-        """
-        async def _refresh() -> bool:
-            current = request_view_size(history.view, self.harness.context,
-                                        history.usage_anchor)
-            anchor_before = history.usage_anchor
-            target = max(1, int(current * 0.7))
-            view_ref = history.view
-            try:
-                await history.refresh_view(self.harness.context,
-                                           trace=self.trace,
-                                           iteration=iteration,
-                                           force_budget=target)
-            except Exception as exc:
-                logger.warning(
-                    "llm.context_window.refresh_failed iteration=%d %s",
-                    iteration, exc)
-                return False
-            if history.view is view_ref:
-                return False
-            # Compare with the pre-refresh anchor: refresh clears it
-            # (stale mix), and measuring old vs new with different rulers
-            # would misjudge shrinkage.
-            if request_view_size(history.view, self.harness.context,
-                                 anchor_before) >= current:
-                logger.warning(
-                    "llm.context_window.no_shrink iteration=%d", iteration)
-                return False
-            view_ref[:] = history.view
-            return True
-        return _refresh
 
     def maybe_remind(self, history: TurnHistory, iteration: int) -> None:
         """Nudge at configured budget fractions (control gene).
