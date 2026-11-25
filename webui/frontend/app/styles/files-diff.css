@@ -101,12 +101,15 @@
 }
 
 /* One grid for the whole split diff, so the two code columns line up on
-   every row.  Wide screens keep the 50/50 split; narrow screens let a
-   column grow to its longest line instead of truncating with an ellipsis
-   (the preview body provides the horizontal scrollbar). */
+   every row.  Each column is at least as wide as its longest line, so a
+   long line widens the whole diff instead of being cut off with an
+   ellipsis; the preview body provides the horizontal scrollbar.  While the
+   content fits, both code columns still share the width 50/50. */
 .diff-split {
   display: grid;
-  grid-template-columns: 46px minmax(0, 1fr) 46px minmax(0, 1fr);
+  grid-template-columns:
+    46px minmax(max-content, 1fr)
+    46px minmax(max-content, 1fr);
   align-items: stretch;
 }
 
@@ -129,8 +132,6 @@
 .diff-cell {
   min-width: 0;
   padding-right: 10px;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: pre;
   tab-size: 4;
 }
@@ -185,17 +186,6 @@
   .files-body.is-narrow-open .files-view-pane { display: flex; }
   .files-body.is-narrow-open .files-back-btn { display: inline-flex; }
   .files-changes-summary { padding: 8px 10px; }
-  /* Split view: grow each side past the screen for long lines and let
-     the preview body scroll sideways instead of truncating. */
-  .diff-split {
-    grid-template-columns:
-      46px minmax(max-content, 1fr)
-      46px minmax(max-content, 1fr);
-  }
-  .diff-split .diff-cell {
-    overflow: visible;
-    text-overflow: clip;
-  }
 }
 
 /* Narrow screens: the head wraps the actions onto their own row (see
