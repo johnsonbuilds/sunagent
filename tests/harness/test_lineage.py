@@ -9,7 +9,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
 
-from agent_runtime.harness import HarnessError, from_dict
+from agent_runtime.harness import HarnessError, from_dict, load_harness
 from agent_runtime.lineage import (
     changed_genes,
     derive,
@@ -295,6 +295,37 @@ class DeriveTests(unittest.TestCase):
         self.assertEqual(replica.genes_hash, child.genes_hash)
         self.assertEqual(replica.parent, "baseline-v0")
         self.assertEqual(replica.mutation, "bump iterations")
+
+
+class ShippedV2HarnessTests(unittest.TestCase):
+    """The committed v2 harnesses must be one-gene children of v1."""
+
+    HARNESSES = Path(__file__).parents[2] / "harnesses"
+    PAIRS = (("coding-v1", "coding-v2"),
+             ("general-v1", "general-v2"),
+             ("readonly-v1", "readonly-v2"))
+
+    def _load(self, harness_id: str):
+        return load_harness(self.HARNESSES / f"{harness_id}.yaml")
+
+    def test_each_v2_switches_only_the_context_strategy(self) -> None:
+        for parent_id, child_id in self.PAIRS:
+            with self.subTest(child=child_id):
+                parent, child = self._load(parent_id), self._load(child_id)
+                self.assertEqual(child.id, child_id)
+                self.assertEqual(child.parent, parent_id)
+                self.assertTrue((child.mutation or "").strip())
+                self.assertEqual(changed_genes(parent, child),
+                                 [("context", 1)])
+                self.assertEqual(parent.context.strategy, "turn_fold")
+                self.assertEqual(child.context.strategy, "llm_summary")
+
+    def test_the_shipped_tree_has_no_new_lineage_warnings(self) -> None:
+        problems = validate_lineage(load_all_harnesses(self.HARNESSES))
+        self.assertEqual(
+            [problem for problem in problems
+             if problem.startswith(("coding-v2", "general-v2", "readonly-v2"))],
+            [])
 
 
 if __name__ == "__main__":
