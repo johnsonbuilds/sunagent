@@ -1,11 +1,21 @@
-"""Reliable LLM communication layer: streaming, recovery retry, and budget guard.
+"""Reliable LLM communication layer: streaming, recovery, and budget guard.
 
 This module owns one request end-to-end: how it is sent (streaming or
 not), what a failed attempt recovers to, and the turn-level bookkeeping
 that every attempt owes regardless of outcome (billed usage).  It knows
-the request view — ``TurnHistory`` — not the tool loop, so all recovery
-that stays inside a request lives here, and nothing that needs a *next*
-turn does.
+the request view — ``TurnHistory`` — not the tool loop, so it is the one
+place an LLM failure is dispatched.  All three strategies live here:
+
+* ``replay`` / ``refresh`` resend the request inside this call, so they
+  never consume the iteration budget;
+* ``nudge`` (a turn that delivered nothing but thinking) rewrites the
+  conversation — placeholder plus guidance — and returns ``None`` so the
+  caller simply reads the next view on its next turn.
+
+The distinction that matters is not "whose turn is next" but "who owns
+the decision": the failure taxonomy, the retry counts and the wording
+handed back to the model all stay in this module, and the loop only says
+where the history is and whether a next turn exists at all.
 """
 
 from __future__ import annotations
@@ -21,6 +31,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from agent_runtime.agent.runtime_message import runtime_user_message
+from agent_runtime.agent.tokens import response_usage
 from agent_runtime.agent.tool_dispatch import tool_trace_metadata
 from agent_runtime.agent.turn_history import TurnHistory
 from agent_runtime.events import EventEmitter
@@ -171,7 +182,7 @@ def _thinking_cut_clause(reasoning_chars: int) -> str:
     """
     if reasoning_chars > 0:
         return f"after {reasoning_chars} chars of reasoning"
-    return "before producing any visible content",
+    return "before producing any visible content"
 
 
 class ReasoningBudgetExceeded(ThinkingOnlyTurn):
@@ -428,8 +439,14 @@ async def _consume_stream(llm: ChatModel, messages: list[dict[str, Any]],
         # the token-budget anchor is fed on streaming turns too.
         chunk_usage = chunk.get("usage")
         if isinstance(chunk_usage, Mapping) and chunk_usage:
+            # Keep nested detail objects (``prompt_tokens_details``) as well
+            # as the flat ints: ``response_usage`` reads the prompt-cache
+            # count out of either shape, so dropping the nested one here
+            # would make a streamed turn report fewer cached tokens than
+            # the same turn sent without streaming.
             usage = {key: value for key, value in chunk_usage.items()
-                     if isinstance(value, int) and not isinstance(value, bool)}
+                     if isinstance(value, (int, Mapping))
+                     and not isinstance(value, bool)}
         reason = chunk.get("finish_reason")
         if isinstance(reason, str) and reason:
             finish_reason = reason
@@ -587,9 +604,13 @@ async def _chat_response(llm: ChatModel, history: TurnHistory,
 
     usage = response.get("usage")
     usage = usage if isinstance(usage, Mapping) else {}
-    prompt_tokens = int(usage.get("prompt_tokens") or 0)
-    completion_tokens = int(usage.get("completion_tokens") or 0)
-    cached_tokens = int(usage.get("cached_tokens") or 0)
+    # One parser for every billed response (``tokens.py``): it tolerates a
+    # provider that reports a non-numeric field and reads the cached count
+    # from any of the shapes a direct endpoint returns
+    # (``prompt_tokens_details.cached_tokens``, ``prompt_cache_hit_tokens``),
+    # so the ledger does not silently lose cache hits or crash a turn on a
+    # weird usage payload.
+    prompt_tokens, completion_tokens, cached_tokens = response_usage(response)
     tool_calls = response.get("tool_calls") or []
     # Bill the attempt before deciding whether to accept it: this is the
     # one place that sees every response, accepted or not.

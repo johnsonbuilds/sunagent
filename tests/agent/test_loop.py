@@ -325,6 +325,44 @@ class AgentLoopErrorHandlingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(nudged), 1)
         self.assertEqual(nudged[0].data["kind"], "response_truncated")
 
+    async def test_usage_is_read_by_the_shared_parser(self) -> None:
+        """A billed response is parsed once, by ``tokens.response_usage``.
+
+        Two regressions came from hand-rolling the parse here: a provider
+        reporting a non-numeric field (``prompt_tokens: "x"``) aborted the
+        whole turn instead of counting 0, and a raw OpenAI-shaped usage
+        (``prompt_tokens_details.cached_tokens``) silently lost its cache
+        hits. Both now go through the same parser the summarizer uses.
+        """
+        junk = FakeLLM([
+            {"content": "answered", "tool_calls": [],
+             "usage": {"prompt_tokens": "x", "completion_tokens": None,
+                       "cached_tokens": 7}},
+        ])
+        trace = RunTrace(run_id="usage-junk")
+        answer = await run_turn("go", junk, make_registry(), trace=trace)
+
+        self.assertEqual(answer, "answered")
+        end = [e for e in trace.events if e.event_type == "agent.end"][0]
+        self.assertEqual(end.data["prompt_tokens"], 0)
+        self.assertEqual(end.data["completion_tokens"], 0)
+        self.assertEqual(end.data["cached_tokens"], 7)
+
+        for stream in (False, True):
+            nested = {"prompt_tokens": 100, "completion_tokens": 20,
+                      "prompt_tokens_details": {"cached_tokens": 40}}
+            llm = (StreamingLLM([
+                [{"content": "answered", "tool_calls": []},
+                 {"finish_reason": "stop"}, {"usage": nested}],
+            ]) if stream else FakeLLM([
+                {"content": "answered", "tool_calls": [], "usage": nested},
+            ]))
+            trace = RunTrace(run_id=f"usage-nested-{stream}")
+            await run_turn("go", llm, make_registry(), stream=stream, trace=trace)
+            end = [e for e in trace.events if e.event_type == "agent.end"][0]
+            self.assertEqual(end.data["prompt_tokens"], 100, stream)
+            self.assertEqual(end.data["cached_tokens"], 40, stream)
+
     async def test_truncated_turn_tokens_are_still_billed(self) -> None:
         """A cut turn is the most expensive one: its usage must be billed.
 
@@ -376,6 +414,7 @@ class AgentLoopErrorHandlingTests(unittest.IsolatedAsyncioTestCase):
                        if m["role"] == "assistant"
                        and "before producing any visible content" in m["content"]]
         self.assertEqual(len(placeholder), 1)
+        self.assertNotIn("',)", placeholder[0]["content"])
 
         non_streamed = FakeLLM([
             {"content": "", "finish_reason": "length", "tool_calls": []},
@@ -403,14 +442,16 @@ class AgentLoopErrorHandlingTests(unittest.IsolatedAsyncioTestCase):
             {"content": "", "finish_reason": "length", "tool_calls": []},
         ])
 
+        conversation = Conversation()
         answer = await run_turn("weather", llm, make_registry(),
-                                max_iterations=1)
+                                max_iterations=1, conversation=conversation)
 
         self.assertIn("summarising turn was cut off at the output limit", answer)
         self.assertIn("the work above stands as delivered", answer)
         # The answer is the last thing in the conversation, not an empty
         # assistant turn.
-        self.assertEqual(llm.messages[1][-1]["role"], "user")
+        self.assertEqual(conversation.messages[-1],
+                         {"role": "assistant", "content": answer})
 
     def test_trace_span_records_lifecycle(self) -> None:
         trace = RunTrace(run_id="r1")

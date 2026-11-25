@@ -31,6 +31,7 @@ from agent_runtime.agent.chat import (
     StreamEmpty,
     StreamIdleTimeout,
     StreamTruncated,
+    _thinking_cut_clause,
 )
 from agent_runtime.agent.turn_factory import run_turn
 from agent_runtime.harness import (
@@ -255,12 +256,17 @@ class RecoveryPlanTests(unittest.TestCase):
         """
         hidden = ReasoningTruncated(0)
 
-        self.assertIn("before producing any visible content", str(hidden))
-        self.assertIn("before producing any visible content",
-                      hidden.placeholder())
-        self.assertIn("before producing any visible content",
-                      hidden.guidance())
+        # A substring check alone let this through once: a stray trailing
+        # comma made the clause a one-tuple, whose ``repr`` contains the
+        # phrase but renders "('before …',)" into the text the model reads.
+        self.assertIsInstance(_thinking_cut_clause(0), str)
+        self.assertIsInstance(_thinking_cut_clause(7), str)
+        self.assertEqual(_thinking_cut_clause(0),
+                         "before producing any visible content")
         for text in (str(hidden), hidden.placeholder(), hidden.guidance()):
+            self.assertIn("before producing any visible content", text)
+            self.assertNotIn("('before", text)
+            self.assertNotIn("',)", text)
             self.assertNotIn("0 chars", text)
         # It is still the same failure, so the strategy does not change.
         self.assertEqual(_recovery_plan(hidden).strategy, NUDGE)

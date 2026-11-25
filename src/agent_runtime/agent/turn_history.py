@@ -242,7 +242,8 @@ class TurnHistory:
         caller re-reads ``history.view`` for the next attempt, so no
         reference to the old list has to be updated from the outside.
         """
-        current = request_view_size(self.view, context, self._usage_anchor)
+        current = request_view_size(self.view, context, self._usage_anchor,
+                                    count_reasoning=self._resolve_count_reasoning())
         # Measure the shrink with the PRE-refresh anchor: refresh clears
         # it (stale mix), and comparing old vs new sizes with different
         # rulers would misjudge the result.
@@ -261,7 +262,9 @@ class TurnHistory:
             # The strategy rebuilt nothing: the view is identical, so a
             # resend would hit the same wall.
             return False
-        if request_view_size(self.view, context, anchor_before) >= current:
+        after = request_view_size(self.view, context, anchor_before,
+                                  count_reasoning=self._resolve_count_reasoning())
+        if after >= current:
             logger.warning("llm.context_window.no_shrink iteration=%s",
                            iteration)
             return False

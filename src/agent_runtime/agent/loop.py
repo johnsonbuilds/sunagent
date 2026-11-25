@@ -211,6 +211,10 @@ class AgentTurn:
                 self.llm, history, None, iteration, harness,
                 stream=self.stream, trace=trace, events=events,
                 allow_nudge=False, runtime=self.runtime)
+            # ``allow_nudge=False`` means the nudge strategy re-raises
+            # instead of returning ``None``; the only way out of the call
+            # with a response is a response.
+            assert response is not None
             logger.debug("llm.request.end iteration=%d content_chars=%d tool_calls=[]",
                          iteration, len(response.get("content") or ""))
         except ThinkingOnlyTurn as exc:
