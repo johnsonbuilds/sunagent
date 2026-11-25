@@ -10,6 +10,7 @@ SunAgent is a modular, provider-agnostic runtime for tool-calling agents. The en
 - Context strategies (`full_history`, `compact_observations`, `llm_summary`) with output spilling
 - Per-category LLM retries, tool-error feedback, and a context-window hard gate
 - Two event streams: internal `RunTrace` JSONL and user-facing `EventEmitter`
+- Run-level metrics index plus an evaluation page with funnels, drill-down, and model-driven diagnosis
 - CLI and browser UI over the same runtime; Harbor adapters for benchmarks
 
 ## Architecture
@@ -23,7 +24,7 @@ AgentTurn (loop · context · recovery)
         │
 HarnessSpec · LLM provider · Tool registry · Execution
         │
-RunTrace JSONL · workspace/
+RunTrace JSONL · metrics/runs.jsonl · workspace/
 ```
 
 `RunTrace` is the compact internal stream for debugging and benchmark analysis. `EventEmitter` is the channel-facing stream that carries live text, tool cards, and thinking blocks. Channels know nothing about the loop; the loop knows nothing about HTTP or terminals.
@@ -86,11 +87,11 @@ Basic auth is not encryption — keep it on localhost, use an SSH tunnel, or ter
 | `src/agent_runtime/tools/` | Shell, file, search, patch, code, and symbol tools |
 | `src/agent_runtime/harness/` | Genome schema, YAML loader, lineage CLI |
 | `src/agent_runtime/execution/` | Local/Harbor executors, workspaces, command guard |
-| `src/agent_runtime/` | Events, tracing, memory, skills, storage, channels |
+| `src/agent_runtime/` | Events, tracing, run metrics/config, diagnosis, memory, skills, storage, channels |
 | `webui/` | FastAPI server, session store, static-export hosting |
 | `webui/frontend/` | Next.js front end (title bar, sidebar, transcript, composer) |
 | `harnesses/` | Versioned agent manifests |
-| `evaluation/` | Benchmark tasks, records, analyses |
+| `evaluation/` | Benchmark tasks, immutable records, analyses |
 | `scripts/` | Harbor runner with Docker image GC |
 | `docs/` | Subsystem design and usage guides |
 
@@ -158,6 +159,59 @@ See [`.env.example`](.env.example) for all knobs. Keep real keys out of Git.
 
 ## Evaluation
 
+Every finished run writes two machine-written records: `run.config` (the
+conditions) and `run.metrics` (the measurements, appended to
+`workspace/metrics/runs.jsonl`). Everything below reads from those plus the
+board event stream and `evaluation/records/` — nothing re-parses traces on
+demand.
+
+### The evaluation page
+
+`/evaluation` in the Web UI keeps three metric families apart and never
+blends them into one success rate:
+
+| View | Endpoint | Source |
+|---|---|---|
+| Run level | `GET /api/evaluation/overview` | `metrics/runs.jsonl`, `origin in {cli, webui, harbor}` |
+| Board outcome | `GET /api/evaluation/board-overview` | `board_events.jsonl` + `board.json` |
+| Harbor outcome | `GET /api/evaluation/benchmarks` | `evaluation/records/*.json` |
+
+Filters are `range` (`24h` / `7d` / `30d` / `90d` / `all`), `origin`,
+`harness`, and `model`; harness and model options come from the data, so they
+only list values that occur. Eight tabs: overview (funnel, acceptance and
+clean-run trends, rework reasons, top offenders, data quality), validity
+(artifact evidence, VCR, hallucinated completions), process (tool error
+kinds, iterations histogram, errors by stage), efficiency (token mix, latency
+split, tokens per day, TTFT, queue wait), reliability (errors, cancels,
+retries, summary-invalid, compactions), tasks (sortable, paged, filterable),
+benchmarks, and diagnosis history.
+
+Run-level KPIs: TCR, tool error rate, schema pass rate (argument validity),
+tokens per run and by kind, latency p50/p95, TTFT, retries, summary-invalid
+rate, compactions. Board KPIs: TSR, first-pass acceptance, rework rate, queue
+wait, VCR. A rate with an empty denominator renders `—`, never `0%`.
+
+Each task drills into `GET /api/evaluation/tasks/{id}` (lifecycle from the
+event stream, per-run metrics, evidence state) and each run into
+`GET /api/evaluation/runs/{id}` (trace digest: event counts, tool aggregates,
+LLM requests/retries/finish reasons, error samples, `run.config` summary — no
+payloads).
+
+### Diagnosis
+
+`POST /api/evaluation/diagnose` runs an ordinary turn on the `evaluation-v1`
+harness over a compact evidence bundle (task, up to 5 runs, per-iteration
+evidence with `event_id`s, environment, human feedback, aggregates). The model
+verifies claims against the raw trace with the read-only tools
+`read_diagnosis`, `read_trace`, and `search_trace`, then answers with four
+fixed headings — Conclusion / Root cause / Evidence / Top 5 improvements — citing `run_id` /
+`iteration` / `event_id`. Bundles live in `workspace/diagnosis/<id>/`; reports
+are the session's first assistant message. Parse failures are annotated in the
+page, never used to reject a report. Diagnosis runs are stored with
+`origin=diagnosis` and excluded from the run-level and board aggregates.
+
+### Benchmarks
+
 ```bash
 uv sync --group eval
 
@@ -183,11 +237,30 @@ uv run python -m agent_runtime.harness record jobs/<job-name> \
 uv run python -m agent_runtime.harness report
 ```
 
-Details: [`evaluation/terminal_bench/readme.md`](evaluation/terminal_bench/readme.md) and [`evaluation/swe_bench/readme.md`](evaluation/swe_bench/readme.md).
+Details: [`docs/evaluation.md`](docs/evaluation.md),
+[`evaluation/terminal_bench/readme.md`](evaluation/terminal_bench/readme.md), and
+[`evaluation/swe_bench/readme.md`](evaluation/swe_bench/readme.md).
 
 ## Observability and Tests
 
-`RunTrace` records spans (`agent`, `llm`, `tool`) and policy events (context, retries, budgets, guards, skills). Each record carries `run_id`, `event_id`, `event_type`, `timestamp`, `iteration`, and `data`; tool arguments and results are intentionally not stored. Traces default to `workspace/traces/`.
+Two recording layers per run:
+
+- **`RunTrace`** (`workspace/traces/<run_id>.jsonl`) — the harness header on
+  line 1, a `run.config` record at run start, then spans (`agent`, `llm`,
+  `tool`) and policy events (context, retries, budgets, guards, skills), and a
+  final `run.metrics` record. Each record carries `run_id`, `event_id`,
+  `event_type`, `timestamp`, `iteration`, and `data`; tool arguments and
+  results are intentionally not stored.
+- **Run metrics index** (`workspace/metrics/runs.jsonl`) — one compact line per
+  run: outcome, iterations, tool calls and error kinds, token usage, latency
+  breakdown, TTFT, retries, compactions, policy blocks, edited files, error
+  stage/code. It carries the join keys (`origin`, `run_id`, `session_id`,
+  `task_id`, `run_index`, `harness_id`, `genes_hash`, `model`), so views slice
+  by origin, harness, model, or day without touching traces. Readers tolerate
+  unknown and missing fields, writes never fail a run, and
+  `uv run python scripts/rebuild_metrics.py --write` regenerates the index from
+  the traces (dry run without the flag) — deleting `metrics/` loses no
+  information.
 
 ```python
 from agent_runtime.agent import RunTrace, run_turn
@@ -198,12 +271,13 @@ answer = await run_turn("What's the weather in Singapore?", llm, tools, trace=tr
 
 ```bash
 uv run pytest -q
-uv run pytest tests/agent -q   # one area while iterating
+uv run pytest tests/agent -q       # one area while iterating
+uv run pytest tests/webui -q       # evaluation store, API, and index budgets
 ```
 
 ## Docs
 
-[`harness-manifest-and-lineage.md`](docs/harness-manifest-and-lineage.md) · [`user-facing-events-and-cli-renderer.md`](docs/user-facing-events-and-cli-renderer.md) · [`webui.md`](docs/webui.md) · [`storage.md`](docs/storage.md) · [`agent-runtime-architecture-review.md`](docs/agent-runtime-architecture-review.md)
+[`harness-manifest-and-lineage.md`](docs/harness-manifest-and-lineage.md) · [`user-facing-events-and-cli-renderer.md`](docs/user-facing-events-and-cli-renderer.md) · [`webui.md`](docs/webui.md) · [`evaluation.md`](docs/evaluation.md) · [`storage.md`](docs/storage.md) · [`agent-runtime-architecture-review.md`](docs/agent-runtime-architecture-review.md)
 
 ## Contributing
 
