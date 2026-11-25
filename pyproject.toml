@@ -22,6 +22,9 @@ webui = "webui.__main__:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [tool.hatch.build]
 exclude = [
   "webui/frontend/node_modules",
