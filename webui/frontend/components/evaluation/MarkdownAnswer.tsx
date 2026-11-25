@@ -6,9 +6,17 @@ import type { EvalDiagnosisReport } from "@/lib/types";
 import SuggestionList from "@/components/evaluation/SuggestionList";
 
 /** The four headings the report contract fixes (docs/evaluation.md §7). */
-export const REPORT_HEADINGS = ["结论", "根因", "证据", "Top 5 改进建议"] as const;
+export const REPORT_HEADINGS = ["Conclusion", "Root cause", "Evidence", "Top 5 improvements"] as const;
 
-const HEADING_RE = /^#{1,3}\s*(结论|根因|证据|top\s*5\s*改进建议)\s*$/gim;
+// Reports written before the English contract keep rendering: the Chinese
+// originals normalize onto the canonical heading instead of becoming body text.
+const HEADING_ALIASES: Record<string, string> = {
+  "结论": REPORT_HEADINGS[0],
+  "根因": REPORT_HEADINGS[1],
+  "证据": REPORT_HEADINGS[2],
+};
+
+const HEADING_RE = /^#{1,3}\s*(conclusion|root\s*cause|evidence|top\s*5\s*(?:improvements?|suggestions?)|结论|根因|证据|top\s*5\s*改进建议)\s*$/gim;
 
 export interface ReportSection {
   heading: string;
@@ -18,6 +26,7 @@ export interface ReportSection {
 function normalize(raw: string): string {
   const text = raw.replace(/\s+/g, " ").trim().toLowerCase();
   if (text.startsWith("top")) return REPORT_HEADINGS[3];
+  if (text in HEADING_ALIASES) return HEADING_ALIASES[text];
   const found = REPORT_HEADINGS.find((heading) => heading.toLowerCase() === text);
   return found ?? raw.trim();
 }

@@ -34,20 +34,20 @@ prompt:
     Markdown only, no JSON, with exactly these four level-2 headings in this
     order:
 
-    ## 结论
+    ## Conclusion
     One sentence.
 
-    ## 根因
-    - 类别: tool_argument | context_loss | loop_stall | runtime | model_capability | task_environment | ambiguity | safety_signal | other
-    - 置信度: 0.0–1.0
-    - 影响 run: `run-...`
-    - 说明: ...
+    ## Root cause
+    - Category: tool_argument | context_loss | loop_stall | runtime | model_capability | task_environment | ambiguity | safety_signal | other
+    - Confidence: 0.0–1.0
+    - Affected runs: `run-...`
+    - Explanation: ...
 
-    ## 证据
+    ## Evidence
     - `run-...` / iteration N / `evt-...` — quote; why it supports the cause
 
-    ## Top 5 改进建议
-    1. **Action** — 影响指标: `tool_error_rate`; 影响面: cohort/task/run; 成本: low/medium/high; 验证: which tasks to rerun, which metric to watch
+    ## Top 5 improvements
+    1. **Action** — Metric: `tool_error_rate`; Scope: cohort/task/run; Cost: low/medium/high; Verification: which tasks to rerun, which metric to watch
     2. ... (at most 5 items; stop when you run out — never pad to reach 5)
 
     Suggestions are hypotheses, not conclusions: bind each one to a metric, a

@@ -34,7 +34,7 @@ def _record(run_id, **kwargs):
 
 
 class EvaluationStoreTests(unittest.TestCase):
-    """Index, metric口径, and degradation over real files."""
+    """Index, metric definitions, and degradation over real files."""
 
     def setUp(self):
         self._root = TemporaryDirectory()
@@ -388,7 +388,7 @@ class EvaluationStoreTests(unittest.TestCase):
                                        target={"type": "task",
                                                "id": task["id"]})
         session.append_segment({"id": "s1", "type": "assistant",
-                                "content": "## 结论"})
+                                "content": "## Conclusion"})
         session.mark_report_segment("s1")
 
         store = self._store()
@@ -644,7 +644,7 @@ class EvaluationStoreTests(unittest.TestCase):
         # ``evt-…`` that no file carries: the citation stays unverified, but
         # the scan must not repeat on every ``/diagnoses`` refresh.
         session.append_segment({"id": "seg-report", "type": "assistant",
-                                "content": f"## 证据\n`{run_id}` "
+                                "content": f"## Evidence\n`{run_id}` "
                                              "`evt-999999999999`"})
         self.assertTrue(session.mark_report_segment("seg-report"))
 

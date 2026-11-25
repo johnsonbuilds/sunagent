@@ -22,26 +22,26 @@ from webui.evaluation import EvaluationNotFound, EvaluationRequestError, Evaluat
 from webui.sessions import SessionStore
 
 
-REPORT = """## 结论
-这一跑失败在 apply_patch 的参数上。
+REPORT = """## Conclusion
+The run fails on the apply_patch arguments.
 
-## 根因
-- 类别：tool_argument
-- 置信度：0.8
-- 影响 run：`{run_id}`
-- 说明：old_text 与文件内容不匹配。
+## Root cause
+- Category: tool_argument
+- Confidence: 0.8
+- Affected runs: `{run_id}`
+- Explanation: old_text does not match the file content.
 
-## 证据
+## Evidence
 - `{run_id}` / iteration 2 / `{event_id}` — old_text not found
-- `{run_id}` / iteration 1 / `evt-111111111111` — LLM 结束（只在 trace 里）
-- `{run_id}` / iteration 3 / `evt-ffffffffffff` — 未验证的引用
+- `{run_id}` / iteration 1 / `evt-111111111111` — LLM finished (only in the trace)
+- `{run_id}` / iteration 3 / `evt-ffffffffffff` — an unverified citation
 
-## Top 5 改进建议
-1. **收紧 apply_patch 提示** — 影响指标：`tool_error_rate`；影响面：task；成本：low；验证：重跑同类任务
-2. **在编辑前回读目标片段** — 影响指标：`schema_pass_rate`；影响面：cohort；成本：low；验证：观察 validation 占比
-3. **压缩阈值上调** — 影响指标：`tokens_per_task`；影响面：cohort；成本：medium；验证：对比 tokens 与 TCR
-4. **失败后限制重试** — 影响指标：`tool_error_rate`；影响面：task；成本：low；验证：重跑失败任务
-5. **补充验收清单** — 影响指标：`TSR`；影响面：cohort；成本：low；验证：下一轮抽样
+## Top 5 improvements
+1. **Tighten the apply_patch prompt** — Metric: `tool_error_rate`; Scope: task; Cost: low; Verification: rerun the same tasks
+2. **Re-read the target snippet before editing** — Metric: `schema_pass_rate`; Scope: cohort; Cost: low; Verification: watch the validation share
+3. **Raise the compaction threshold** — Metric: `tokens_per_task`; Scope: cohort; Cost: medium; Verification: compare tokens against TCR
+4. **Cap retries after a failure** — Metric: `tool_error_rate`; Scope: task; Cost: low; Verification: rerun the failed tasks
+5. **Add an acceptance checklist** — Metric: `TSR`; Scope: cohort; Cost: low; Verification: sample the next round
 """
 
 
@@ -168,7 +168,7 @@ class BundleTests(unittest.TestCase):
                          diagnosis.compute_hash(
                              json.loads((directory / "bundle.json").read_text(
                                  encoding="utf-8"))))
-        self.assertIn("## 指标口径", (directory / "summary.md").read_text(
+        self.assertIn("## Metric definitions", (directory / "summary.md").read_text(
             encoding="utf-8"))
 
     def test_an_invalid_diagnosis_id_is_refused(self):
@@ -244,16 +244,25 @@ class ReportTests(unittest.TestCase):
         self.assertTrue(parsed["complete"])
         self.assertEqual(parsed["suggestion_count"], 5)
         self.assertEqual(parsed["suggestions"][0]["index"], 1)
-        self.assertIn("apply_patch", parsed["sections"]["结论"])
+        self.assertIn("apply_patch", parsed["sections"]["Conclusion"])
 
     def test_missing_headings_are_reported_not_rejected(self):
-        partial = "## 结论\n一句话。\n\n## 根因\n- 类别：other"
+        partial = "## Conclusion\nOne sentence.\n\n## Root cause\n- Category: other"
         parsed = diagnosis.parse_report(partial)
-        self.assertEqual(parsed["headings"], ["结论", "根因"])
-        self.assertEqual(parsed["missing"], ["证据", "Top 5 改进建议"])
+        self.assertEqual(parsed["headings"], ["Conclusion", "Root cause"])
+        self.assertEqual(parsed["missing"], ["Evidence", "Top 5 improvements"])
         self.assertFalse(parsed["complete"])
         # The body is still rendered; parsing never gates the report.
         self.assertTrue(parsed["available"])
+
+    def test_a_pre_english_report_still_parses(self):
+        # Reports frozen before the English contract keep every section.
+        legacy = ("## 结论\n一句话。\n\n## 根因\n- 类别：other\n\n"
+                  "## 证据\n- `evt-1`\n\n## Top 5 改进建议\n1. **A** — 成本：low")
+        parsed = diagnosis.parse_report(legacy)
+        self.assertEqual(parsed["headings"], list(diagnosis.REPORT_HEADINGS))
+        self.assertTrue(parsed["complete"])
+        self.assertEqual(parsed["suggestion_count"], 1)
 
     def test_citations_are_verified_best_effort(self):
         parsed = diagnosis.parse_report(REPORT.format(
@@ -422,7 +431,7 @@ class DiagnosisFlowTests(unittest.TestCase):
         self.assertTrue((directory / "summary.md").is_file())
 
         detail = self._wait_report(client, session_id)
-        self.assertIn("## 结论", detail["segments"][-1]["content"])
+        self.assertIn("## Conclusion", detail["segments"][-1]["content"])
         sessions = self.sessions.list()
         session = next(item for item in sessions if item.id == session_id)
         self.assertEqual(session.origin, "diagnosis")
@@ -436,7 +445,7 @@ class DiagnosisFlowTests(unittest.TestCase):
         row = diagnoses["sessions"][0]
         self.assertEqual(row["session_id"], session_id)
         self.assertTrue(row["report"]["available"])
-        self.assertIn("Top 5 改进建议", row["report"]["markdown"])
+        self.assertIn("Top 5 improvements", row["report"]["markdown"])
         self.assertEqual(row["report"]["verification"]["missing_sections"], [])
         self.assertEqual(row["report"]["verification"]["suggestion_count"], 5)
         self.assertEqual(row["report"]["verification"]["unverified"],
@@ -467,7 +476,7 @@ class DiagnosisFlowTests(unittest.TestCase):
                         if segment["id"] == marked)["content"]
 
         follow = client.post(f"/api/sessions/{session_id}/messages",
-                            json={"message": "再解释一下根因"})
+                            json={"message": "explain the root cause again"})
         self.assertEqual(follow.status_code, 200)
         deadline = time.time() + 5.0
         while time.time() < deadline:
@@ -521,9 +530,9 @@ class DiagnosisFlowTests(unittest.TestCase):
     def test_a_failed_turn_freezes_no_report_and_can_be_retried(self):
         async def failing(message, *args, **kwargs):
             events = kwargs.get("events")
-            events.emit("assistant.delta", 1, content="半截结论")
+            events.emit("assistant.delta", 1, content="Half a conclusion")
             events.emit("runtime.error", 2, stage="llm", error="boom")
-            return "半截结论"
+            return "Half a conclusion"
 
         client = self._app(run_turn=failing)
         first = self._start(client, {"type": "task", "id": self.task_id})
@@ -538,7 +547,7 @@ class DiagnosisFlowTests(unittest.TestCase):
         # The half-written answer stays in the transcript, but it is not the
         # report: only a completed turn can freeze one.
         self.assertIsNone(detail["report_segment_id"])
-        self.assertIn("半截结论",
+        self.assertIn("Half a conclusion",
                       "".join(segment["content"]
                               for segment in detail["segments"]))
         # And a session without a report is not a duplicate: the same
@@ -653,7 +662,7 @@ class StoreDiagnosisTests(unittest.TestCase):
         self.assertNotEqual(again.diagnosis_id, first.diagnosis_id)
         # Once the report is frozen the same evidence is reused.
         session = first.session
-        session.append_user_message("诊断")
+        session.append_user_message("Diagnose")
         session.mark_report_segment("seg-report")
         self.sessions.save(session)
         reused = self.store.diagnose({"type": "task", "id": task["id"]},

@@ -44,10 +44,23 @@ logger = logging.getLogger(__name__)
 EVALUATION_HARNESS_ID = "evaluation-v1"
 
 # The four headings, in the order the report must use them.
-REPORT_HEADINGS: tuple[str, ...] = ("结论", "根因", "证据", "Top 5 改进建议")
+REPORT_HEADINGS: tuple[str, ...] = ("Conclusion", "Root cause", "Evidence",
+                                    "Top 5 improvements")
+
+# Reports written before the English contract (and the wording the web UI used
+# for the label) keep rendering: aliases normalize onto the canonical heading
+# instead of turning into unknown body text.
+REPORT_HEADING_ALIASES: dict[str, str] = {
+    "结论": REPORT_HEADINGS[0],
+    "根因": REPORT_HEADINGS[1],
+    "证据": REPORT_HEADINGS[2],
+    "top 5 改进建议": REPORT_HEADINGS[3],
+}
 
 REPORT_HEADING_RE = re.compile(
-    r"^#{1,3}\s*(结论|根因|证据|top\s*5\s*改进建议)\s*$",
+    r"^#{1,3}\s*(conclusion|root\s*cause|evidence|"
+    r"top\s*5\s*(?:improvements?|suggestions?)|结论|根因|证据|"
+    r"top\s*5\s*改进建议)\s*$",
     re.IGNORECASE | re.MULTILINE)
 NUMBERED_ITEM_RE = re.compile(r"^\s{0,3}(\d{1,2})[.、)]\s+(.+?)\s*$")
 EVENT_ID_RE = re.compile(r"\bevt-[0-9a-f]{6,}\b")
@@ -247,28 +260,32 @@ def summary_markdown(bundle: Mapping[str, Any]) -> str:
     target = bundle.get("target") if isinstance(bundle.get("target"),
                                                 Mapping) else {}
     lines = [
-        "# 诊断证据摘要",
+        "# Diagnosis evidence summary",
         "",
-        f"- 目标类型：{target.get('type') or 'unknown'}",
-        f"- 目标 id：{target.get('id') or '-'}",
-        f"- 证据截断：{'是' if bundle.get('truncated_input') else '否'}",
+        f"- Target type: {target.get('type') or 'unknown'}",
+        f"- Target id: {target.get('id') or '-'}",
+        f"- Evidence truncated: {'yes' if bundle.get('truncated_input') else 'no'}",
         "",
-        "## 指标口径（docs/evaluation.md §6）",
+        "## Metric definitions (docs/evaluation.md §6)",
         "",
-        "- TCR = 正常结束 run / 发起的 run（`run.metrics.status == completed`）",
-        "- VCR = 正常结束 + 非空答复 + 产物证据 + 无策略拦截（仅声明需要产物的任务）",
-        "- 返工 = 首次执行之后 `review → todo/doing`，或 doing/review 期间追加评论",
-        "- 产物证据来自成功的编辑类工具调用（`tool.end.edited_files`），不是事后 git diff",
+        "- TCR = normally finished runs / launched runs "
+        "(`run.metrics.status == completed`)",
+        "- VCR = normally finished + non-empty answer + artifact evidence + "
+        "no policy block (only for tasks that declare artifacts)",
+        "- Rework = `review → todo/doing` after the first execution, or a "
+        "comment added while in doing/review",
+        "- Artifact evidence comes from successful editing tool calls "
+        "(`tool.end.edited_files`), not from a post-hoc git diff",
         "",
     ]
     aggregate = bundle.get("aggregate")
     if isinstance(aggregate, Mapping) and aggregate:
-        lines += ["## 聚合指标", "", "```json",
+        lines += ["## Aggregate metrics", "", "```json",
                   json.dumps(aggregate, ensure_ascii=False, indent=2,
                              default=str), "```", ""]
     cases = bundle.get("cases")
     if isinstance(cases, list) and cases:
-        lines += ["## case 列表", ""]
+        lines += ["## Cases", ""]
         for case in cases:
             if not isinstance(case, Mapping):
                 continue
@@ -282,7 +299,7 @@ def summary_markdown(bundle: Mapping[str, Any]) -> str:
         lines.append("")
     runs = bundle.get("runs")
     if isinstance(runs, list) and runs:
-        lines += ["## run 列表", ""]
+        lines += ["## Runs", ""]
         for run in runs:
             if not isinstance(run, Mapping):
                 continue
@@ -300,15 +317,20 @@ def summary_markdown(bundle: Mapping[str, Any]) -> str:
                 f"iterations_captured={len(run.get('iterations') or [])}")
         lines.append("")
     lines += [
-        "## 怎么用",
+        "## How to use",
         "",
-        "1. `read_diagnosis(diagnosis_id, file=\"bundle.json\")` 读结构化证据。",
-        "2. `read_trace(run_id=..., event_type=...|event_id=...|iteration=...)` 抽原始事件。",
-        "3. `search_trace(run_id=..., pattern=...)` 在原始 trace 里找错误文本。",
-        "4. `read_file` / `list_dir` 只用于核实工作区源码，不用于读诊断产物。",
+        "1. `read_diagnosis(diagnosis_id, file=\"bundle.json\")` reads the "
+        "structured evidence.",
+        "2. `read_trace(run_id=..., event_type=...|event_id=...|iteration=...)` "
+        "pulls the raw events.",
+        "3. `search_trace(run_id=..., pattern=...)` finds error text in the "
+        "raw trace.",
+        "4. `read_file` / `list_dir` are only for checking workspace source, "
+        "never for reading diagnosis output.",
         "",
-        "输出 Markdown，二级标题固定且顺序不变："
-        "`## 结论` / `## 根因` / `## 证据` / `## Top 5 改进建议`。",
+        "Output Markdown with these four level-2 headings, fixed and in this "
+        "order: `## Conclusion` / `## Root cause` / `## Evidence` / "
+        "`## Top 5 improvements`.",
         "",
     ]
     return "\n".join(lines)
@@ -320,15 +342,20 @@ def first_message(diagnosis_id: str, bundle: Mapping[str, Any]) -> str:
                                                 Mapping) else {}
     label = target.get("id") or target.get("type") or "target"
     return "\n".join([
-        f"诊断这次运行：{label}（diagnosis_id={diagnosis_id}）。",
+        f"Diagnose this run: {label} (diagnosis_id={diagnosis_id}).",
         "",
-        f"1. 先调用 read_diagnosis(diagnosis_id=\"{diagnosis_id}\", "
-        "file=\"summary.md\") 看口径与聚合，再读 file=\"bundle.json\" 取证据。",
-        "2. 用 read_trace / search_trace 核对关键结论，不要只信摘要。",
-        "3. 输出 Markdown，四个二级标题固定且顺序不变："
-        "## 结论 / ## 根因 / ## 证据 / ## Top 5 改进建议。",
-        "4. 每条证据带 run_id / iteration / event_id；引用不到就写明是推断。",
-        "5. 改进建议最多 5 条；不足 5 条就给出实际条数，不要凑数；不要修改任何文件。",
+        f"1. Start with read_diagnosis(diagnosis_id=\"{diagnosis_id}\", "
+        "file=\"summary.md\") for the metric definitions and the aggregate, "
+        "then read file=\"bundle.json\" for the evidence.",
+        "2. Verify the load-bearing claims with read_trace / search_trace; "
+        "do not trust the summary alone.",
+        "3. Output Markdown with these four level-2 headings, fixed and in "
+        "this order: ## Conclusion / ## Root cause / ## Evidence / "
+        "## Top 5 improvements.",
+        "4. Cite run_id / iteration / event_id for every piece of evidence; "
+        "when you cannot cite one, say plainly that it is an inference.",
+        "5. At most 5 suggestions; if you have fewer, report the actual number "
+        "instead of padding. Do not modify any file.",
     ])
 
 
@@ -499,6 +526,9 @@ def _normalize_heading(raw: str) -> str:
     for heading in REPORT_HEADINGS:
         if text == heading.lower():
             return heading
+    alias = REPORT_HEADING_ALIASES.get(text)
+    if alias is not None:
+        return alias
     return REPORT_HEADINGS[3] if text.startswith("top") else raw.strip()
 
 
@@ -517,15 +547,15 @@ def parse_report(markdown: str | None) -> dict[str, Any]:
     expected = [heading for heading in REPORT_HEADINGS if heading in found]
     suggestions: list[dict[str, Any]] = []
     current: dict[str, Any] | None = None
-    for line in sections.get("Top 5 改进建议", "").splitlines():
+    for line in sections.get(REPORT_HEADINGS[3], "").splitlines():
         item = NUMBERED_ITEM_RE.match(line)
         if item:
             current = {"index": int(item.group(1)),
                        "text": item.group(2).strip()}
             suggestions.append(current)
         elif current is not None and line.strip():
-            # A model may write "影响指标 / 验证" on the lines after the
-            # numbered item; keep them with it instead of dropping them.
+            # The model may write `Metric / Verification` on the lines after
+            # the numbered item; keep them with it instead of dropping them.
             current["text"] = f"{current['text']}\n{line.strip()}".strip()
     return {
         "available": bool(text.strip()),

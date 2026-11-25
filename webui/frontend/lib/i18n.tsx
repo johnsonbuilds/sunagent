@@ -248,7 +248,7 @@ const en = {
   evalReportIncomplete: "Format incomplete",
   evalReportMissing: "missing headings",
   evalUnverified: "Unverified citations",
-  evalSuggestions: "Top 5 suggestions",
+  evalSuggestions: "Top 5 improvements",
   evalSuggestionsFew: "Only {count} suggestions (up to 5; not padded).",
   evalNoSuggestions: "No suggestion section in the report.",
   evalBenchmarks: "Harbor benchmarks",

@@ -85,12 +85,12 @@ class SessionStoreTests(unittest.TestCase):
         with TemporaryDirectory() as root:
             store = SessionStore(Path(root))
             session = store.create(
-                "诊断: task-1", harness="evaluation-v1", origin="diagnosis",
+                "Diagnosis: task-1", harness="evaluation-v1", origin="diagnosis",
                 target={"type": "task", "id": "task-1"},
                 diagnosis_id="diag-1", bundle_hash="sha256:abc")
             session.append_user_message("diagnose")
             session.append_segment({"id": "s1", "type": "assistant",
-                                    "content": "## 结论"})
+                                    "content": "## Conclusion"})
             store.save(session)
 
             reloaded = SessionStore(Path(root))
