@@ -393,7 +393,9 @@ class FakeSummaryLLM:
                 "## 2. Next Move\n"
                 "- keep going\n\n"
                 "## 3. Working Context & Anchors\n"
-                "- **Relevant Files**: none"
+                "- **Relevant Files**: none\n\n"
+                "## 4. Open Questions\n"
+                "- (none)"
             )
 
     async def chat(self, messages: list[dict[str, Any]],
@@ -425,7 +427,9 @@ class SummarizeHistoryTests(unittest.IsolatedAsyncioTestCase):
             "## 2. Next Move\n"
             "- continue\n\n"
             "## 3. Working Context & Anchors\n"
-            "- **Files**: ars.R"))
+            "- **Files**: ars.R\n\n"
+            "## 4. Open Questions\n"
+            "- (none)"))
         result = await summarize_history(messages, budget=1_000, tail_rounds=2,
                                          llm=llm)
 
@@ -465,6 +469,23 @@ class SummarizeHistoryTests(unittest.IsolatedAsyncioTestCase):
             "- continue"))
         result = await summarize_history(messages, budget=1_000, tail_rounds=2,
                                          llm=llm)
+        self.assertIn("observation compacted", result[3]["content"])
+
+    async def test_missing_open_questions_section_is_invalid(self) -> None:
+        messages = build_rounds(10, 5_000)
+        # Sections 1-3 present but "## 4. Open Questions" missing → invalid.
+        llm = FakeSummaryLLM(summary=(
+            "# Agent Context Snapshot\n\n"
+            "## 1. Work State\n"
+            "### Completed\n"
+            "- done\n\n"
+            "## 2. Next Move\n"
+            "- continue\n\n"
+            "## 3. Working Context & Anchors\n"
+            "- **Files**: none"))
+        result = await summarize_history(messages, budget=1_000, tail_rounds=2,
+                                         llm=llm)
+        self.assertEqual(llm.call_count, 2)
         self.assertIn("observation compacted", result[3]["content"])
 
     async def test_summary_reasoning_effort_is_forwarded(self) -> None:

@@ -60,7 +60,9 @@ def valid_summary(marker: str = "SNAP") -> str:
         "## 2. Next Move\n"
         "- continue\n\n"
         "## 3. Working Context & Anchors\n"
-        "- **Relevant Files**: none"
+        "- **Relevant Files**: none\n\n"
+        "## 4. Open Questions\n"
+        "- (none)"
     )
 
 
@@ -973,6 +975,26 @@ class SummarizerOutputBudgetTests(unittest.TestCase):
         self.assertIn("4,096 output tokens", text)
         self.assertIn("raw arrays", text)
         self.assertNotIn("2,000 output tokens", text)
+
+    def test_instruction_requires_open_questions_section(self) -> None:
+        from agent_runtime.agent.context.summary import (
+            _REQUIRED_SECTIONS,
+            SUMMARIZER_INSTRUCTION,
+        )
+        self.assertIn("## 4. Open Questions", _REQUIRED_SECTIONS)
+        self.assertIn("## 4. Open Questions", SUMMARIZER_INSTRUCTION)
+        text = " ".join(SUMMARIZER_INSTRUCTION.split())
+        # Verbatim, one bullet per question: no merging, no rewording.
+        self.assertIn("Do not merge, reword, or summarise them", text)
+
+    def test_validate_summary_rejects_missing_open_questions(self) -> None:
+        from agent_runtime.agent.context.summary import _validate_summary
+
+        without = valid_summary().replace("## 4. Open Questions\n- (none)", "")
+        with self.assertRaises(ValueError) as ctx:
+            _validate_summary(without)
+        self.assertIn("## 4. Open Questions", str(ctx.exception))
+        _validate_summary(valid_summary())
 
 
 if __name__ == "__main__":

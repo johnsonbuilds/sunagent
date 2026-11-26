@@ -51,10 +51,14 @@ Rules:
   history.
 - Do not paste raw arrays, full tool output, or long tables; cite the
   script or file that holds them instead.
-- Always finish all three sections. If space runs short, compress
+- In "## 4. Open Questions", list every question the user asked that is
+  still unanswered — one bullet per question, in the user's own words.
+  Do not merge, reword, or summarise them; write "- (none)" when nothing
+  is open.
+- Always finish all four sections. If space runs short, compress
   historical detail in "## 1. Work State" (cite scripts/files instead of
   pasting their output) while keeping failure lessons; never drop
-  "## 2" or "## 3".
+  "## 2", "## 3" or "## 4".
 
 Use exactly these sections:
 
@@ -73,7 +77,10 @@ Use exactly these sections:
 
 ## 3. Working Context & Anchors
 - **Relevant Files / Artifacts**: ...
-- **Environment State**: ..."""
+- **Environment State**: ...
+
+## 4. Open Questions
+- ..."""
 
 # Appended when a previous compaction summary exists: the new summary
 # must integrate it, not replace it — earlier work state and failure
@@ -84,10 +91,13 @@ SUMMARIZER_INTEGRATION_ADDENDUM = f"""
 A PREVIOUS SNAPSHOT message — one that starts with the
 "{SUMMARY_PREFIX.strip()}" prefix — is provided before the
 conversation history. You must merge it into your output:
-- Fold the previous "Work State", "Next Move" and "Working Context &
-  Anchors" into the new snapshot; keep items that are still relevant,
-  mark superseded ones as completed/obsolete, never silently drop a
-  failure lesson.
+- Fold the previous "Work State", "Next Move", "Working Context &
+  Anchors" and "Open Questions" into the new snapshot; keep items that
+  are still relevant, mark superseded ones as completed/obsolete, never
+  silently drop a failure lesson.
+- In "Open Questions", carry over every question the user asked that is
+  still unanswered; drop only the ones the conversation has since
+  answered.
 - The output is the single consolidated snapshot for the whole session,
   in the same section format as before."""
 
@@ -217,7 +227,12 @@ async def _generate_summary(messages: list[dict[str, Any]], *,
     )
 
 
-_REQUIRED_SECTIONS = ["## 1. Work State", "## 2. Next Move", "## 3. Working Context & Anchors"]
+_REQUIRED_SECTIONS = [
+    "## 1. Work State",
+    "## 2. Next Move",
+    "## 3. Working Context & Anchors",
+    "## 4. Open Questions",
+]
 
 
 def _validate_summary(summary: str, *,
@@ -225,7 +240,7 @@ def _validate_summary(summary: str, *,
     """Raise ``ValueError`` when ``summary`` does not look like a valid
     structured summary produced by the summarizer.
 
-    A valid summary must be non-empty, contain all three required sections,
+    A valid summary must be non-empty, contain all four required sections,
     and stay within the output cap — a summary that grows toward the
     history it replaces defeats compaction (Gemini CLI rejects an
     inflated summary outright; we do the same at roughly 6 chars per
