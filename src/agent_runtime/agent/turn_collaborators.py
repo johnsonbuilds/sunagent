@@ -14,7 +14,6 @@ share.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -48,7 +47,7 @@ class TurnCollaborators:
     summarizer: Any
     stream: bool
     max_iterations: int
-    skills_dir: str | Path | None
+    skills_dir: str
     runtime: RuntimeConfig | None = None
 
 

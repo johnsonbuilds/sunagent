@@ -28,6 +28,11 @@ logger = logging.getLogger(__name__)
 #: Guard policies accepted by :class:`execution.guard.CommandGuard`.
 GUARD_MODES = ("off", "blocklist", "allowlist")
 
+#: Where ``skills/<name>/SKILL.md`` bundles are read from.
+ENV_SKILLS_DIR = "AGENT_RUNTIME_SKILLS_DIR"
+#: Default skills directory, relative to the process working directory.
+DEFAULT_SKILLS_DIR = "skills"
+
 
 def _env_str(name: str, default: str) -> str:
     return os.getenv(name, default)
@@ -85,6 +90,7 @@ class RuntimeConfig:
     command_guard_mode: str = "blocklist"
     memory_enabled: bool = False
     memory_dir: str | None = None
+    skills_dir: str = DEFAULT_SKILLS_DIR
     harness: str | None = None
 
     @classmethod
@@ -206,6 +212,9 @@ class RuntimeConfig:
             memory_enabled=memory_enabled,
             memory_dir=pick("memory_dir",
                             _env_optional_str("AGENT_RUNTIME_MEMORY_DIR")),
+            skills_dir=(pick("skills_dir",
+                             _env_optional_str(ENV_SKILLS_DIR))
+                        or DEFAULT_SKILLS_DIR),
             harness=pick("harness", _env_optional_str("AGENT_RUNTIME_HARNESS")),
         )
 

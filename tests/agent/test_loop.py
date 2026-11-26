@@ -27,6 +27,7 @@ from agent_runtime.harness import (
     default_harness,
 )
 from agent_runtime.trace import RunTrace
+from agent_runtime.runtime_config import RuntimeConfig
 from agent_runtime.tools.tools import ToolRegistry, ToolSpec
 
 # The runtime-mechanics tests pin the neutral built-in genome: they
@@ -1149,6 +1150,23 @@ class AgentTurnClassTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(answer, "summarized")
         self.assertEqual(len(llm.messages), 2)
+
+    async def test_skills_dir_defaults_to_runtime(self) -> None:
+        llm = FakeLLM([{"content": "hi", "tool_calls": []}])
+        runtime = RuntimeConfig(model="m", base_url=None,
+                                skills_dir="/from-runtime")
+
+        turn = create_agent_turn("hello", llm, make_registry(), runtime=runtime)
+
+        self.assertEqual(turn.skills_dir, "/from-runtime")
+
+    async def test_skills_dir_defaults_to_cwd_skills(self) -> None:
+        llm = FakeLLM([{"content": "hi", "tool_calls": []}])
+        runtime = RuntimeConfig(model="m", base_url=None)
+
+        turn = create_agent_turn("hello", llm, make_registry(), runtime=runtime)
+
+        self.assertEqual(turn.skills_dir, "skills")
 
 
 class PlainAnswerFinishTests(unittest.IsolatedAsyncioTestCase):

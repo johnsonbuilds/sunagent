@@ -12,19 +12,18 @@ names do not.
 from __future__ import annotations
 
 import hashlib
-import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 import yaml
 
-if TYPE_CHECKING:
-    from agent_runtime.harness import HarnessSpec
+from agent_runtime.runtime_config import (
+    DEFAULT_SKILLS_DIR as _DEFAULT_SKILLS_DIR,
+    ENV_SKILLS_DIR,  # re-exported for callers that reference the env name
+)
 
-DEFAULT_SKILLS_DIR = Path("skills")
-
-ENV_SKILLS_DIR = "AGENT_RUNTIME_SKILLS_DIR"
+DEFAULT_SKILLS_DIR = Path(_DEFAULT_SKILLS_DIR)
 
 #: Per-skill budget; longer bodies are truncated with an explicit marker.
 MAX_SKILL_CHARS = 4000
@@ -48,21 +47,13 @@ def _content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
-def default_skills_dir(harness: HarnessSpec | None = None) -> Path:
-    """Where to look for ``skills/<name>/SKILL.md``.
+def default_skills_dir() -> Path:
+    """The default skills directory: ``./skills``.
 
-    Precedence: ``AGENT_RUNTIME_SKILLS_DIR`` env, then ``<harness.source
-    parent>/../skills`` (so ``harnesses/*.yaml`` and ``skills/`` stay
-    siblings regardless of cwd), then ``skills`` relative to cwd.
+    ``RuntimeConfig.skills_dir`` is the single source of truth for a turn;
+    this helper only gives direct ``resolve_skills`` callers the same
+    default.  There is no harness-source or environment fallback here.
     """
-    override = os.getenv(ENV_SKILLS_DIR)
-    if override:
-        return Path(override)
-    source = getattr(harness, "source", None)
-    if source:
-        candidate = Path(source).parent.parent / "skills"
-        if candidate.is_dir():
-            return candidate
     return DEFAULT_SKILLS_DIR
 
 
@@ -116,14 +107,13 @@ def _parse_skill_file(path: Path, skill_dir: Path) -> Skill:
 
 
 def resolve_skills(names: Sequence[str],
-                   skills_dir: str | Path | None = None,
-                   harness: HarnessSpec | None = None) -> list[Skill]:
+                   skills_dir: str | Path | None = None) -> list[Skill]:
     """Resolve skill names to loaded skills; unknown names raise HarnessError."""
     from agent_runtime.harness import HarnessError
 
     if not names:
         return []
-    base = Path(skills_dir) if skills_dir is not None else default_skills_dir(harness)
+    base = Path(skills_dir) if skills_dir is not None else default_skills_dir()
     resolved: list[Skill] = []
     seen: set[str] = set()
     for raw in names:

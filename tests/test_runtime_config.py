@@ -24,7 +24,7 @@ from agent_runtime.runtime_config import RuntimeConfig
 
 
 class RunWiringFieldTests(unittest.TestCase):
-    """The five newly collapsed knobs are parsed in exactly one place."""
+    """The newly collapsed run-wiring knobs are parsed in exactly one place."""
 
     def test_defaults_are_the_historical_behavior(self) -> None:
         with mock.patch.dict(environ, {}, clear=True):
@@ -34,6 +34,7 @@ class RunWiringFieldTests(unittest.TestCase):
         self.assertEqual(config.command_guard_mode, "blocklist")
         self.assertFalse(config.memory_enabled)
         self.assertIsNone(config.memory_dir)
+        self.assertEqual(config.skills_dir, "skills")
         self.assertIsNone(config.harness)
 
     def test_env_values_are_picked_up(self) -> None:
@@ -42,6 +43,7 @@ class RunWiringFieldTests(unittest.TestCase):
             "AGENT_RUNTIME_COMMAND_GUARD": " AllowList ",
             "AGENT_RUNTIME_MEMORY": "on",
             "AGENT_RUNTIME_MEMORY_DIR": "/mem",
+            "AGENT_RUNTIME_SKILLS_DIR": "/skills",
             "AGENT_RUNTIME_HARNESS": "coding-v1",
         }
         with mock.patch.dict(environ, env, clear=True):
@@ -51,15 +53,27 @@ class RunWiringFieldTests(unittest.TestCase):
         self.assertEqual(config.command_guard_mode, "allowlist")
         self.assertTrue(config.memory_enabled)
         self.assertEqual(config.memory_dir, "/mem")
+        self.assertEqual(config.skills_dir, "/skills")
         self.assertEqual(config.harness, "coding-v1")
 
+    def test_empty_skills_dir_falls_back_to_cwd_skills(self) -> None:
+        with mock.patch.dict(environ,
+                             {"AGENT_RUNTIME_SKILLS_DIR": "   "}, clear=True):
+            config = RuntimeConfig.from_env()
+
+        self.assertEqual(config.skills_dir, "skills")
+
     def test_overrides_beat_the_environment(self) -> None:
-        with mock.patch.dict(environ, {"AGENT_RUNTIME_MEMORY": "1"}, clear=True):
+        with mock.patch.dict(environ, {"AGENT_RUNTIME_MEMORY": "1",
+                                      "AGENT_RUNTIME_SKILLS_DIR": "/env"},
+                             clear=True):
             config = RuntimeConfig.from_env(memory_enabled=False,
-                                            command_guard_mode="off")
+                                            command_guard_mode="off",
+                                            skills_dir="/explicit")
 
         self.assertFalse(config.memory_enabled)
         self.assertEqual(config.command_guard_mode, "off")
+        self.assertEqual(config.skills_dir, "/explicit")
 
     def test_invalid_guard_mode_falls_back_to_blocklist(self) -> None:
         with mock.patch.dict(environ, {"AGENT_RUNTIME_COMMAND_GUARD": "bogus"},

@@ -2,7 +2,6 @@ import os
 import sys
 import tempfile
 import unittest
-from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,9 +14,10 @@ from agent_runtime.agent.turn_history import (
     ensure_system_prompt,
 )
 from agent_runtime.harness import HarnessError, from_dict
+from agent_runtime.runtime_config import RuntimeConfig
 from agent_runtime.skills import (
-    ENV_SKILLS_DIR,
     MAX_SKILL_CHARS,
+    default_skills_dir,
     render_skills_block,
     resolve_skills,
     skills_content_hash,
@@ -57,25 +57,18 @@ class SkillLoadingTests(unittest.TestCase):
             root = Path(directory)
             path = _write_skill(root, "coder", "close with a final answer",
                                 version="v3")
-            harness = from_dict({"skills": ["coder"]})
-            (skill,) = resolve_skills(["coder"], skills_dir=root,
-                                      harness=harness)
+            (skill,) = resolve_skills(["coder"], skills_dir=root)
         self.assertEqual(skill.name, "coder")
         self.assertEqual(skill.version, "v3")
         self.assertEqual(skill.content, "close with a final answer")
         self.assertEqual(skill.source, str(path))
         self.assertFalse(skill.truncated)
 
-    def test_default_dir_is_harness_source_sibling(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "harnesses").mkdir()
-            _write_skill(root / "skills", "coder", "sibling body")
-            harness = replace(from_dict({"skills": ["coder"]}),
-                              source=str(root / "harnesses" / "code-v1.yaml"))
-            with patch.dict(os.environ, {ENV_SKILLS_DIR: ""}):
-                (skill,) = resolve_skills(["coder"], harness=harness)
-        self.assertEqual(skill.content, "sibling body")
+    def test_default_dir_is_cwd_skills(self) -> None:
+        # RuntimeConfig.skills_dir is the single source of truth for a turn;
+        # the library default is just ./skills, with no harness-source or
+        # environment fallback.
+        self.assertEqual(default_skills_dir(), Path("skills"))
 
     def test_empty_names_resolve_to_empty(self) -> None:
         self.assertEqual(resolve_skills([]), [])
@@ -176,7 +169,8 @@ class SkillTurnTests(unittest.IsolatedAsyncioTestCase):
             _write_skill(Path(directory), "coder", body)
             answer = await run_turn(
                 "hi", llm, registry, harness=harness, trace=trace,
-                skills_dir=Path(directory))
+                runtime=RuntimeConfig(model="m", base_url=None,
+                                      skills_dir=directory))
         self.assertEqual(answer, "done")
         system = llm.seen[0][0]
         self.assertEqual(system["role"], "system")

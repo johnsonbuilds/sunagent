@@ -66,7 +66,7 @@ AST 全量依赖扫描结果暴露出几个值得关注的架构边界问题：
 - **`RuntimeConfig` 已收口（P0 完成，2026-11-26）**：
   `runtime_config.py` 的契约现在是“组合根一次解析，深层显式注入”。除 `runtime_config.py` 自身外，`agent_runtime` 里剩下的 `os.getenv` 可归为两类：
   - **可接受的边缘/一次性读取**：`integrations/harbor.py`（日志流开关）、`channels/{cli,webui}.py`（渲染开关）、`storage.py`（`AGENT_RUNTIME_HOME`，按调用读取以便测试改环境）、`tools/code.py`（`AGENT_RUNTIME_PYTHON`）、`trace.py`（`ENV_WHITELIST` 快照——记录而非读取行为）；`reasoning_echo.py` 的两个无参入口是兼容壳，`RuntimeConfig.from_env()` 只在解析时调它们一次并冻结结果。
-  - **仍待收尾（P1，不在 P0 范围内）**：`skills.py:58` 的 `AGENT_RUNTIME_SKILLS_DIR` 仍是**每轮**读取（`turn_opening → resolve_skills → default_skills_dir`），`model_catalog.py:110` 的 `AGENT_RUNTIME_MODEL_CATALOG` 在 WebUI 启动时读一次。二者都是路径解析覆盖，未与任何已解析值冲突，故未纳入 P0。
+  - **仍待收尾（P1，不在 P0 范围内）**：`model_catalog.py:110` 的 `AGENT_RUNTIME_MODEL_CATALOG` 在 WebUI 启动时读一次；它是启动期查表路径，不属于 per-turn runtime wiring。`AGENT_RUNTIME_SKILLS_DIR` 已于 2026-11-26 收口到 `RuntimeConfig.skills_dir`（默认 `./skills`，RuntimeConfig 为唯一事实源，不再有 harness-relative 回退）。
 
   本项已固定的一条硬语义：`resolve_max_retries(harness_value, runtime=...)` 在注入 `runtime` 时**永远不再读环境**——`tool_error_max_retries is None` 表示“沿用 harness gene”，而不是“回退到 env”。此前它会在 override 为 `None` 时二次 `RuntimeConfig.from_env()`，导致 `AGENT_RUNTIME_TOOL_ERROR_MAX_RETRIES` 能覆盖已注入的配置（即“一次解析、显式注入”契约被破坏）；`TurnGuard` 现在只传 `runtime=`，不再自行拆字段。**2026-11-26 后续**：双源已彻底删除——`RuntimeConfig.tool_error_max_retries` / `AGENT_RUNTIME_TOOL_ERROR_MAX_RETRIES` / `resolve_max_retries()` 均移除，gene 是唯一事实源（见 `docs/runtime-config-vs-harness-and-turn-assembly-1126.md` §4.3）。
 - **Context 策略注册表是“假开放”**：

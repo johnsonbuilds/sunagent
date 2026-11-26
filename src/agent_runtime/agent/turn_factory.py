@@ -11,7 +11,6 @@ or construct its own policy helpers.
 from __future__ import annotations
 
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
 from agent_runtime.agent.llm_request import ChatModel
@@ -54,7 +53,6 @@ def create_agent_turn(
     stream: bool = False,
     trace: RunTrace | None = None,
     events: EventEmitter | None = None,
-    skills_dir: str | Path | None = None,
     workspace: Workspace | None = None,
     runtime: RuntimeConfig | None = None,
     summarizer_factory: SummarizerFactory | None = None,
@@ -70,6 +68,9 @@ def create_agent_turn(
     on first use.  When omitted, the providers-layer default (resolved
     from ``runtime.summary_model``) applies — still lazy, so turns whose
     strategy never summarizes never construct a provider client.
+
+    Skills always come from ``runtime.skills_dir``; the runtime config is
+    the single source of truth for this path.
     """
     resolved_runtime = runtime if runtime is not None else RuntimeConfig.from_env()
     resolved_harness = harness if harness is not None else default_harness()
@@ -119,7 +120,7 @@ def create_agent_turn(
         summarizer=resolved_factory,
         stream=stream,
         max_iterations=resolved_max_iterations,
-        skills_dir=skills_dir,
+        skills_dir=resolved_runtime.skills_dir,
         runtime=resolved_runtime,
     ))
 
@@ -135,7 +136,6 @@ async def run_turn(
     stream: bool = False,
     trace: RunTrace | None = None,
     events: EventEmitter | None = None,
-    skills_dir: str | Path | None = None,
     workspace: Workspace | None = None,
     runtime: RuntimeConfig | None = None,
     summarizer_factory: SummarizerFactory | None = None,
@@ -155,7 +155,6 @@ async def run_turn(
         stream=stream,
         trace=trace,
         events=events,
-        skills_dir=skills_dir,
         workspace=workspace,
         runtime=runtime,
         summarizer_factory=summarizer_factory,

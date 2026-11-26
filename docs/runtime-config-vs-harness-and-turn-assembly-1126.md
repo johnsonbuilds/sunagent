@@ -1,6 +1,6 @@
 # RuntimeConfig ↔ harness 职责边界 与 turn 组装层参数收敛（2026-11-26）
 
-> 本文是 P0「RuntimeConfig 收口」之后的复盘问答记录。§4.3（删除 `tool_error_max_retries` 双源）已实施；其余条目仍是建议，供确认后单开一单实施。
+> 本文是 P0「RuntimeConfig 收口」之后的复盘问答记录。§4.3（删除 `tool_error_max_retries` 双源）与 §4.10（`RuntimeConfig.skills_dir` 落地）已实施；其余条目仍是建议，供确认后单开一单实施。
 
 ---
 
@@ -66,9 +66,9 @@
 
 ### 为什么不能马上 `open_turn(runtime=...)`
 
-**因为 `skills_dir` 还没进 `RuntimeConfig`**。`loop.py:100-106` 现在把 `memory_enabled`/`memory_dir` 从 runtime 拆出来传，而 `skills_dir` 是 `create_agent_turn` 的独立入参，最终落到 `skills.py:58 default_skills_dir()` → **每轮现读 `AGENT_RUNTIME_SKILLS_DIR`**。webui 从不传 `skills_dir`（grep 无命中），所以它每轮都在读环境——这正是当前 phase 遗留的 P1 尾巴（review doc 已记）。
+**`skills_dir` 已进 `RuntimeConfig`（§4.10，2026-11-26）**，`create_agent_turn` 现在会把它作为默认值下传。因此下一步可以安全地把 runtime 整体交给 `open_turn`：届时 `loop.py:100-106` 里拆 `memory_enabled`/`memory_dir` 的 6 行三元表达式可以合并为一次 `open_turn(runtime=...)`，`skills_dir` 也不再需要作为平级参数出现在 `TurnCollaborators` 上。
 
-顺序必须是：**先 `RuntimeConfig.skills_dir` 落地 → 再谈把 runtime 整体下传**，否则 `open_turn(runtime=...)` 里还是会有个 `skills_dir` 平级参数，"清爽"只做了一半。
+顺序必须是：**先 `RuntimeConfig.skills_dir` 落地（已完成）→ 再做 `open_turn(runtime=...)` 与 `TurnCollaborators` 去平铺**，否则"清爽"只做了一半。
 
 ### 目标形状（建议的分层）
 
@@ -159,17 +159,17 @@
 
 所以"签名收紧为非 Optional、删兜底分支"必须附测试迁移清单，或保留 `runtime=None` 作为公开兼容入口（内部解析一次 env），否则会变成大范围测试改动。
 
-### 4.6 `skills_dir` 迁移要保留 harness.source 回退
+### 4.6 `skills_dir` 迁移：RuntimeConfig 单一真相源，无回退链
 
-`default_skills_dir()` 的优先级是：`AGENT_RUNTIME_SKILLS_DIR` → `<harness.source 的上级>/../skills` → `cwd/skills`。改为 `RuntimeConfig.skills_dir` 后必须保持：
+`RuntimeConfig.skills_dir` 是唯一事实源，默认值为当前工作目录下的 `skills/`（`DEFAULT_SKILLS_DIR = "skills"`），可由 `AGENT_RUNTIME_SKILLS_DIR` 覆盖。**不保留** `<harness.source parent>/../skills` 回退——harness 只声明技能名（`skills:` gene），目录属于部署事实。
+
+落地的优先级只有一条：
 
 ```
-RuntimeConfig.skills_dir（显式/环境解析结果）
-  > harness.source 推导目录
-  > cwd/skills
+RuntimeConfig.skills_dir（默认 ./skills，可被环境覆盖）
 ```
 
-否则会悄悄改变"harness 与 skills 是兄弟目录"的现有行为。
+`create_agent_turn` / `run_turn` 不再接受 `skills_dir` 参数；`resolve_skills(..., harness=...)` 的 harness 参数也已删除，直接调用时只用 `./skills` 默认值。
 
 ### 4.7 `model_catalog` 属于 scope creep
 
@@ -181,7 +181,15 @@ RuntimeConfig.skills_dir（显式/环境解析结果）
 
 ### 4.9 修订后的下一单顺序
 
-1. `RuntimeConfig.skills_dir` 落地（保留 harness.source 回退）；同时决定 `AGENT_RUNTIME_PYTHON` / `AGENT_RUNTIME_HOME` 是否一并收口。
+1. ✅ `RuntimeConfig.skills_dir` 落地（默认 `./skills`，单一真相源，无回退）；`AGENT_RUNTIME_PYTHON` / `AGENT_RUNTIME_HOME` 本次未动（见 §4.10）。
 2. evaluation 增加 runtime fingerprint（避免 runtime 变化被误归因给 harness）。
 3. turn 组装层去平铺 + 测试迁移清单（或保留 `runtime=None` 兼容）。
 4. （更晚，可选）`tool_error_max_retries` 改名、summarizer 重试基因化。
+
+### 4.10 `RuntimeConfig.skills_dir` 落地（已实施，2026-11-26）
+
+- `RuntimeConfig` 新增 `skills_dir: str`，默认 `./skills`，由 `from_env` 单次解析 `AGENT_RUNTIME_SKILLS_DIR`；显式构造参数优先于环境。**RuntimeConfig 是唯一事实源，不保留 harness.source 回退链。**
+- `create_agent_turn` 不再接受 `skills_dir` 参数，直接取 `runtime.skills_dir`，再交给 `TurnCollaborators` → `open_turn`。
+- `default_skills_dir()` 只返回 `./skills`；`resolve_skills()` 删除了不再使用的 `harness` 参数。
+- `run.config` 的 runtime snapshot 与 `ENV_WHITELIST` 均加入 `skills_dir` / `AGENT_RUNTIME_SKILLS_DIR`，保证可复现。
+- **未纳入本单**：`AGENT_RUNTIME_PYTHON`（只在 `execute_code` 的 Python 解释器选择处使用，`LANGUAGE_SPECS` 是模块级表，收口需把解释器参数穿过 tool spec）与 `AGENT_RUNTIME_HOME`（存储根路径，按调用解析以便测试改环境）。二者留作独立小重构。
