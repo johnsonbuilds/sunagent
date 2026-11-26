@@ -1,6 +1,6 @@
 # RuntimeConfig ↔ harness 职责边界 与 turn 组装层参数收敛（2026-11-26）
 
-> 本文是 P0「RuntimeConfig 收口」之后的复盘问答记录。**尚未动代码**，只记录结论与建议，供确认后单开一单实施。
+> 本文是 P0「RuntimeConfig 收口」之后的复盘问答记录。§4.3（删除 `tool_error_max_retries` 双源）已实施；其余条目仍是建议，供确认后单开一单实施。
 
 ---
 
@@ -25,14 +25,14 @@
 > **能进 `genes_hash`、能被 lineage 当实验变量 A/B、改动能归因到 benchmark 差异 → harness gene。**
 > **描述"这台机器 / 这个端点 / 这次部署"的事实与安全刹车、改了不该影响 harness 横向对比 → RuntimeConfig。**
 
-用这条判据看现在的重叠，只有 4 处真有问题（其余都是干净分工）：
+用这条判据看现在的重叠，只有 4 处与 turn 行为直接相关（其余深层 env 读见 §4.2）：
 
 | # | 重叠点 | 现状 | 判断 |
 |---|---|---|---|
-| 1 | `recovery.tool_error_max_retries`（harness）vs `RuntimeConfig.tool_error_max_retries`（env `AGENT_RUNTIME_TOOL_ERROR_MAX_RETRIES`） | **真正的双份同名字段**，env 覆盖 harness gene | 保留 gene 为唯一事实源；`RuntimeConfig` 那个只是调试阀，应**改名**表明它是 override（见下） |
-| 2 | `retry_4xx`（runtime）vs `recovery.llm_errors.invalid_request.max_retries`（harness） | `llm_recovery.py:234` 里 `retry_4xx` 把 400/404/422 从 `invalid_request` 改判成 `provider_error`，**直接让 harness 声明的 invalid_request 策略失效** | 这是最隐蔽的越权。该保留（网关把瞬时错误报成 4xx 是端点事实），但必须文档化 + trace 里可见（已在 `_runtime_snapshot` 里，✅） |
-| 3 | `reasoning_effort`（runtime，主模型）vs `context.summary_reasoning_effort`（harness，摘要模型） | 名字近似、语义不同域 | 保持现状，但建议 `RuntimeConfig` 侧改名 `model_reasoning_effort` 或至少在 docstring 写"主模型 vs 摘要模型" |
-| 4 | `control.max_iterations`（harness）vs `create_agent_turn(max_iterations=...)`（入参） | 三层副本：协作对象、`TurnGuard`、`AgentTurn.max_iterations` | 见第 2 节，应压到"只在 factory 解析一次" |
+| 1 | `recovery.tool_error_max_retries`（harness）vs `RuntimeConfig.tool_error_max_retries`（env `AGENT_RUNTIME_TOOL_ERROR_MAX_RETRIES`） | **真正的双份同名字段**，env 覆盖 harness gene | 保留 gene 为唯一事实源；**删除 `RuntimeConfig` 字段与 env**（见 §4.3，已实施） |
+| 2 | `retry_4xx`（runtime）vs `recovery.llm_errors.invalid_request.max_retries`（harness） | `llm_recovery.py:199-202` 里 `retry_4xx` 把 400/404/422 从 `invalid_request` 改判成 `provider_error`，**直接让 harness 声明的 invalid_request 策略失效** | 这是最隐蔽的越权。该保留（网关把瞬时错误报成 4xx 是端点事实），但必须文档化 + trace 里可见（已在 `_runtime_snapshot` 里，✅） |
+| 3 | `reasoning_effort`（runtime，主模型）vs `context.summary_reasoning_effort`（harness，摘要模型） | 名字近似、语义不同域 | 保持现状即可；改名优先级低（见 §4.8） |
+| 4 | `control.max_iterations`（harness）vs `create_agent_turn(max_iterations=...)`（入参） | 三层引用：协作对象、`TurnGuard`、`AgentTurn.max_iterations`（factory 只解析一次，不会漂移） | 清洁性调整，非正确性问题（见 §4.4） |
 
 ### `max_reasoning_chars` 该不该进 `control`？
 
@@ -51,13 +51,13 @@
 | 名字 | 谁管 | 语义 | 事实源 |
 |---|---|---|---|
 | `recovery.llm_errors.<category>.max_retries` + `backoff`/`base_delay` | harness | 单次 LLM 调用的重放次数与退避（`llm_request.py:296`） | 纯 harness ✅ |
-| `recovery.tool_error_max_retries` | harness gene + `RuntimeConfig` env override | 连续相同工具错误熔断阈值（`turn_guard.py:65`） | **双源** ⚠️ |
-| summarizer 第二次尝试 | 无 | `context/summary.py:390` 的 `for attempt in (1, 2)` **硬编码**，连基因都没有 | 硬编码 ⚠️ |
+| `recovery.tool_error_max_retries` | harness gene | 连续相同工具错误熔断阈值（`turn_guard.py:55`） | **gene 唯一事实源** ✅（2026-11-26 已删双源） |
+| summarizer 第二次尝试 | 无 | `context/summary.py:335` 的 `for attempt in (1, 2)` **硬编码**，连基因都没有 | 硬编码 ⚠️ |
 
 建议（单开一单，别混进当前 phase）：
 
-- `resolve_max_retries` → `resolve_same_error_limit(harness_value, *, runtime)`；字段 `tool_error_max_retries` → `same_error_limit` / `tool_error_limit`，harness YAML 里同改（loader 只认新键，旧键报明确错误，别做双读）。
-- 保留 env 名 `AGENT_RUNTIME_TOOL_ERROR_MAX_RETRIES` 一个版本做过渡，但**它只能覆盖 harness gene 的空缺或调试**，不能是"两个字段各写一半"。
+- `resolve_max_retries` 改名可在以后单独做；**但改名会改变 `genes_dict()` 的序列化键，从而改变所有 harness 的 `genes_hash`**，且仓库里 25+ 个 archived YAML 仍用旧键。若做，必须配套迁移/兼容策略，不能只在 loader 里"旧键报错"。
+- **本次直接删除 `AGENT_RUNTIME_TOOL_ERROR_MAX_RETRIES` 与 `RuntimeConfig.tool_error_max_retries`**：要让 env "只补 gene 的空缺"在当前 `int = 0`（0 同时是合法"关闭"）下无法区分"未设置"与"显式关闭"；既然已决定 gene 为唯一事实源，就不再保留隐式的第二写入口。未来若确实需要调试覆盖，用显式命名（如 `AGENT_RUNTIME_TOOL_ERROR_OVERRIDE`）并在 trace 标注，不做双读。
 - summarizer 的那次重试要么提成 `context.summary_retries: int = 1` gene，要么在注释里明确"这是实现细节、不进基因"——现在是第三种：悄悄硬编码。
 
 ---
@@ -100,4 +100,88 @@
 
 1. `RuntimeConfig.skills_dir` 落地（含 `AGENT_RUNTIME_SKILLS_DIR` 一次解析）+ 删 `model_catalog` 启动期的直接 env 读 —— 是 2 的前置，独立可交付。
 2. **turn 组装层去平铺**：`open_turn(runtime=...)`、`TurnCollaborators` 去 `max_iterations`/`skills_dir`、`AgentTurn.runtime` 非 Optional、连带删 `runtime is None` 兜底分支。改动集中在 4 个文件 + 单测（`tests/agent/test_loop.py:1132-1136` 那条断言要看）。
-3. （更晚）`resolve_max_retries` 改名 + summarizer 重试基因化 —— 会动 harness YAML 与 lineage，建议单独一单，别和 2 混。
+3. （更晚，可选）`resolve_max_retries` 改名 + summarizer 重试基因化 —— 会动 harness YAML 与 lineage，建议单独一单，别和 2 混；**双源删除已在本单先做（§4.3）**。
+
+---
+
+## 4. 评审补正与实施决策（2026-11-26）
+
+> 本节记录对第 1–3 节的复核：确认哪些结论成立、修正哪些逻辑，以及已实施/后续动作。
+
+### 4.1 判据修订：harness gene ≠ 所有 A/B 变量
+
+第 1 节的硬规矩
+
+> 能进 `genes_hash`、能被 lineage 当实验变量 A/B、改动能归因到 benchmark 差异 → harness gene
+
+与现状自相矛盾：`model`、`temperature`、`base_url` 都在 `RuntimeConfig`，但它们恰恰是 benchmark 最核心的 A/B 变量。按原文判据它们应该进 harness，显然不是设计意图。修订为：
+
+- **harness gene** = 智能体策略（prompt / tools / control / context / recovery / skills），描述"agent 怎么做"。
+- **RuntimeConfig** = 运行条件（endpoint / model / sampling / 超时 / 预算 / 路径 / 安全开关），描述"在哪里、以什么资源做"。
+- benchmark 的 A/B 轴可以横跨两者：模型/温度是 runtime 轴，策略是 harness 轴；`genes_hash` 只标识后者。
+
+**对 `max_reasoning_chars` 的连带影响**：把它留在 runtime 是对的，但"不会影响横向对比"只在 runtime 被固定时成立。目前 `evaluation.py:101-129` 只按 `harness_id`/`genes_hash` 分组，**不读 runtime snapshot**；trace 虽然通过 `run.config` 记了 runtime，evaluation 没有消费。若两次跑分别用 50k / 100k，`genes_hash` 相同，差异会被归因给 harness。后续应增加 runtime fingerprint（至少 `model`、`temperature`、`max_reasoning_chars`、`retry_4xx`、`stream*`），不一致时告警或分组。
+
+### 4.2 "只有 4 处重叠"不完整
+
+按本文自己的判据，至少还漏了这些深层/隐式 env 读：
+
+| env | 位置 | 读取时机 |
+|---|---|---|
+| `AGENT_RUNTIME_PYTHON` | `tools/code.py:25` | 每次执行工具 |
+| `AGENT_RUNTIME_HOME` | `storage.py:43` | 每次取路径 |
+| `AGENT_RUNTIME_MODEL_CATALOG` | `model_catalog.py:109` | 启动期一次 |
+| `AGENT_RUNTIME_REASONING_ECHO` | `reasoning_echo.py:49` | 无 runtime 时的兼容兜底 |
+
+其中 `PYTHON` / `HOME` 与 `skills_dir` 同族（深层 per-call env 读），应纳入下一单排查范围；`MODEL_CATALOG` / `REASONING_ECHO` 见 §4.7 / §4.8。
+
+### 4.3 `tool_error_max_retries`：删除双源（已实施）
+
+**决策：保 gene 为唯一事实源，直接删除第二写入口。** 具体改动：
+
+- 删除 `RuntimeConfig.tool_error_max_retries` 字段、`AGENT_RUNTIME_TOOL_ERROR_MAX_RETRIES` 解析、trace snapshot 字段、metrics env whitelist 条目。
+- 删除 `resolve_max_retries()`；`TurnGuard` 直接读 `harness.recovery.tool_error_max_retries`，不再接受 `runtime=`。
+- **不实现**"env 只补 gene 空缺"：`RecoveryGenome.tool_error_max_retries: int = 0` 中 `0` 同时是合法"关闭"，无法区分"未设置"与"显式关闭"。要支持补缺，gene 必须改成 `int | None`，那是另一套语义，本次不做。
+- 未来若确实需要调试覆盖，使用显式命名（如 `AGENT_RUNTIME_TOOL_ERROR_OVERRIDE`）并在 trace 标注，不做隐式双读。
+- **改名暂缓**：`tool_error_max_retries` → `same_error_limit` 会改变 `genes_dict()` 序列化键，从而改变所有 harness 的 `genes_hash`；且 25+ archived YAML 仍用旧键。若做，必须配套迁移/兼容策略，不能只让 loader 对旧键报错。
+
+### 4.4 `max_iterations` "三层副本"表述过重
+
+`resolved_max_iterations` 在 `turn_factory.py:84-86` 只解析一次，随后按值传给 `TurnGuard`、`TurnCollaborators`、`AgentTurn`。它们不是三个独立事实源，只是同一个不可变 int 的三份引用，**不会漂移**。这是整洁性问题，不是正确性问题。另外让 loop 改读 `self.guard.max_iterations` 会让 loop 依赖 guard 的策略状态，耦合方向不理想；优先级应放低。
+
+### 4.5 删除 `runtime=None` 分支的测试影响被低估
+
+除 `tests/agent/test_loop.py:1132-1136` 外，至少还有：
+
+- `tests/agent/test_loop.py:1092,1103`：显式测试 `use_streaming()` 无参读 env。
+- `tests/agent/test_context_gates.py:291,319,339,483`：`chat_with_recovery` / `consume_stream` 不传 runtime。
+- `tests/agent/test_tool_call_extras.py:104`：`consume_stream` 不传 runtime。
+
+所以"签名收紧为非 Optional、删兜底分支"必须附测试迁移清单，或保留 `runtime=None` 作为公开兼容入口（内部解析一次 env），否则会变成大范围测试改动。
+
+### 4.6 `skills_dir` 迁移要保留 harness.source 回退
+
+`default_skills_dir()` 的优先级是：`AGENT_RUNTIME_SKILLS_DIR` → `<harness.source 的上级>/../skills` → `cwd/skills`。改为 `RuntimeConfig.skills_dir` 后必须保持：
+
+```
+RuntimeConfig.skills_dir（显式/环境解析结果）
+  > harness.source 推导目录
+  > cwd/skills
+```
+
+否则会悄悄改变"harness 与 skills 是兄弟目录"的现有行为。
+
+### 4.7 `model_catalog` 属于 scope creep
+
+`AGENT_RUNTIME_MODEL_CATALOG` 是启动期的一次性查表路径，不是 per-turn endpoint/transport 配置；`webui/server.py` 的 `AgentRunner.__init__` 已读一次，不违反"组合根解析一次"。把它塞进 `RuntimeConfig` 会让 runtime 承担目录表职责，收益不明确。建议从 §3 第 1 项拆出，单独作为"消除启动期直接 env 读"的小重构。
+
+### 4.8 `reasoning_effort` 改名优先级很低
+
+`reasoning_effort`（主模型）与 `context.summary_reasoning_effort`（摘要模型）作用对象不同，不构成真正的双源。改名只是可读性收益，却要动 RuntimeConfig、trace、providers、测试和外部 env 名。写成 docstring 即可，不进近期单子。
+
+### 4.9 修订后的下一单顺序
+
+1. `RuntimeConfig.skills_dir` 落地（保留 harness.source 回退）；同时决定 `AGENT_RUNTIME_PYTHON` / `AGENT_RUNTIME_HOME` 是否一并收口。
+2. evaluation 增加 runtime fingerprint（避免 runtime 变化被误归因给 harness）。
+3. turn 组装层去平铺 + 测试迁移清单（或保留 `runtime=None` 兼容）。
+4. （更晚，可选）`tool_error_max_retries` 改名、summarizer 重试基因化。

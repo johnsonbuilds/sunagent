@@ -94,8 +94,7 @@ def create_agent_turn(
         harness=resolved_harness,
         trace=resolved_trace,
         events=resolved_events,
-        max_iterations=resolved_max_iterations,
-        runtime=resolved_runtime)
+        max_iterations=resolved_max_iterations)
     tool_runner = ToolRunner(
         tools=tools,
         harness=resolved_harness,

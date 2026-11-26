@@ -1,6 +1,5 @@
 import sys
 import unittest
-from os import environ
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +10,6 @@ from agent_runtime.agent.turn_factory import run_turn
 from agent_runtime.agent.tool_error_budget import (
     SameToolErrorBudget,
     error_signature,
-    resolve_max_retries,
 )
 from agent_runtime.harness import (
     HarnessError,
@@ -105,30 +103,6 @@ class SameToolErrorBudgetTests(unittest.TestCase):
         for _ in range(5):
             self.assertEqual(budget.note_failure("t", ValueError("boom"))[1],
                              False)
-
-
-class ResolveMaxRetriesTests(unittest.TestCase):
-    def test_env_override_wins_over_harness_gene(self) -> None:
-        previous = environ.get("AGENT_RUNTIME_TOOL_ERROR_MAX_RETRIES")
-        environ["AGENT_RUNTIME_TOOL_ERROR_MAX_RETRIES"] = "1"
-        try:
-            self.assertEqual(resolve_max_retries(3), 1)
-        finally:
-            if previous is None:
-                environ.pop("AGENT_RUNTIME_TOOL_ERROR_MAX_RETRIES", None)
-            else:
-                environ["AGENT_RUNTIME_TOOL_ERROR_MAX_RETRIES"] = previous
-
-    def test_invalid_env_falls_back_to_harness_gene(self) -> None:
-        previous = environ.get("AGENT_RUNTIME_TOOL_ERROR_MAX_RETRIES")
-        environ["AGENT_RUNTIME_TOOL_ERROR_MAX_RETRIES"] = "many"
-        try:
-            self.assertEqual(resolve_max_retries(3), 3)
-        finally:
-            if previous is None:
-                environ.pop("AGENT_RUNTIME_TOOL_ERROR_MAX_RETRIES", None)
-            else:
-                environ["AGENT_RUNTIME_TOOL_ERROR_MAX_RETRIES"] = previous
 
 
 class LoopGuardTests(unittest.IsolatedAsyncioTestCase):

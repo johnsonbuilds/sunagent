@@ -6,19 +6,15 @@ closing marker) burns all ``max_iterations``. This module counts
 consecutive failures keyed by ``(tool, error signature)``: any success
 or a different error resets the count, and reaching the configured
 limit tells the loop to stop early with a manual-handling message.
+
+The limit is the ``recovery.tool_error_max_retries`` harness gene and
+nothing else: there is no runtime/environment override, so an injected
+harness is the single source of truth.
 """
 
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from agent_runtime.runtime_config import RuntimeConfig
-
-#: Runtime override for the ``recovery.tool_error_max_retries`` gene.
-#: Read only by :meth:`RuntimeConfig.from_env`.
-ENV_VAR = "AGENT_RUNTIME_TOOL_ERROR_MAX_RETRIES"
 
 _SIGNATURE_LIMIT = 200
 
@@ -33,31 +29,6 @@ def error_signature(error: object) -> str:
     text = str(error).strip().split("\n")[0].strip().lower()
     text = _LINE_PREFIX.sub("", text).strip()
     return text[:_SIGNATURE_LIMIT] if text else "unknown error"
-
-
-def resolve_max_retries(harness_value: int,
-                        override: int | None = None, *,
-                        runtime: "RuntimeConfig | None" = None) -> int:
-    """Harness gene value, overridable by an explicit runtime knob.
-
-    Precedence: ``override``, then the injected ``runtime`` (its
-    ``tool_error_max_retries``, unset meaning "keep the harness gene" —
-    the environment is never consulted, so a caller that already resolved
-    the config cannot be overruled by a later env change), then one
-    ``RuntimeConfig.from_env()`` read for callers with no config to
-    thread.  Negative values clamp to 0 (guard disabled); an unparseable
-    env value is ignored.
-    """
-    if override is None:
-        if runtime is not None:
-            override = runtime.tool_error_max_retries
-        else:
-            from agent_runtime.runtime_config import RuntimeConfig
-
-            override = RuntimeConfig.from_env().tool_error_max_retries
-    if override is None:
-        return harness_value
-    return max(0, override)
 
 
 class SameToolErrorBudget:
@@ -89,8 +60,6 @@ class SameToolErrorBudget:
 
 
 __all__ = [
-    "ENV_VAR",
     "SameToolErrorBudget",
     "error_signature",
-    "resolve_max_retries",
 ]

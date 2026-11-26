@@ -109,7 +109,6 @@ def _runtime_snapshot(runtime: "RuntimeConfig | None") -> dict[str, Any]:
         "command_guard_mode": runtime.command_guard_mode,
         "memory_enabled": runtime.memory_enabled,
         "memory_dir": runtime.memory_dir,
-        "tool_error_max_retries": runtime.tool_error_max_retries,
         "harness": runtime.harness,
     }
 

@@ -74,7 +74,6 @@ class RuntimeConfig:
     command_guard_mode: str = "blocklist"
     memory_enabled: bool = False
     memory_dir: str | None = None
-    tool_error_max_retries: int | None = None
     harness: str | None = None
 
     @classmethod
@@ -176,16 +175,6 @@ class RuntimeConfig:
                           if memory_override is None
                           else bool(memory_override))
 
-        retries_override = overrides.get("tool_error_max_retries", None)
-        if retries_override is None:
-            raw_retries = os.getenv("AGENT_RUNTIME_TOOL_ERROR_MAX_RETRIES", "").strip()
-            try:
-                retries = max(0, int(raw_retries)) if raw_retries else None
-            except ValueError:
-                retries = None
-        else:
-            retries = max(0, int(retries_override))
-
         return cls(
             model=pick("model", _env_str("MODEL_ID", DEFAULT_MODEL)),
             base_url=pick("base_url", _env_optional_str("LLM_BASE_URL")),
@@ -206,7 +195,6 @@ class RuntimeConfig:
             memory_enabled=memory_enabled,
             memory_dir=pick("memory_dir",
                             _env_optional_str("AGENT_RUNTIME_MEMORY_DIR")),
-            tool_error_max_retries=retries,
             harness=pick("harness", _env_optional_str("AGENT_RUNTIME_HARNESS")),
         )
 
