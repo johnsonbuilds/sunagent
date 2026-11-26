@@ -9,7 +9,7 @@ plus one line in :func:`builtin_tool_specs`.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from agent_runtime.execution.base import ShellExecutor, Workspace
 from agent_runtime.execution.local import LocalShellExecutor, LocalWorkspace
@@ -27,6 +27,9 @@ from .patch import apply_patch_spec
 from .search import find_files_spec, grep_search_spec
 from .shell import run_command_spec
 from .symbols import TreeSitterIndex, find_references_spec, find_symbol_spec
+
+if TYPE_CHECKING:
+    from agent_runtime.runtime_config import RuntimeConfig
 
 
 class ToolExecutor(Protocol):
@@ -82,10 +85,14 @@ class ToolRegistry:
 
 
 def builtin_tool_specs(executor: ShellExecutor | None = None,
-                       workspace: Workspace | None = None) -> list[ToolSpec]:
+                       workspace: Workspace | None = None,
+                       runtime: "RuntimeConfig | None" = None,
+                       ) -> list[ToolSpec]:
     """Every tool the runtime knows how to build."""
-    shell_executor = executor if executor is not None else LocalShellExecutor()
-    file_workspace = workspace if workspace is not None else LocalWorkspace()
+    shell_executor = (executor if executor is not None
+                      else LocalShellExecutor(runtime=runtime))
+    file_workspace = (workspace if workspace is not None
+                      else LocalWorkspace(runtime=runtime))
     symbol_index = TreeSitterIndex(file_workspace)
     return [
         run_command_spec(shell_executor, file_workspace),
@@ -107,6 +114,7 @@ def create_default_registry(executor: ShellExecutor | None = None,
                             enabled: list[str] | None = None,
                             workspace: Workspace | None = None, *,
                             extra_specs: Sequence[ToolSpec] | None = None,
+                            runtime: "RuntimeConfig | None" = None,
                             ) -> ToolRegistry:
     """Build the tool registry, optionally filtered by the harness gene.
 
@@ -121,10 +129,16 @@ def create_default_registry(executor: ShellExecutor | None = None,
     diagnosis harness's read-only ``read_trace`` / ``search_trace`` /
     ``read_diagnosis``.  They must be named in the harness gene to be
     exposed, so a generic registry never learns their names.
+
+    ``runtime`` supplies the guard policy / workspace root when the
+    caller has a resolved ``RuntimeConfig``; omitting it resolves the
+    environment once inside the defaults.
     """
-    shell_executor = executor if executor is not None else LocalShellExecutor()
-    file_workspace = workspace if workspace is not None else LocalWorkspace()
-    specs = builtin_tool_specs(shell_executor, file_workspace)
+    shell_executor = (executor if executor is not None
+                      else LocalShellExecutor(runtime=runtime))
+    file_workspace = (workspace if workspace is not None
+                      else LocalWorkspace(runtime=runtime))
+    specs = builtin_tool_specs(shell_executor, file_workspace, runtime)
     extras = list(extra_specs or [])
     by_name = {spec.name: spec for spec in specs}
     for spec in extras:

@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import time
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
@@ -35,15 +34,8 @@ logger = logging.getLogger(__name__)
 
 
 def _stream_idle_timeout(runtime: RuntimeConfig | None = None) -> float | None:
-    """Idle timeout, explicit config wins; env is the legacy fallback."""
-    if runtime is not None:
-        return runtime.stream_idle_timeout
-    raw = os.getenv("AGENT_RUNTIME_STREAM_IDLE_TIMEOUT", "120")
-    try:
-        timeout = float(raw)
-    except ValueError:
-        return 120.0
-    return timeout if timeout > 0 else None
+    """Idle timeout; ``None`` resolves the environment via ``RuntimeConfig``."""
+    return (runtime or RuntimeConfig.from_env()).stream_idle_timeout
 
 
 def _reasoning_budget_chars(runtime: RuntimeConfig | None = None) -> int | None:
@@ -52,16 +44,8 @@ def _reasoning_budget_chars(runtime: RuntimeConfig | None = None) -> int | None:
     Guards against reasoning models that spiral into unbounded chain of
     thought without ever emitting content or tool calls (observed on
     ARS-class tasks). 0 or a negative value disables the guard.
-    Explicit config wins; env is the legacy fallback.
     """
-    if runtime is not None:
-        return runtime.max_reasoning_chars
-    raw = os.getenv("AGENT_RUNTIME_MAX_REASONING_CHARS", "50000")
-    try:
-        budget = int(raw)
-    except ValueError:
-        return 50_000
-    return budget if budget > 0 else None
+    return (runtime or RuntimeConfig.from_env()).max_reasoning_chars
 
 
 class StreamIdleTimeout(RuntimeError):

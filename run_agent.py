@@ -48,7 +48,8 @@ async def _run() -> None:
     harness = resolve_harness(args.harness)
     runtime = RuntimeConfig.from_env()
     llm = OpenAICompatibleLLM(config=runtime)
-    tools = create_default_registry(enabled=list(harness.tools.enabled))
+    tools = create_default_registry(enabled=list(harness.tools.enabled),
+                                   runtime=runtime)
     conversation = Conversation()
     renderer = CLIRenderer()
     use_stream = runtime.streaming

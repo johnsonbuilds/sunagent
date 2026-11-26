@@ -44,7 +44,7 @@ def _summarizer_factory(runtime: RuntimeConfig) -> SummarizerFactory:
     return _build
 
 
-def _turn_tools(harness: HarnessSpec) -> ToolExecutor:
+def _turn_tools(harness: HarnessSpec, runtime: RuntimeConfig) -> ToolExecutor:
     """Tools of one harness, plus the read-only diagnosis tools.
 
     The extra specs are named in ``harnesses/evaluation-v1.yaml``; a
@@ -54,7 +54,7 @@ def _turn_tools(harness: HarnessSpec) -> ToolExecutor:
     extra = (diagnosis_tool_specs()
              if harness.id == EVALUATION_HARNESS_ID else None)
     return create_default_registry(enabled=list(harness.tools.enabled),
-                                   extra_specs=extra)
+                                   extra_specs=extra, runtime=runtime)
 
 
 def resolve_turn(*, catalog: ModelCatalog, model_id: str | None,
@@ -70,7 +70,7 @@ def resolve_turn(*, catalog: ModelCatalog, model_id: str | None,
         runtime=runtime,
         harness=harness,
         llm=OpenAICompatibleLLM(config=runtime),
-        tools=_turn_tools(harness),
+        tools=_turn_tools(harness, runtime),
         stream=runtime.streaming,
         summarizer_factory=_summarizer_factory(runtime),
     )

@@ -311,15 +311,17 @@ class HarnessInternalTests(unittest.TestCase):
 
     def test_the_diagnosis_tools_are_only_injected_for_that_harness(self):
         from webui.turn_context import _turn_tools
+        from agent_runtime.runtime_config import RuntimeConfig
 
+        runtime = RuntimeConfig.from_env()
         diagnosis_tools = {spec.name for spec in diagnosis.diagnosis_tool_specs()}
         self.assertEqual(diagnosis_tools,
                          {"read_trace", "search_trace", "read_diagnosis"})
         own = {schema["function"]["name"] for schema in
-               _turn_tools(resolve_harness("evaluation-v1")).schemas}
+               _turn_tools(resolve_harness("evaluation-v1"), runtime).schemas}
         self.assertTrue(diagnosis_tools <= own)
         generic = {schema["function"]["name"] for schema in
-                   _turn_tools(resolve_harness("coding-v1")).schemas}
+                   _turn_tools(resolve_harness("coding-v1"), runtime).schemas}
         self.assertFalse(diagnosis_tools & generic)
 
     def test_the_api_hides_and_refuses_the_diagnosis_harness(self):

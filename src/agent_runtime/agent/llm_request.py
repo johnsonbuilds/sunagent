@@ -23,7 +23,6 @@ import asyncio
 import hashlib
 import json
 import logging
-import os
 import time
 from collections.abc import AsyncIterator, Mapping
 from typing import Any, Protocol
@@ -78,11 +77,12 @@ def _request_chars(messages: list[dict[str, Any]]) -> int:
 
 
 def use_streaming(runtime: RuntimeConfig | None = None) -> bool:
-    """Whether the runtime should consume LLM streaming (AGENT_RUNTIME_STREAM)."""
-    if runtime is not None:
-        return runtime.streaming
-    value = os.getenv("AGENT_RUNTIME_STREAM", "1").lower()
-    return value not in {"0", "false", "no", "off"}
+    """Whether the runtime should consume LLM streaming (AGENT_RUNTIME_STREAM).
+
+    The env read lives in ``RuntimeConfig.from_env``; passing ``None`` is
+    the legacy shape used by callers that have no config to thread.
+    """
+    return (runtime or RuntimeConfig.from_env()).streaming
 
 
 class ChatModel(Protocol):

@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import binascii
 import math
-import os
 import posixpath
 import shlex
 import time
@@ -108,12 +107,13 @@ class HarborWorkspace:
     def __init__(self, environment: HarborEnvironment,
                  root: str | None = None) -> None:
         # Same convention as LocalWorkspace: explicit argument wins, then
-        # AGENT_RUNTIME_WORKSPACE, then open (None). Deployments that need
-        # containment (eval) set the variable; free-roaming setups
-        # (terminal-bench) leave it unset. No task paths live in code.
+        # ``RuntimeConfig.workspace_root``, then open (None). Deployments
+        # that need containment (eval) set the variable; free-roaming
+        # setups (terminal-bench) leave it unset. No task paths in code.
         if root is None:
-            raw = os.getenv("AGENT_RUNTIME_WORKSPACE")
-            root = raw if raw else None
+            from agent_runtime.runtime_config import RuntimeConfig
+
+            root = RuntimeConfig.from_env().workspace_root or None
         self.environment = environment
         self.root = root
 

@@ -79,9 +79,12 @@ class HarborAgentSmokeTests(unittest.IsolatedAsyncioTestCase):
         environ[ENV_MEMORY] = "1"
         try:
             with TemporaryDirectory() as directory:
-                HarborAgent(Path(directory), model_name="test-model",
-                            llm=FakeLLM())
-                self.assertEqual(environ[ENV_MEMORY], "0")
+                agent = HarborAgent(Path(directory), model_name="test-model",
+                                    llm=FakeLLM())
+                # The switch is scoped to this agent's config; the host
+                # process environment must be left untouched.
+                self.assertFalse(agent._runtime.memory_enabled)
+                self.assertEqual(environ[ENV_MEMORY], "1")
         finally:
             if previous is None:
                 environ.pop(ENV_MEMORY, None)

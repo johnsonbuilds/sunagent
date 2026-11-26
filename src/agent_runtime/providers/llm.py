@@ -3,27 +3,14 @@
 from __future__ import annotations
 
 import logging
-import os
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from agent_runtime.reasoning_echo import (
-    DEFAULT_MODEL,
-    should_echo_reasoning,
-)
 from agent_runtime.runtime_config import RuntimeConfig
 
 
 logger = logging.getLogger(__name__)
-
-
-def _reasoning_effort() -> str | None:
-    """Optional reasoning-effort hint (e.g. ``low``) for models that
-    support controlling chain-of-thought depth.  Read per request so
-    the env can be toggled without rebuilding the provider."""
-    value = os.getenv("AGENT_RUNTIME_REASONING_EFFORT", "").strip()
-    return value or None
 
 
 class ContextWindowExceededError(RuntimeError):
@@ -118,31 +105,6 @@ def _usage_dict(usage: Any) -> dict[str, int]:
     return {"prompt_tokens": prompt if isinstance(prompt, int) else 0,
             "completion_tokens": completion if isinstance(completion, int) else 0,
             "cached_tokens": _cached_tokens(usage)}
-
-
-def _stream_usage_enabled() -> bool:
-    """Whether streaming requests ask for a trailing usage chunk.
-
-    ``stream_options: {"include_usage": true}`` is the OpenAI-compatible
-    way to get billed token counts on a stream.  Set
-    ``AGENT_RUNTIME_STREAM_USAGE=0`` for providers that reject the
-    parameter outright.
-    """
-    return os.getenv("AGENT_RUNTIME_STREAM_USAGE", "1").strip() != "0"
-
-
-def reasoning_echo_enabled(model: str | None = None,
-                           base_url: str | None = None) -> bool:
-    """Echo decision for the configured endpoint (env-backed defaults).
-
-    The context-budget layer asks this so accounting matches the wire:
-    reasoning only counts toward the budget when it will actually be
-    replayed. ``model``/``base_url`` default to the same env resolution
-    as :class:`OpenAICompatibleLLM`.
-    """
-    return should_echo_reasoning(
-        model if model is not None else os.getenv("MODEL_ID", DEFAULT_MODEL),
-        base_url if base_url is not None else os.getenv("LLM_BASE_URL"))
 
 
 def _reasoning_text(message: Any) -> str:
@@ -363,15 +325,9 @@ class OpenAICompatibleLLM:
 
     @property
     def echo_reasoning(self) -> bool:
-        # Instance endpoint (fixes the split-brain) + live echo mode.
-        # Mode stays a global knob so `AGENT_RUNTIME_REASONING_ECHO`
-        # patching in tests/scripts keeps working; an explicitly pinned
-        # config mode wins when the env is at its default.
-        from agent_runtime.reasoning_echo import reasoning_echo_mode, should_echo_reasoning
-        import os as _os
-        if _os.getenv("AGENT_RUNTIME_REASONING_ECHO") is None:
-            return should_echo_reasoning(self.model, self.base_url, self._config.reasoning_echo_mode)
-        return should_echo_reasoning(self.model, self.base_url, reasoning_echo_mode())
+        # Instance endpoint + the echo mode frozen into the config at
+        # construction time: one env read at the composition root.
+        return self._config.should_echo(self.model, self.base_url)
 
     async def chat(self, messages: Sequence[dict[str, Any]],
                    tools: list[dict[str, Any]] | None = None,
@@ -476,7 +432,7 @@ class OpenAICompatibleLLM:
 
 __all__ = [
     "OpenAICompatibleLLM", "OpenAILLM", "ContextWindowExceededError",
-    "_looks_like_context_overflow", "_usage_dict", "_stream_usage_enabled",
+    "_looks_like_context_overflow", "_usage_dict",
 ]
 
 OpenAILLM = OpenAICompatibleLLM

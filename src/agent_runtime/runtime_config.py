@@ -13,9 +13,15 @@ recomputed ``count_reasoning`` from ``MODEL_ID``/``LLM_BASE_URL``.
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from typing import Any
+
+logger = logging.getLogger(__name__)
+
+#: Guard policies accepted by :class:`execution.guard.CommandGuard`.
+GUARD_MODES = ("off", "blocklist", "allowlist")
 
 
 def _env_str(name: str, default: str) -> str:
@@ -30,26 +36,20 @@ def _env_optional_str(name: str) -> str | None:
     return value or None
 
 
-def _env_float(name: str, default: float) -> float:
-    try:
-        return float(os.getenv(name, str(default)))
-    except ValueError:
-        return default
-
-
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(os.getenv(name, str(default)))
-    except ValueError:
-        return default
-
-
 def _env_flag(name: str, default: bool) -> bool:
     """``1``-by-default flags; ``0/false/no/off`` disables."""
     raw = os.getenv(name)
     if raw is None:
         return default
     return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _env_truthy(name: str, default: bool = False) -> bool:
+    """``off``-by-default flags: only ``1/true/on`` enable."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "on"}
 
 
 @dataclass(frozen=True)
@@ -74,6 +74,14 @@ class RuntimeConfig:
     max_reasoning_chars: int | None = 50_000
     retry_4xx: bool = False
     summary_model: str | None = None
+    # Run wiring that used to be read deep inside the execution/memory
+    # layers.  Same rule applies: resolved here, passed down explicitly.
+    workspace_root: str | None = None
+    command_guard_mode: str = "blocklist"
+    memory_enabled: bool = False
+    memory_dir: str | None = None
+    tool_error_max_retries: int | None = None
+    harness: str | None = None
 
     @classmethod
     def from_env(cls, **overrides: Any) -> RuntimeConfig:
@@ -159,6 +167,32 @@ class RuntimeConfig:
                      if retry_4xx_override is None
                      else bool(retry_4xx_override))
 
+        guard_override = overrides.get("command_guard_mode", None)
+        guard_mode = (_env_str("AGENT_RUNTIME_COMMAND_GUARD", "blocklist").strip().lower()
+                      if guard_override is None
+                      else str(guard_override).strip().lower())
+        if guard_mode not in GUARD_MODES:
+            # An unparseable policy must not make every executor
+            # construction raise; fall back to the safe default once.
+            logger.warning("runtime_config.invalid_command_guard_mode value=%r",
+                           guard_mode)
+            guard_mode = "blocklist"
+
+        memory_override = overrides.get("memory_enabled", None)
+        memory_enabled = (_env_truthy("AGENT_RUNTIME_MEMORY", False)
+                          if memory_override is None
+                          else bool(memory_override))
+
+        retries_override = overrides.get("tool_error_max_retries", None)
+        if retries_override is None:
+            raw_retries = os.getenv("AGENT_RUNTIME_TOOL_ERROR_MAX_RETRIES", "").strip()
+            try:
+                retries = max(0, int(raw_retries)) if raw_retries else None
+            except ValueError:
+                retries = None
+        else:
+            retries = max(0, int(retries_override))
+
         return cls(
             model=pick("model", _env_str("MODEL_ID", DEFAULT_MODEL)),
             base_url=pick("base_url", _env_optional_str("LLM_BASE_URL")),
@@ -173,6 +207,14 @@ class RuntimeConfig:
             retry_4xx=retry_4xx,
             summary_model=pick("summary_model",
                                _env_optional_str("AGENT_RUNTIME_SUMMARY_MODEL")),
+            workspace_root=pick("workspace_root",
+                                _env_optional_str("AGENT_RUNTIME_WORKSPACE")),
+            command_guard_mode=guard_mode,
+            memory_enabled=memory_enabled,
+            memory_dir=pick("memory_dir",
+                            _env_optional_str("AGENT_RUNTIME_MEMORY_DIR")),
+            tool_error_max_retries=retries,
+            harness=pick("harness", _env_optional_str("AGENT_RUNTIME_HARNESS")),
         )
 
     def should_echo(self, model: str | None = None,

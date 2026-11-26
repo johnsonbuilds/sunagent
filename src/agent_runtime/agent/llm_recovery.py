@@ -19,7 +19,6 @@ where the history is and whether a next turn exists at all.
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -213,15 +212,8 @@ def _status_code(exc: BaseException) -> int | None:
 
 
 def _retry_4xx_enabled(runtime: RuntimeConfig | None = None) -> bool:
-    """Opt-out for gateways that report transient failures as 4xx.
-
-    Explicit config wins; env is the legacy fallback (same pattern as
-    ``llm_stream``'s idle-timeout and reasoning-budget knobs).
-    """
-    if runtime is not None:
-        return runtime.retry_4xx
-    raw = os.getenv("AGENT_RUNTIME_RETRY_4XX", "")
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
+    """Opt-out for gateways that report transient failures as 4xx."""
+    return (runtime or RuntimeConfig.from_env()).retry_4xx
 
 
 def llm_error_category(exc: BaseException,

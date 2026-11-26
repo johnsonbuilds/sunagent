@@ -25,8 +25,13 @@ from agent_runtime.trace import RunTrace
 
 def open_turn(*, conversation: Conversation, harness: HarnessSpec,
               workspace: Workspace, skills_dir: str | Path | None,
-              trace: RunTrace) -> None:
+              trace: RunTrace,
+              memory_enabled: bool | None = None,
+              memory_dir: str | Path | None = None) -> None:
     """Inject the system prompt / skills / memory blocks when absent.
+
+    ``memory_enabled`` / ``memory_dir`` come from the caller's
+    ``RuntimeConfig``; omitting them resolves the environment.
 
     ``ensure_system_prompt`` is idempotent: on a conversation that already
     has a system message it is a no-op, so the ``skills.loaded`` and
@@ -36,7 +41,8 @@ def open_turn(*, conversation: Conversation, harness: HarnessSpec,
     skills = resolve_skills(list(harness.skills), skills_dir=skills_dir,
                             harness=harness)
     skills_block = render_skills_block(skills)
-    memory_view = render_memory_block(workspace)
+    memory_view = render_memory_block(workspace, enabled=memory_enabled,
+                                      memory_dir=memory_dir)
     inserted = ensure_system_prompt(conversation, harness.prompt.system,
                                     skills_block, memory_view.block)
     if not inserted:

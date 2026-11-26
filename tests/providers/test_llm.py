@@ -30,6 +30,7 @@ from agent_runtime.reasoning_echo import (
     reasoning_echo_mode,
     should_echo_reasoning,
 )
+from agent_runtime.runtime_config import RuntimeConfig
 
 
 class ProviderUsageTests(unittest.TestCase):
@@ -466,14 +467,21 @@ class ProviderEgressTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("finish_reason", result)
 
     async def test_stream_projects_messages_for_the_wire(self) -> None:
-        with patch.dict(os.environ, {"AGENT_RUNTIME_REASONING_ECHO": "never"}):
-            self.llm.model = "gpt-4o"
-            history = [
-                {"role": "assistant", "content": "",
-                 "reasoning_content": "spiral"},
-            ]
+        # Echo mode is frozen into the config at construction time; the
+        # provider must not re-read AGENT_RUNTIME_REASONING_ECHO per call.
+        self.llm = OpenAICompatibleLLM(
+            config=RuntimeConfig(model="gpt-4o",
+                                 base_url="https://api.example.com/v1",
+                                 api_key="test-key",
+                                 reasoning_echo_mode="never"))
+        self.llm.client = unittest.mock.MagicMock()
+        self.llm.client.chat.completions = self.completions
+        history = [
+            {"role": "assistant", "content": "",
+             "reasoning_content": "spiral"},
+        ]
 
-            chunks = [chunk async for chunk in self.llm.stream(history)]
+        chunks = [chunk async for chunk in self.llm.stream(history)]
 
         sent = self.completions.calls[0]["messages"]
         self.assertNotIn("reasoning_content", sent[0])

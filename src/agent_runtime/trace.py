@@ -106,6 +106,12 @@ def _runtime_snapshot(runtime: "RuntimeConfig | None") -> dict[str, Any]:
         "reasoning_effort": runtime.reasoning_effort,
         "reasoning_echo_mode": runtime.reasoning_echo_mode,
         "summary_model": runtime.summary_model,
+        "workspace_root": runtime.workspace_root,
+        "command_guard_mode": runtime.command_guard_mode,
+        "memory_enabled": runtime.memory_enabled,
+        "memory_dir": runtime.memory_dir,
+        "tool_error_max_retries": runtime.tool_error_max_retries,
+        "harness": runtime.harness,
     }
 
 

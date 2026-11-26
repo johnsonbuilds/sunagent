@@ -37,6 +37,7 @@ from agent_runtime.agent.tool_error_budget import (
 from agent_runtime.agent.turn_history import TurnHistory
 from agent_runtime.events import EventEmitter
 from agent_runtime.harness import HarnessSpec
+from agent_runtime.runtime_config import RuntimeConfig
 from agent_runtime.trace import RunTrace
 
 logger = logging.getLogger(__name__)
@@ -51,13 +52,18 @@ class TurnGuard:
 
     def __init__(self, *, harness: HarnessSpec,
                  trace: RunTrace, events: EventEmitter,
-                 max_iterations: int) -> None:
+                 max_iterations: int,
+                 runtime: RuntimeConfig | None = None) -> None:
         self.harness = harness
         self.trace = trace
         self.events = events
         self.max_iterations = max_iterations
+        # ``runtime=None`` keeps the historical shape (env resolved once
+        # inside ``resolve_max_retries``); the composition root passes a
+        # config, and then the environment is never consulted again.
         self.error_budget = SameToolErrorBudget(
-            resolve_max_retries(harness.recovery.tool_error_max_retries))
+            resolve_max_retries(harness.recovery.tool_error_max_retries,
+                                runtime=runtime))
 
     def maybe_remind(self, history: TurnHistory, iteration: int) -> None:
         """Nudge at configured budget fractions (control gene).

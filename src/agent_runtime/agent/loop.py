@@ -99,7 +99,11 @@ class AgentTurn:
         events.emit("agent.started", message=self.user_message)
         open_turn(conversation=self.conversation, harness=harness,
                   workspace=self.workspace, skills_dir=self.skills_dir,
-                  trace=trace)
+                  trace=trace,
+                  memory_enabled=(self.runtime.memory_enabled
+                                  if self.runtime is not None else None),
+                  memory_dir=(self.runtime.memory_dir
+                              if self.runtime is not None else None))
         self.conversation.append({"role": "user", "content": self.user_message})
         history = TurnHistory(self.conversation.messages,
                               summarizer=self.summarizer,

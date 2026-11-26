@@ -31,10 +31,10 @@ from agent_runtime.memory import (
     MAX_MEMORY_ENTRIES,
     ENV_MEMORY,
     ENV_MEMORY_DIR,
-    memory_enabled,
     memory_root,
     render_memory_block,
 )
+from agent_runtime.runtime_config import RuntimeConfig
 from agent_runtime.tools.tools import ToolRegistry
 from agent_runtime.trace import RunTrace
 
@@ -85,17 +85,17 @@ class MemorySwitchTests(unittest.TestCase):
     def test_off_by_default(self) -> None:
         with mock.patch.dict(environ, {}, clear=False):
             environ.pop(ENV_MEMORY, None)
-            self.assertFalse(memory_enabled())
+            self.assertFalse(RuntimeConfig.from_env().memory_enabled)
 
     def test_truthy_values(self) -> None:
         for raw in ("1", "true", "on", "TRUE", "On"):
             with mock.patch.dict(environ, {ENV_MEMORY: raw}):
-                self.assertTrue(memory_enabled(), raw)
+                self.assertTrue(RuntimeConfig.from_env().memory_enabled, raw)
 
     def test_falsy_values(self) -> None:
         for raw in ("", "0", "off", "no", "false"):
             with mock.patch.dict(environ, {ENV_MEMORY: raw}):
-                self.assertFalse(memory_enabled(), raw)
+                self.assertFalse(RuntimeConfig.from_env().memory_enabled, raw)
 
     def test_off_renders_empty_and_creates_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

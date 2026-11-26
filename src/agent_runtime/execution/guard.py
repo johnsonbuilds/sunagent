@@ -26,7 +26,6 @@ safer route.
 
 from __future__ import annotations
 
-import os
 import re
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -203,15 +202,24 @@ def blocked_result(command: str, decision: GuardDecision) -> dict[str, Any]:
                       "message": decision.reason or "command blocked"}}
 
 
-def guard_from_env(workspace_root: str | None = None) -> CommandGuard:
-    """Build the guard from ``AGENT_RUNTIME_COMMAND_GUARD`` (default blocklist)."""
-    policy = os.getenv("AGENT_RUNTIME_COMMAND_GUARD", "blocklist").lower()
-    return CommandGuard(policy, workspace_root=workspace_root)
+def guard_for_runtime(runtime: "RuntimeConfig | None" = None,
+                      workspace_root: str | None = None) -> CommandGuard:
+    """Guard built from an explicit config.
+
+    ``runtime=None`` (a directly constructed executor with no composition
+    root) resolves the environment here, exactly once.
+    """
+    if runtime is None:
+        from agent_runtime.runtime_config import RuntimeConfig
+
+        runtime = RuntimeConfig.from_env()
+    return CommandGuard(runtime.command_guard_mode,
+                        workspace_root=workspace_root)
 
 
 __all__ = [
     "BLOCK_REASON_DESTRUCTIVE", "BLOCK_REASON_NOT_ALLOWLISTED",
     "BLOCK_REASON_PRIVILEGE", "BLOCK_REASON_REMOTE_PIPE",
     "BLOCK_REASON_SENSITIVE", "CommandGuard", "GuardDecision",
-    "blocked_result", "guard_from_env",
+    "blocked_result", "guard_for_runtime",
 ]

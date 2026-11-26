@@ -1,8 +1,11 @@
 """Persistent cross-session memory: workspace files the agent owns.
 
-Enabled by ``AGENT_RUNTIME_MEMORY=1`` (any of ``1``/``true``/``on``,
-case-insensitive; default off).  This environment switch is the only
-control over whether memory is rendered: callers always supply a
+Enabled by ``RuntimeConfig.memory_enabled`` (``AGENT_RUNTIME_MEMORY``,
+any of ``1``/``true``/``on``, case-insensitive; default off).
+The composition root resolves that flag once and passes it to
+:func:`render_memory_block`; ``enabled=None`` resolves the environment
+once here, for callers with no composition root.  This switch is the
+only control over whether memory is rendered: callers always supply a
 workspace, and the workspace's presence is never used as a hidden
 on/off switch.  When enabled, the agent loop renders a memory block into
 the system prompt at session start — injection point A, the same channel
@@ -16,8 +19,8 @@ The memory directory is *not* part of the sandbox.  It lives under the
 runtime home -- ``storage.runtime_home()/memory``, i.e. ``workspace/memory/``
 by default, next to ``sessions/`` and ``traces/`` -- so memory survives a
 change of sandbox and stays put even when the sandbox is narrowed to a
-subdirectory.  ``AGENT_RUNTIME_MEMORY_DIR`` overrides the location
-outright.  The listing is still *spelled* relative to the sandbox root
+subdirectory.  ``RuntimeConfig.memory_dir`` (``AGENT_RUNTIME_MEMORY_DIR``)
+overrides the location outright.  The listing is still *spelled* relative to the sandbox root
 (``workspace/memory/notes.md`` with the default layout) because the file
 tools resolve relative paths there and refuse anything that escapes it; a
 memory directory outside the sandbox therefore cannot be reached by the
@@ -112,22 +115,21 @@ class MemoryView:
         }
 
 
-def memory_enabled() -> bool:
-    """Whether the persistent-memory feature is switched on."""
-    return os.getenv(ENV_MEMORY, "").strip().lower() in {"1", "true", "on"}
-
-
-def memory_root() -> Path:
+def memory_root(memory_dir: str | Path | None = None) -> Path:
     """The absolute directory that holds persistent memory.
 
     Anchored on :func:`agent_runtime.storage.runtime_home` -- not on the
     agent's sandbox -- so memory counts as durable run state, like
-    ``sessions/`` and ``traces/``.  ``AGENT_RUNTIME_MEMORY_DIR`` overrides
-    it; a relative override resolves against the process working
-    directory, exactly like ``AGENT_RUNTIME_HOME``.  Read per call so the
-    environment can be changed without rebuilding anything.
+    ``sessions/`` and ``traces/``.  ``memory_dir`` (from
+    ``RuntimeConfig.memory_dir``) overrides it; a relative override
+    resolves against the process working directory, exactly like
+    ``AGENT_RUNTIME_HOME``.
     """
-    raw = os.getenv(ENV_MEMORY_DIR, "").strip()
+    raw = (str(memory_dir).strip() if memory_dir is not None else "")
+    if not raw:
+        from agent_runtime.runtime_config import RuntimeConfig
+
+        raw = RuntimeConfig.from_env().memory_dir or ""
     if raw:
         return Path(raw).expanduser().resolve()
     return storage.runtime_home() / MEMORY_DIR
@@ -245,11 +247,15 @@ def _tree_hash(entries: list[tuple[str, int]]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
-def render_memory_block(workspace: Workspace) -> MemoryView:
+def render_memory_block(workspace: Workspace, *,
+                        enabled: bool | None = None,
+                        memory_dir: str | Path | None = None) -> MemoryView:
     """Render the memory block for the given workspace.
 
-    Whether memory is rendered is controlled solely by the
-    ``AGENT_RUNTIME_MEMORY`` environment switch.  ``workspace`` is a
+    Whether memory is rendered is controlled by the ``enabled`` flag
+    (``RuntimeConfig.memory_enabled``).  ``enabled=None`` resolves the
+    environment here once, for callers with no composition root.
+    ``workspace`` is a
     required collaborator: missing storage is a wiring error, not a
     second way to turn the feature off.
 
@@ -267,7 +273,11 @@ def render_memory_block(workspace: Workspace) -> MemoryView:
         raise ValueError(
             "render_memory_block requires a workspace; memory enablement "
             "is controlled by AGENT_RUNTIME_MEMORY, not by workspace presence")
-    if not memory_enabled():
+    if enabled is None:
+        from agent_runtime.runtime_config import RuntimeConfig
+
+        enabled = RuntimeConfig.from_env().memory_enabled
+    if not enabled:
         return MemoryView()
     root = workspace.root
     if root is None or not str(root).strip():
@@ -276,18 +286,18 @@ def render_memory_block(workspace: Workspace) -> MemoryView:
             "the workspace has no root; persistent memory requires a rooted "
             "workspace and will be skipped")
         return MemoryView()
-    memory_dir = memory_root()
-    prefix = _display_prefix(memory_dir, Path(str(root)).expanduser())
+    memory_dir_path = memory_root(memory_dir)
+    prefix = _display_prefix(memory_dir_path, Path(str(root)).expanduser())
     if prefix is None:
         logger.warning(
             "memory.outside_sandbox: memory directory %s is outside the "
             "sandbox root %s, so file tools cannot reach it; persistent "
             "memory is skipped (point AGENT_RUNTIME_MEMORY_DIR inside the "
-            "sandbox, or widen AGENT_RUNTIME_WORKSPACE)", memory_dir, root)
+            "sandbox, or widen AGENT_RUNTIME_WORKSPACE)", memory_dir_path, root)
         return MemoryView()
     try:
-        memory_dir.mkdir(parents=True, exist_ok=True)
-        entries = _scan_tree(memory_dir, prefix)
+        memory_dir_path.mkdir(parents=True, exist_ok=True)
+        entries = _scan_tree(memory_dir_path, prefix)
     except OSError:
         return MemoryView()
     tree_text, truncated = _render_tree(entries)
@@ -307,5 +317,5 @@ __all__ = [
     "ENV_MEMORY", "ENV_MEMORY_DIR", "MEMORY_DIR",
     "MAX_MEMORY_ENTRIES", "MAX_MEMORY_CHARS",
     "MEMORY_CONVENTION", "TRUNCATION_MARKER",
-    "MemoryView", "memory_enabled", "memory_root", "render_memory_block",
+    "MemoryView", "memory_root", "render_memory_block",
 ]

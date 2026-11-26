@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import subprocess
 import time
 from pathlib import Path
 from typing import Any
 
 from .base import paginate_lines, truncate_result
-from .guard import CommandGuard, GuardDecision, guard_from_env
+from .guard import CommandGuard, GuardDecision, guard_for_runtime
 
 
 def _text(value: Any) -> str:
@@ -36,14 +35,18 @@ class LocalShellExecutor:
     """Execute shell commands in the current Python process environment.
 
     Commands pass through a :class:`CommandGuard` first (policy from
-    ``AGENT_RUNTIME_COMMAND_GUARD``, default ``blocklist``); a blocked
+    ``RuntimeConfig.command_guard_mode``, default ``blocklist``); a blocked
     command returns a structured ``CommandBlocked`` error instead of
     running.  The guard is fool-proofing against destructive mistakes,
     not a security boundary — see :mod:`agent_runtime.execution.guard`.
     """
 
-    def __init__(self, guard: CommandGuard | None = None) -> None:
-        self.guard = guard if guard is not None else guard_from_env()
+    def __init__(self, guard: CommandGuard | None = None,
+                 runtime: "RuntimeConfig | None" = None) -> None:
+        if guard is None:
+            guard = guard_for_runtime(runtime)
+        self.guard = guard
+        self.runtime = runtime
 
     async def execute(
         self,
@@ -97,11 +100,6 @@ class LocalShellExecutor:
 __all__ = ["LocalShellExecutor", "LocalWorkspace"]
 
 
-def _default_workspace_root() -> Path:
-    raw = os.getenv("AGENT_RUNTIME_WORKSPACE")
-    return Path(raw).expanduser().resolve() if raw else Path.cwd()
-
-
 def _structured_error(exc: BaseException) -> dict[str, Any]:
     return {"error": {"type": type(exc).__name__, "message": str(exc)}}
 
@@ -109,14 +107,24 @@ def _structured_error(exc: BaseException) -> dict[str, Any]:
 class LocalWorkspace:
     """Workspace backed by the local filesystem, rooted and contained.
 
-    The root defaults to ``AGENT_RUNTIME_WORKSPACE`` or the current
-    working directory.  Every path is resolved before use and must stay
-    inside the root, so ``../`` escapes and absolute paths pointing
-    elsewhere are rejected with ``ValueError``.
+    The root defaults to ``RuntimeConfig.workspace_root`` (from the
+    injected ``runtime``, else resolved here once) or the current working
+    directory.  Every path is resolved before use and must stay inside
+    the root, so ``../`` escapes and absolute paths pointing elsewhere
+    are rejected with ``ValueError``.
     """
 
-    def __init__(self, root: str | Path | None = None) -> None:
-        base = Path(root).expanduser() if root is not None else _default_workspace_root()
+    def __init__(self, root: str | Path | None = None,
+                 runtime: "RuntimeConfig | None" = None) -> None:
+        if root is None:
+            if runtime is None:
+                from agent_runtime.runtime_config import RuntimeConfig
+
+                runtime = RuntimeConfig.from_env()
+            raw = runtime.workspace_root
+            base = Path(raw).expanduser() if raw else Path.cwd()
+        else:
+            base = Path(root).expanduser()
         self.root: Path = base.resolve()
 
     def _resolve(self, path: str) -> Path:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +19,6 @@ from agent_runtime.metrics import afinalize_run
 from agent_runtime.runtime_config import RuntimeConfig
 from agent_runtime.execution.harbor import HarborShellExecutor, HarborWorkspace
 from agent_runtime.harness import HarnessSpec, resolve_harness
-from agent_runtime.memory import ENV_MEMORY
 from agent_runtime.providers import OpenAICompatibleLLM
 from agent_runtime.tools import create_default_registry
 from agent_runtime.trace import RunEvent, RunTrace
@@ -50,11 +50,11 @@ class HarborAgent(BaseAgent):
         load_dotenv(override=True)
         # Harbor tasks must never receive persistent memory: the memory
         # tree is host-local state, and injecting it would leak context
-        # across tasks.  Set this after load_dotenv so .env cannot turn
-        # it back on.
-        os.environ[ENV_MEMORY] = "0"
+        # across tasks.  Disabling it on the config (not on
+        # ``os.environ``) keeps the choice scoped to this agent instead
+        # of mutating global process state for the host application.
+        self._runtime = replace(RuntimeConfig.from_env(), memory_enabled=False)
         _enable_runtime_logging()
-        self._runtime = RuntimeConfig.from_env()
         self.llm = llm if llm is not None else OpenAICompatibleLLM(model=self.model_name, config=self._runtime)
 
     @staticmethod
@@ -74,7 +74,7 @@ class HarborAgent(BaseAgent):
         context: AgentContext,
     ) -> None:
         trace_path = self.logs_dir / "agent-runtime.jsonl"
-        harness: HarnessSpec = resolve_harness(os.getenv("AGENT_RUNTIME_HARNESS"))
+        harness: HarnessSpec = resolve_harness(self._runtime.harness)
         use_stream = self._runtime.streaming if isinstance(getattr(self, "_runtime", None), RuntimeConfig) else RuntimeConfig.from_env().streaming
         logger.debug("task.start instruction=%r model=%r stream=%s harness=%s",
                      instruction, getattr(self.llm, "model", None),
@@ -106,8 +106,7 @@ class HarborAgent(BaseAgent):
         trace.record_config(
             runtime=getattr(self, "_runtime", None),
             model_params={"model": getattr(self.llm, "model", ""),
-                          "temperature": harness.control.temperature
-                          if hasattr(harness.control, "temperature") else None,
+                          "temperature": self._runtime.temperature,
                           "stream": use_stream,
                           "max_iterations": harness.control.max_iterations},
             tools=tools.schemas,
