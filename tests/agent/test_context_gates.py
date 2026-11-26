@@ -135,6 +135,43 @@ class UserPreservationTests(unittest.IsolatedAsyncioTestCase):
         pivot_index = contents.index("pivot to task B")
         self.assertGreater(pivot_index, summary_index)
 
+    async def test_verbatim_users_survive_a_second_compaction(self) -> None:
+        # A user message kept verbatim by compaction 1 sits in front of the
+        # incremental boundary of compaction 2; the preserve scan must span
+        # all history, or the boundary silently drops it on the second pass.
+        messages = build_rounds(6, tool_chars=1_000,
+                                mid_users=["pivot to task B",
+                                           "also check the tests",
+                                           "newest redirect"])
+        llm = FakeSummaryLLM()
+        view = await summarize_history(messages, budget=1, tail_rounds=2,
+                                       user_preserve_budget=8_000, llm=llm)
+        snapshot = extract_summary(view)
+        self.assertIsNotNone(snapshot)
+        boundary = len(messages)
+
+        messages += build_rounds(2, tool_chars=1_000)[2:]
+        messages.append({"role": "user", "content": "latest redirect"})
+        messages += build_rounds(2, tool_chars=1_000)[2:]
+        view2 = await summarize_history(messages, budget=1, tail_rounds=2,
+                                        boundary=boundary,
+                                        previous_summary=snapshot,
+                                        user_preserve_budget=8_000, llm=llm)
+
+        contents = [str(m.get("content", "")) for m in view2]
+        for user in ("pivot to task B", "also check the tests",
+                     "newest redirect", "latest redirect"):
+            self.assertIn(user, contents)
+        # chronological order is preserved
+        indexes = [contents.index(u) for u in ("pivot to task B",
+                                              "also check the tests",
+                                              "newest redirect",
+                                              "latest redirect")]
+        self.assertEqual(indexes, sorted(indexes))
+        # incrementality is not regressed: the summarizer still reads only
+        # the new segment plus the previous snapshot
+        self.assertLess(len(llm.last_messages), len(messages))
+
     async def test_overflow_users_join_summarizer_input(self) -> None:
         messages = build_rounds(6, tool_chars=1_000,
                                 mid_users=["old redirect", "recent redirect"])

@@ -275,8 +275,11 @@ async def summarize_history(messages: list[dict[str, Any]], *,
       unit).  User messages are
       the authoritative record of intent; summarising them risks the
       next reasoning step missing a mid-session redirect (opencode /
-      Codex keep them verbatim for the same reason).  Messages beyond
-      the budget feed the summarizer instead of being dropped.
+      Codex keep them verbatim for the same reason).  The budget is
+      applied to all history rather than only the new segment, so a
+      user message kept verbatim once is never lost when the incremental
+      boundary advances past it; messages beyond the budget feed the
+      summarizer instead of being dropped.
     * tail — the most recent ``tail_rounds`` rounds verbatim, preserving
       tool-call pairs and short-term coherence.
 
@@ -313,28 +316,39 @@ async def summarize_history(messages: list[dict[str, Any]], *,
     tail_start = starts[-tail_rounds]
     tail = messages[tail_start:]
 
-    segment_start = max(starts[0], boundary)
-    segment = [message for message in messages[segment_start:tail_start]
+    # Two scan pools with different jobs: ``segment`` is the *incremental*
+    # input the summarizer must integrate (O(new segment), not O(full
+    # history)); ``preserve_pool`` spans all of history because a user
+    # message kept verbatim by an earlier compaction must survive the
+    # boundary advancing past it.  Deriving both from one list is what
+    # silently dropped verbatim users on the second compaction.
+    segment = [message for message in messages[max(starts[0], boundary):tail_start]
                if not _is_summary_message(message)]
+    preserve_pool = [message for message in messages[starts[0]:tail_start]
+                     if not _is_summary_message(message)]
 
     # user_preserve_budget stays in chars under either unit: routing it
     # through the anchor ratio would add conversion noise to a coarse guard.
+    # Scanning newest-first keeps recency priority, so old users can never
+    # crowd a recent redirect out of the budget.
     preserved: list[dict[str, Any]] = []
-    novel: list[dict[str, Any]] = []
     user_chars = 0
-    for message in reversed(segment):
+    for message in reversed(preserve_pool):
         if (message.get("role") == "user"
                 and not is_runtime_user_message(message)):
             content = str(message.get("content", ""))
             if user_chars + len(content) <= user_preserve_budget:
                 preserved.append(message)
                 user_chars += len(content)
-                continue
-        novel.append(message)
-    novel.reverse()
     preserved.reverse()  # restore chronological order
-    # The snapshot must cover the verbatim-kept users so the boundary
-    # can safely advance past them.
+
+    # Novelty is judged on the incremental segment alone: a boundary already
+    # covered by the previous snapshot must keep the zero-LLM-call fast path.
+    # The snapshot must cover the verbatim-kept users of this segment so the
+    # boundary can safely advance past them; older preserved users are
+    # already described by the text the previous summary was built from.
+    kept = {id(message) for message in preserved}
+    novel = [message for message in segment if id(message) not in kept]
 
     summarizer_input = list(segment)
 
