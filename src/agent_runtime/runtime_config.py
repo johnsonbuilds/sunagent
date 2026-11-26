@@ -1,5 +1,14 @@
 """Unified runtime configuration: one env parse, explicit injection.
 
+Boundary contract:
+- ``HarnessSpec`` = agent policy (prompt/tools/control/context/recovery/
+  skills). It enters ``genes_hash`` and is the only lineage/A-B axis.
+- ``RuntimeConfig`` = run conditions (model, endpoint, transport, paths,
+  resource limits, safety brakes). It is recorded in ``run.config`` and
+  must never enter ``genes_hash``.
+Each knob has exactly one home; env must never silently override a harness
+gene.
+
 All ``os.getenv`` reads for endpoint/transport knobs converge here.  The
 composition root (``turn_factory`` / ``run_agent`` / web UI / Harbor) calls
 :meth:`RuntimeConfig.from_env` once; deep layers (``TurnHistory``,
@@ -50,10 +59,12 @@ def _env_truthy(name: str, default: bool = False) -> bool:
 
 @dataclass(frozen=True)
 class RuntimeConfig:
-    """Endpoint + transport knobs, resolved once at the composition root.
+    """Run conditions, resolved once at the composition root.
 
-    ``HarnessSpec`` stays the source of truth for behavior genes; this object
-    only carries process wiring: which endpoint to hit and how to talk to it.
+    See the module docstring for the ``RuntimeConfig`` vs ``HarnessSpec``
+    contract: behavior genes stay in ``HarnessSpec`` / ``genes_hash``; this
+    object only carries the machine/endpoint/deployment facts needed to
+    execute them.
     """
 
     model: str

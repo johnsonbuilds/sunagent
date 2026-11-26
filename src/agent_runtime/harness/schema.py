@@ -242,6 +242,10 @@ def _hash_genes(genes: Mapping[str, Any]) -> str:
 class HarnessSpec:
     """One harness version: lineage metadata plus six behavior genes.
 
+    This object owns the agent policy that enters ``genes_hash``.  Machine /
+    endpoint / deployment conditions live in ``RuntimeConfig`` instead; see
+    that module's docstring for the boundary contract.
+
     ``verification`` is a reserved no-op placeholder, not a behavior gene.
     """
 
