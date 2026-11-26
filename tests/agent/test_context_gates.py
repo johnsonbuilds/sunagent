@@ -940,7 +940,18 @@ class TB4HarnessTests(unittest.TestCase):
 
     def test_summary_reasoning_effort_defaults_to_none(self) -> None:
         genome = ContextGenome()
-        self.assertIsNone(genome.summary_reasoning_effort)
+        self.assertEqual(genome.summary_reasoning_effort, "none")
+
+    def test_summary_reasoning_effort_absent_key_keeps_default(self) -> None:
+        from agent_runtime.harness import from_dict
+        spec = from_dict({"context": {"strategy": "llm_summary"}})
+        self.assertEqual(spec.context.summary_reasoning_effort, "none")
+
+    def test_summary_reasoning_effort_null_omits_parameter(self) -> None:
+        from agent_runtime.harness import from_dict
+        spec = from_dict({"context": {"strategy": "llm_summary",
+                                      "summary_reasoning_effort": None}})
+        self.assertIsNone(spec.context.summary_reasoning_effort)
 
     def test_invalid_summary_reasoning_effort_is_rejected(self) -> None:
         from agent_runtime.harness import HarnessError, from_dict

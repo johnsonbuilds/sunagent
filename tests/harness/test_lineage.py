@@ -298,34 +298,45 @@ class DeriveTests(unittest.TestCase):
 
 
 class ShippedV2HarnessTests(unittest.TestCase):
-    """The committed v2 harnesses must be one-gene children of v1."""
+    """The committed v2 harnesses must be v1 children that switch the context
+    strategy, plus any extra gene listed here on purpose."""
 
     HARNESSES = Path(__file__).parents[2] / "harnesses"
-    PAIRS = (("coding-v1", "coding-v2"),
-             ("general-v1", "general-v2"),
-             ("readonly-v1", "readonly-v2"))
+    # (parent, child, extra genes the child is allowed to change)
+    PAIRS = (("coding-v1", "coding-v2", [("prompt", 1)]),
+             ("general-v1", "general-v2", []),
+             ("readonly-v1", "readonly-v2", []))
 
     def _load(self, harness_id: str):
         return load_harness(self.HARNESSES / f"{harness_id}.yaml")
 
-    def test_each_v2_switches_only_the_context_strategy(self) -> None:
-        for parent_id, child_id in self.PAIRS:
+    def test_each_v2_switches_the_context_strategy(self) -> None:
+        for parent_id, child_id, extra in self.PAIRS:
             with self.subTest(child=child_id):
                 parent, child = self._load(parent_id), self._load(child_id)
                 self.assertEqual(child.id, child_id)
                 self.assertEqual(child.parent, parent_id)
                 self.assertTrue((child.mutation or "").strip())
                 self.assertEqual(changed_genes(parent, child),
-                                 [("context", 1)])
+                                 sorted([("context", 1), *extra]))
                 self.assertEqual(parent.context.strategy, "turn_fold")
                 self.assertEqual(child.context.strategy, "llm_summary")
 
+    def test_coding_v2_answers_questions_before_implementing(self) -> None:
+        system = self._load("coding-v2").prompt.system
+        self.assertIn("answer it before doing anything else", system)
+        self.assertIn("enumerate and answer every one of them", system)
+        self.assertNotIn("truly blocked", system)
+
     def test_the_shipped_tree_has_no_new_lineage_warnings(self) -> None:
         problems = validate_lineage(load_all_harnesses(self.HARNESSES))
-        self.assertEqual(
-            [problem for problem in problems
-             if problem.startswith(("coding-v2", "general-v2", "readonly-v2"))],
-            [])
+        v2 = [problem for problem in problems
+              if problem.startswith(("coding-v2", "general-v2", "readonly-v2"))]
+        # coding-v2 is the only v2 that carries a second gene on purpose, so the
+        # multi-gene note is the single warning the shipped tree may show.
+        self.assertEqual(len(v2), 1, v2)
+        self.assertTrue(v2[0].startswith("coding-v2: mutation"), v2[0])
+        self.assertIn("touches 2 genes (context, prompt)", v2[0])
 
 
 if __name__ == "__main__":

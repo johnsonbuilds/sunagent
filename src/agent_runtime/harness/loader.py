@@ -30,6 +30,7 @@ from .schema import (
     DEFAULT_MAX_OBSERVATION_CHARS,
     DEFAULT_SPILL_PREVIEW_CHARS,
     DEFAULT_SUMMARY_MAX_TOKENS,
+    DEFAULT_SUMMARY_REASONING_EFFORT,
     DEFAULT_SUMMARY_TAIL_ROUNDS,
     DEFAULT_USER_PRESERVE_BUDGET,
     DEFAULT_WINDOW_ROUNDS,
@@ -103,7 +104,11 @@ def _summary_reasoning_effort(section: Mapping[str, Any]) -> str | None:
     The value is passed verbatim to the provider as ``reasoning_effort``;
     validating the union of values the supported endpoints document keeps
     a typo from turning every compaction into a failed summarizer call.
+    An absent key keeps the genome default (thinking off); an explicit
+    ``null`` omits the parameter for thinking-only endpoints.
     """
+    if "summary_reasoning_effort" not in section:
+        return DEFAULT_SUMMARY_REASONING_EFFORT
     value = _optional_text(section, "summary_reasoning_effort", "context")
     if value is None:
         return None

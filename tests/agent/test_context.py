@@ -498,11 +498,22 @@ class SummarizeHistoryTests(unittest.IsolatedAsyncioTestCase):
                          "none")
         self.assertEqual(llm.last_request_kwargs.get("max_tokens"), 4_096)
 
-    async def test_summary_reasoning_effort_is_omitted_by_default(self) -> None:
+    async def test_summary_reasoning_effort_defaults_to_none(self) -> None:
         messages = build_rounds(10, 5_000)
         llm = FakeSummaryLLM()
         await summarize_history(messages, budget=1_000, tail_rounds=2, llm=llm)
 
+        # Summarizing is mechanical: thinking is off unless a harness opts in.
+        self.assertEqual(llm.last_request_kwargs.get("reasoning_effort"),
+                         "none")
+
+    async def test_summary_reasoning_effort_can_be_omitted(self) -> None:
+        messages = build_rounds(10, 5_000)
+        llm = FakeSummaryLLM()
+        await summarize_history(messages, budget=1_000, tail_rounds=2,
+                                summary_reasoning_effort=None, llm=llm)
+
+        # Thinking-only endpoints reject the parameter, so null omits it.
         self.assertNotIn("reasoning_effort", llm.last_request_kwargs)
 
 

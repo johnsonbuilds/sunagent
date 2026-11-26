@@ -13,6 +13,7 @@ from agent_runtime.harness import (
     DEFAULT_CONTEXT_BUDGET,
     DEFAULT_SUMMARIZER_INPUT_CAP_CHARS,
     DEFAULT_SUMMARY_MAX_TOKENS,
+    DEFAULT_SUMMARY_REASONING_EFFORT,
     DEFAULT_SUMMARY_TAIL_ROUNDS,
     DEFAULT_USER_PRESERVE_BUDGET,
 )
@@ -171,7 +172,8 @@ class _SummaryCall(NamedTuple):
 async def _generate_summary(messages: list[dict[str, Any]], *,
                             previous_summary: str | None,
                             summary_max_tokens: int,
-                            summary_reasoning_effort: str | None = None,
+                            summary_reasoning_effort: str | None = (
+                                DEFAULT_SUMMARY_REASONING_EFFORT),
                             llm: Any = None,
                             prompt: str | None = None) -> _SummaryCall:
     """Ask the LLM for a structured summary of the compaction segment.
@@ -186,11 +188,12 @@ async def _generate_summary(messages: list[dict[str, Any]], *,
     ``summary_max_tokens`` caps the summarizer's output at the request
     level (pi-style bound: a snapshot is a checkpoint, not a retelling).
     ``summary_reasoning_effort`` is forwarded as the provider's
-    ``reasoning_effort``; on endpoints that honour ``none`` this keeps
-    the cap a content-only cap instead of letting chain-of-thought eat
-    the budget.  Exceptions propagate to the caller, which records them
-    on the trace and falls back to the deterministic compactor instead
-    of aborting the turn.
+    ``reasoning_effort`` and defaults to ``none``: summarizing is a
+    mechanical, template-driven extraction, so thinking only eats the
+    output budget.  Passing ``None`` omits the parameter for endpoints
+    that reject it.  Exceptions propagate to the caller, which records
+    them on the trace and falls back to the deterministic compactor
+    instead of aborting the turn.
     """
     from agent_runtime.agent.tokens import response_usage
 
@@ -264,7 +267,8 @@ async def summarize_history(messages: list[dict[str, Any]], *,
                             tail_rounds: int | None = None,
                             user_preserve_budget: int = DEFAULT_USER_PRESERVE_BUDGET,
                             summary_max_tokens: int = DEFAULT_SUMMARY_MAX_TOKENS,
-                            summary_reasoning_effort: str | None = None,
+                            summary_reasoning_effort: str | None = (
+                                DEFAULT_SUMMARY_REASONING_EFFORT),
                             boundary: int = 0,
                             previous_summary: str | None = None,
                             unit: str = "chars",

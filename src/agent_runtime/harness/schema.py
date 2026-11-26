@@ -145,6 +145,11 @@ DEFAULT_SUMMARY_MAX_TOKENS = 4_096       # context: summarizer output hard cap, 
 # the provider default (which is thinking-enabled on several endpoints).
 SUMMARY_REASONING_EFFORTS: tuple[str, ...] = (
     "none", "minimal", "low", "medium", "high", "xhigh", "max")
+# Summarizing is a mechanical, template-driven extraction task: thinking
+# buys nothing and eats the ``summary_max_tokens`` budget, so the default
+# is off.  A harness on a thinking-only endpoint (GLM-5.3, Kimi k3) that
+# rejects the parameter sets the gene to null to omit it.
+DEFAULT_SUMMARY_REASONING_EFFORT = "none"
 # Cap (chars) for the summarizer's input on the retry attempt. Pathological
 # segments (hundreds of k chars after repeated failures stall the boundary)
 # make the model return empty/off-schema snapshots; TB-2.1 showed invalid
@@ -204,11 +209,11 @@ class ContextGenome:
     summary_tail_rounds: int = DEFAULT_SUMMARY_TAIL_ROUNDS
     user_preserve_budget: int = DEFAULT_USER_PRESERVE_BUDGET  # chars, either budget unit (coarse guard; no token conversion)
     summary_max_tokens: int = DEFAULT_SUMMARY_MAX_TOKENS
-    # Optional per-call reasoning effort for the summarizer.  Summaries
-    # are extraction, not problem solving; disabling thinking where the
-    # provider supports it keeps ``summary_max_tokens`` a content cap
-    # instead of a reasoning+content cap.  None keeps the provider default.
-    summary_reasoning_effort: str | None = None
+    # Per-call reasoning effort for the summarizer.  Summaries are
+    # extraction, not problem solving; disabling thinking keeps
+    # ``summary_max_tokens`` a content cap instead of a reasoning+content
+    # cap.  None omits the parameter and keeps the provider default.
+    summary_reasoning_effort: str | None = DEFAULT_SUMMARY_REASONING_EFFORT
     retrieval_exempt_tools: tuple[str, ...] = DEFAULT_RETRIEVAL_EXEMPT_TOOLS
 
 
