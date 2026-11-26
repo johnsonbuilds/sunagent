@@ -31,17 +31,17 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Sentinel queued by ``flush`` to tell the background writer to exit after
-# every real event ahead of it has been persisted.
+# Sentinel queued by ``flush`` to tell the background writer to exit after every
+# real event ahead of it has been persisted.
 _STOP = object()
 
-# Only these may be dropped when the writer queue is full: the stream is
-# also visible to live subscribers, and losing one chunk costs nothing.
+# Only these may be dropped when the writer queue is full: the stream is also
+# visible to live subscribers, and losing one chunk costs nothing.
 _DROPPABLE = frozenset({"llm.chunk"})
 
-# How many events may sit in the writer queue.  Payload events are not
-# retained in ``events`` any more, so the queue is the only buffer, and a
-# full queue must never lose a control event.
+# How many events may sit in the writer queue.  Payload events are not retained
+# in ``events``, so the queue is the only buffer and a full queue must never
+# lose a control event.
 _DEFAULT_QUEUE_SIZE = 10_000
 
 _GIT_CACHE_SECONDS = 60.0
@@ -52,11 +52,10 @@ _git_lock = threading.Lock()
 def git_state() -> dict[str, Any]:
     """Best-effort ``git commit``/``status`` for ``run.config``.
 
-    Cached for a minute and bounded by a short timeout: the caller is
-    about to start an LLM call, so a slow repository must not delay the
-    run or fail it.  The cache is keyed on the attempt, not on its
-    contents, so a non-repository (Harbor containers, tmp dirs) is not
-    re-probed for every run.
+    Cached for a minute and bounded by a short timeout: the caller is about to
+    start an LLM call, so a slow repository must not delay the run or fail it.
+    The cache is keyed on the attempt, not on its contents, so a non-repository
+    (Harbor containers, tmp dirs) is not re-probed for every run.
     """
     global _git_cache
     with _git_lock:
@@ -133,17 +132,16 @@ class RunEvent:
 class RunTrace:
     """Collect events in memory and append them to JSONL asynchronously.
 
-    ``retain_events`` decides what stays in ``events`` for post-run
-    inspection: ``all`` keeps everything (tests), ``control`` keeps only
-    control events and lets payloads live in the trace file and the
-    counters, ``none`` keeps nothing.  ``RunStats`` is fed regardless, so
-    ``run.metrics`` never depends on what was retained.
+    ``retain_events`` decides what stays in ``events`` for post-run inspection:
+    ``all`` keeps everything (tests), ``control`` keeps only control events and
+    lets payloads live in the trace file and the counters, ``none`` keeps
+    nothing.  ``RunStats`` is fed regardless, so ``run.metrics`` never depends
+    on what was retained.
 
-    With an ``output_path`` events are also handed to a single
-    background writer task through a queue. ``emit`` never performs I/O
-    and never awaits, so tracing does not add latency to the agent loop;
-    ``flush`` acts as the drain and stop barrier at the end of a turn
-    (and is idempotent, so callers may flush more than once).
+    With an ``output_path`` events are also handed to a single background writer
+    task through a queue.  ``emit`` never performs I/O and never awaits, so
+    tracing adds no latency to the agent loop; ``flush`` is the drain-and-stop
+    barrier at the end of a turn (idempotent, so callers may flush twice).
     """
 
     def __init__(self, run_id: str | None = None,
@@ -181,9 +179,9 @@ class RunTrace:
         self._writer: asyncio.Task[None] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._write_error: BaseException | None = None
-        # ``_write_events`` may run from the writer task or from ``flush``
-        # after a cross-loop fallback; the lock keeps a single harness header
-        # and keeps whole lines from interleaving.
+        # ``_write_events`` may run from the writer task or from ``flush`` after
+        # a cross-loop fallback; the lock keeps a single harness header and
+        # keeps whole lines from interleaving.
         self._write_lock = threading.Lock()
         self._wrote_harness_header = False
         self._emitted = 0
@@ -206,8 +204,8 @@ class RunTrace:
     def agent_error(self) -> RunEvent | None:
         """The last ``agent.error`` event, if the run failed.
 
-        Cached at emit time: ``retain_events="none"`` keeps none of the
-        events, and scanning ``self.events`` would then report success.
+        Cached at emit time: ``retain_events="none"`` keeps none of the events,
+        and scanning ``self.events`` would then report success.
         """
         return self._last_agent_error
 
@@ -228,15 +226,15 @@ class RunTrace:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            # No loop yet (e.g. sync tests): keep the event and let
-            # ``flush`` write it directly.
+            # No loop yet (e.g. sync tests): keep the event and let ``flush``
+            # write it directly.
             self._pending.append(event)
             return event
         if self._ensure_writer(loop):
             self._enqueue(event)
         else:
-            # A writer already exists on a different loop; writing from a
-            # second writer would break ordering, so buffer for ``flush``.
+            # A writer already exists on a different loop; a second writer would
+            # break ordering, so buffer for ``flush``.
             self._pending.append(event)
         return event
 
@@ -258,8 +256,8 @@ class RunTrace:
                 self.dropped += 1
                 self.stats.dropped_events = self.dropped
                 return
-            # A control event must not be lost; ``flush`` writes it even
-            # if that means writing the tail after the queue drained.
+            # A control event must not be lost; ``flush`` writes it even if that
+            # means writing the tail after the queue drained.
             logger.warning("run trace queue full; deferring %s to flush",
                            event.event_type)
             self._pending.append(event)
@@ -306,12 +304,12 @@ class RunTrace:
         self._queue = queue
         self._loop = loop
         if self._pending:
-            # Preserve order: events buffered before the writer existed go
-            # first, ahead of anything emitted from now on.
+            # Preserve order: events buffered before the writer existed go first,
+            # ahead of anything emitted from now on.
             pending, self._pending = self._pending, []
             for event in pending:
-                # ``_enqueue``: a bare ``put_nowait`` would raise
-                # ``QueueFull`` and lose the whole migration.
+                # ``_enqueue``: a bare ``put_nowait`` would raise ``QueueFull``
+                # and lose the whole migration.
                 self._enqueue(event)
         self._writer = loop.create_task(self._writer_loop())
         return True
@@ -351,8 +349,8 @@ class RunTrace:
     async def flush(self) -> None:
         """Persist queued events and stop the writer without blocking the loop.
 
-        Safe to call more than once: a second call only writes events that
-        were buffered outside the writer and finds the queue already drained.
+        Safe to call more than once: a second call only writes events buffered
+        outside the writer and finds the queue already drained.
         """
         writer = self._writer
         if writer is not None and self._loop is asyncio.get_running_loop():
@@ -360,8 +358,8 @@ class RunTrace:
             assert queue is not None
             try:
                 await queue.join()
-                # ``await put`` (not ``put_nowait``): a full queue is the
-                # one case where the stop sentinel must still land.
+                # ``await put`` (not ``put_nowait``): a full queue is the one case
+                # where the stop sentinel must still land.
                 await queue.put(_STOP)
                 await writer
             except asyncio.CancelledError:
@@ -386,7 +384,7 @@ class RunTrace:
 
         Blocking I/O is acceptable here: the task is already dying and the
         alternative is losing the trace tail (or leaking a writer parked on
-        ``queue.get``). The write lock still serialises against an in-flight
+        ``queue.get``).  The write lock still serialises against an in-flight
         batch, so records are never interleaved or written twice; ordering
         between that batch and the tail is best effort only.
         """
@@ -396,8 +394,8 @@ class RunTrace:
             queue.task_done()
             if item is not _STOP:
                 leftovers.append(item)
-        # Let a still-running writer exit after its in-flight batch instead
-        # of parking on ``queue.get()`` forever in a long-lived event loop.
+        # Let a still-running writer exit after its in-flight batch instead of
+        # parking on ``queue.get()`` forever in a long-lived event loop.
         queue.put_nowait(_STOP)
         if self._pending:
             pending, self._pending = self._pending, []
@@ -416,9 +414,9 @@ class RunTrace:
         with self._write_lock:
             with self._output_path.open("a", encoding="utf-8") as stream:
                 if self.harness and not self._wrote_harness_header:
-                    # The first JSONL record tags the file with the harness
-                    # genome that produced every event below it, and carries
-                    # the join keys so a stray trace can still be attributed.
+                    # The first JSONL record tags the file with the harness genome
+                    # that produced every event below it, and carries the join keys
+                    # so a stray trace can still be attributed.
                     header = {
                         "record_type": "harness",
                         "run_id": self.run_id,
@@ -452,8 +450,8 @@ class RunTrace:
         try:
             yield span_meta
         except asyncio.CancelledError:
-            # CancelledError is a BaseException, not an Exception;
-            # without this branch the span would report success.
+            # CancelledError is a BaseException, not an Exception; without this
+            # branch the span would report success.
             cancelled = True
             raise
         except Exception as exc:

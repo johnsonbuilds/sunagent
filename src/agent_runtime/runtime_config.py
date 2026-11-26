@@ -1,14 +1,10 @@
 """Unified runtime configuration: one env parse, explicit injection.
 
-All ``os.getenv`` reads for endpoint/transport knobs converge here.
-The composition root (``turn_factory`` / ``run_agent`` / web UI / Harbor)
-calls :meth:`RuntimeConfig.from_env` once; deep layers
-(``TurnHistory``, ``context``, ``llm_request``) receive the resolved value
-instead of reading the environment themselves.
-
-This fixes the split-brain where ``OpenAICompatibleLLM(model=...,
-base_url=...)`` was built with explicit args while the budget layer
-recomputed ``count_reasoning`` from ``MODEL_ID``/``LLM_BASE_URL``.
+All ``os.getenv`` reads for endpoint/transport knobs converge here.  The
+composition root (``turn_factory`` / ``run_agent`` / web UI / Harbor) calls
+:meth:`RuntimeConfig.from_env` once; deep layers (``TurnHistory``,
+``context``, ``llm_request``) receive the resolved value instead of reading
+the environment themselves.
 """
 
 from __future__ import annotations
@@ -56,10 +52,8 @@ def _env_truthy(name: str, default: bool = False) -> bool:
 class RuntimeConfig:
     """Endpoint + transport knobs, resolved once at the composition root.
 
-    ``HarnessSpec`` stays the source of truth for behavior genes
-    (prompt/tools/control/context/recovery/skills); this object
-    only carries process wiring that used to be scattered ``os.getenv``
-    calls: which endpoint to hit and how to talk to it.
+    ``HarnessSpec`` stays the source of truth for behavior genes; this object
+    only carries process wiring: which endpoint to hit and how to talk to it.
     """
 
     model: str
@@ -75,7 +69,7 @@ class RuntimeConfig:
     retry_4xx: bool = False
     summary_model: str | None = None
     # Run wiring that used to be read deep inside the execution/memory
-    # layers.  Same rule applies: resolved here, passed down explicitly.
+    # layers: resolved here, passed down explicitly.
     workspace_root: str | None = None
     command_guard_mode: str = "blocklist"
     memory_enabled: bool = False
@@ -87,8 +81,7 @@ class RuntimeConfig:
     def from_env(cls, **overrides: Any) -> RuntimeConfig:
         """Read the environment once; non-``None`` overrides win.
 
-        Accepts ``model``/``base_url``/``api_key``/``temperature`` and
-        every other field name so call sites can forward explicit
+        Accepts every field name so call sites can forward explicit
         constructor args without re-reading ``os.environ``.
         """
         from agent_runtime.reasoning_echo import (
@@ -172,8 +165,8 @@ class RuntimeConfig:
                       if guard_override is None
                       else str(guard_override).strip().lower())
         if guard_mode not in GUARD_MODES:
-            # An unparseable policy must not make every executor
-            # construction raise; fall back to the safe default once.
+            # An unparseable policy must not make every executor construction
+            # raise; fall back to the safe default once.
             logger.warning("runtime_config.invalid_command_guard_mode value=%r",
                            guard_mode)
             guard_mode = "blocklist"
@@ -238,22 +231,20 @@ def resolve_echo_reasoning(llm: Any | None,
     """Single source of truth for ``count_reasoning`` when no explicit bool.
 
     Preference: ``llm.echo_reasoning`` (bound to the instance's own
-    ``model``/``base_url``) > ``runtime.echo_reasoning`` > legacy
-    env-backed default.  ``FakeLLM`` test doubles expose neither
-    attribute and fall through to the env default, preserving their
-    historical behavior.
+    ``model``/``base_url``) > ``runtime.echo_reasoning`` > legacy env-backed
+    default.  ``FakeLLM`` test doubles expose neither attribute and fall
+    through to the env default.
     """
     candidate = getattr(llm, "echo_reasoning", None)
     if isinstance(candidate, bool):
         return candidate
-    # ``runtime_config`` property is the explicit escape hatch for
-    # adapters that do not expose ``echo_reasoning`` directly.
+    # ``runtime_config`` property is the explicit escape hatch for adapters
+    # that do not expose ``echo_reasoning`` directly.
     config = getattr(llm, "runtime_config", None)
     if isinstance(config, RuntimeConfig):
         return config.echo_reasoning
-    # Plain ``model``/``base_url`` attributes (e.g. minimal fakes):
-    # compute with the runtime's echo mode when available so an
-    # explicit mode pin still applies.
+    # Plain ``model``/``base_url`` attributes (e.g. minimal fakes): compute
+    # with the runtime's echo mode when available so an explicit pin applies.
     model = getattr(llm, "model", None)
     base_url = getattr(llm, "base_url", None)
     if isinstance(model, str):

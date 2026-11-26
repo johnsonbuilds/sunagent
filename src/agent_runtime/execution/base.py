@@ -7,9 +7,8 @@ from pathlib import Path
 from typing import Any, Protocol
 
 
-# Source-level output cap (chars per stream). Executors truncate
-# stdout/stderr here so a runaway print cannot OOM the process
-# before the transcript boundary spills to .outputs/.
+# Source-level output cap (chars per stream): executors truncate here so a
+# runaway print cannot OOM the process before the transcript boundary spills.
 MAX_OUTPUT_CHARS = 32_000
 
 
@@ -32,10 +31,8 @@ def truncate_result(result: dict[str, Any]) -> dict[str, Any]:
 def error_text(error: Any) -> str:
     """Render a structured workspace error as one factual line.
 
-    Workspaces report environmental failures as
-    ``{"error": {"type", "message"}}``.  Tool handlers that must raise
-    (because the failure is model-fixable) use this to keep the wording
-    identical across tools.
+    Keeps the wording identical across tools that must raise because the
+    failure is model-fixable.
     """
     if isinstance(error, Mapping):
         message = error.get("message", error)
@@ -45,10 +42,9 @@ def error_text(error: Any) -> str:
     return str(error)
 
 
-# Shared search/index constants: owned here so both the tools layer
-# (tools/search.py) and the execution layer (execution/harbor.py) import
-# from one place. Previously harbor.py imported SKIP_DIRS/match helpers
-# from tools.search (execution -> tools倒依赖); now both import from base.
+# Shared search/index constants: owned here so both the tools layer and the
+# execution layer import from one place (harbor.py used to import from
+# tools.search, an execution -> tools dependency).
 OUTPUTS_DIR = ".outputs"
 SCRIPTS_DIR = ".scripts"
 SKIP_DIRS = frozenset({
@@ -56,13 +52,9 @@ SKIP_DIRS = frozenset({
     ".mypy_cache", ".pytest_cache", ".ruff_cache", "dist", "build",
     "target", ".next",
     # Agent working dirs: generated scripts and spilled observations are
-    # addressed directly (read_file / read_output), never discovered via
-    # a repo-wide search. Skipping them here (and in the Harbor rg/grep
-    # prune lists, which share this set) keeps results noise-free;
-    # an explicit path=".scripts" / path=".outputs" search still works.
+    # addressed directly, never discovered via a repo-wide search.
     SCRIPTS_DIR, OUTPUTS_DIR,
-    # The runtime's own state (sessions, traces, summaries) is written by
-    # the runtime, not by the model, and is noise in a repo-wide search.
+    # Runtime state (sessions, traces, summaries) is noise in a search.
     "workspace",
 })
 
@@ -81,8 +73,7 @@ def matches_path(path: str, pattern: str) -> bool:
     """Match a workspace-relative posix path against a wildcard pattern.
 
     ``*`` crosses directory separators (VS Code Ctrl+P behavior), and a
-    pattern without a ``/`` also matches against the basename, so both
-    ``**/*.py`` and ``models.py`` behave the way the model expects.
+    pattern without a ``/`` also matches the basename.
     """
     import fnmatch
     import posixpath
@@ -111,17 +102,15 @@ class ShellExecutor(Protocol):
 class Workspace(Protocol):
     """File storage rooted at a directory inside one execution environment.
 
-    Like :class:`ShellExecutor`, a workspace never raises for
-    environmental failures (missing file, unreadable directory): those
-    come back as a structured ``{"error": {"type", "message"}}`` result.
-    Invalid input — a path that escapes the workspace root, or a bad
-    offset/limit — raises ``ValueError`` so the agent loop can turn it
-    into an observation.
+    Environmental failures (missing file, unreadable directory) come back as
+    a structured ``{"error": {"type", "message"}}`` result, never an
+    exception.  Invalid input — a path escaping the root, a bad
+    offset/limit — raises ``ValueError`` so the agent loop can turn it into
+    an observation.
 
-    ``read_file`` pages by lines: ``offset`` is 1-based and ``limit``
-    caps the number of lines.  With the defaults (``offset=1`` and
-    ``limit=None``) the file is returned verbatim, which is what
-    composing code (such as edit_file) relies on; paged reads join the
+    ``read_file`` pages by lines: ``offset`` is 1-based and ``limit`` caps
+    the number of lines.  With the defaults the file is returned verbatim,
+    which composing code (such as edit_file) relies on; paged reads join the
     selected lines and therefore drop a trailing newline.
     """
 
@@ -143,9 +132,8 @@ class Workspace(Protocol):
                               max_results: int = 200) -> dict[str, Any] | None:
         """Fast server-side content search; None means no fast path.
 
-        Returns the same shape as tools.grep_search (matches/match_count/
-        truncated/files_scanned/files_skipped), or None to let the caller
-        fall back to the generic walk+read loop.
+        Returns the same shape as tools.grep_search, or None to let the
+        caller fall back to the generic walk+read loop.
         """
         return None
 
@@ -158,9 +146,8 @@ class Workspace(Protocol):
 def paginate_lines(text: str, offset: int, limit: int | None) -> dict[str, Any]:
     """Shared line-pagination semantics for ``read_file`` results.
 
-    Returns ``content`` plus ``start_line``/``end_line``/``total_lines``
-    and a ``truncated`` flag telling the caller whether more lines
-    remain (page again with a larger ``offset``).
+    Returns ``content`` plus ``start_line``/``end_line``/``total_lines`` and
+    a ``truncated`` flag telling the caller whether more lines remain.
     """
     if offset < 1:
         raise ValueError("offset must be >= 1")
@@ -176,8 +163,8 @@ def paginate_lines(text: str, offset: int, limit: int | None) -> dict[str, Any]:
     selected = (lines[offset - 1:] if limit is None
                 else lines[offset - 1: offset - 1 + limit])
     end = min(offset - 1 + len(selected), total)
-    # A page that covers the whole file returns it verbatim (trailing
-    # newline included); partial pages are a line slice.
+    # A page covering the whole file returns it verbatim (trailing newline
+    # included); partial pages are a line slice.
     content = text if offset == 1 and len(selected) == total else "\n".join(selected)
     return {"content": content, "start_line": offset,
             "end_line": end, "total_lines": total, "truncated": end < total}

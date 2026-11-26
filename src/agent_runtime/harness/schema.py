@@ -1,17 +1,16 @@
 """Harness genome: the named, versioned configuration that decides how an
 agent works, expressed as data instead of code.
 
-The runtime engine (loop, trace, events) stays stable; a harness spec
-selects prompt, tools, control flow, context, recovery and skills
-behavior.  Specs are loaded from YAML manifests so harness versions can
-be diffed, compared, and later mutated one gene at a time:
+The runtime engine (loop, trace, events) stays stable; a harness spec selects
+prompt, tools, control flow, context, recovery and skills behavior.  Specs are
+loaded from YAML manifests so harness versions can be diffed, compared, and
+mutated one gene at a time:
 
     baseline-v0  --(raise max_iterations)-->  baseline-v1
 
-Every run records its harness id and a content hash of the genes, so a
-trace can always be traced back to the exact harness that produced it.
-The harness used when none is requested is ``common-v0``, the generic
-task base loaded from ``harnesses/common-v0.yaml``.
+Every run records its harness id and a content hash of the genes, so a trace
+traces back to the exact harness that produced it.  The default is
+``general-v1``, the generic task base loaded from ``harnesses/general-v1.yaml``.
 """
 
 from __future__ import annotations
@@ -32,8 +31,8 @@ ITERATION_LIMIT_NOTICE = (
     "best possible final answer. Do not call tools."
 )
 
-# The harness a run gets when nothing is requested: the generic
-# task base that fits code, analysis, lookup and chat tasks alike.
+# The harness a run gets when nothing is requested: the generic task base that
+# fits code, analysis, lookup and chat tasks alike.
 DEFAULT_HARNESS_ID = "general-v1"
 
 
@@ -48,14 +47,11 @@ TOOL_ERROR_STRATEGIES: dict[str, ToolErrorStrategy] = {
     "feed_error_and_continue": feed_error_and_continue,
 }
 
-# Categories a failed LLM call is classified into; each maps to its own
-# retry policy under the recovery.llm_errors gene.  ``context_window`` is
-# the hard gate: the provider rejected the request for exceeding the
-# context window.  Retrying it in place can never succeed, so the loop
-# refreshes (further compacts) the request view before resending.
-# ``invalid_request`` is the other deterministic rejection (malformed
-# body, unknown endpoint): replaying it only burns time, so a harness has
-# to opt in explicitly, and every harness gets zero retries by default.
+# Categories a failed LLM call is classified into; each maps to its own retry
+# policy under the recovery.llm_errors gene.  ``context_window`` is the hard
+# gate: retrying in place can never succeed, so the loop refreshes (further
+# compacts) the request view before resending.  ``invalid_request`` is the other
+# deterministic rejection, so a harness has to opt in explicitly.
 LLM_RETRY_CATEGORIES = (
     "stream_idle_timeout",
     "stream_truncated",
@@ -112,61 +108,56 @@ class LLMRetryPolicy:
 
 
 def _default_llm_errors() -> dict[str, LLMRetryPolicy]:
-    # Zero-retry everywhere so existing manifests keep their exact
-    # behavior; retries only happen when a harness opts in per category.
+    # Zero-retry everywhere so existing manifests keep their exact behavior;
+    # retries only happen when a harness opts in per category.
     return {category: LLMRetryPolicy() for category in LLM_RETRY_CATEGORIES}
 
 MEMORY_STRATEGIES: tuple[str, ...] = (
     "full_history", "compact_observations", "llm_summary", "turn_fold")
 
 # Backwards-compatibility alias: the gene is now called ``context``.
-# ``memory`` is reserved for future long-term / cross-session recall
-# (see ``workspace/memory/``); harness manifests may still use the
-# legacy ``memory`` key, which loads as ``context``.
+# ``memory`` is reserved for future long-term / cross-session recall; harness
+# manifests may still use the legacy ``memory`` key, which loads as ``context``.
 CONTEXT_STRATEGIES: tuple[str, ...] = MEMORY_STRATEGIES
 
-# Transcript-economics defaults: declared once here and consumed by the
-# context strategies (agent.context) and the observation boundary
-# (agent.observations).  The invariant "archive exactly what compaction
-# could truncate" is structural: the observation formatter receives
-# archive_min_chars = context.head_chars, so the two can never drift.
-DEFAULT_HEAD_CHARS = 200                 # context: compaction keeps this much of an old observation
+# Transcript-economics defaults, consumed by the context strategies
+# (agent.context) and the observation boundary (agent.observations).  The
+# invariant "archive exactly what compaction could truncate" is structural: the
+# formatter receives archive_min_chars = context.head_chars, so the two cannot
+# drift.
+DEFAULT_HEAD_CHARS = 200                 # context: chars kept of an old observation
 DEFAULT_CONTEXT_BUDGET = 60_000          # context: request-view char budget that triggers compaction
 DEFAULT_WINDOW_ROUNDS = 12               # context: compaction comfort window
 DEFAULT_KEEP_RECENT_ROUNDS = 2           # context: rounds never compacted under budget pressure
 DEFAULT_SUMMARY_TAIL_ROUNDS = 2          # context: llm_summary verbatim tail
-DEFAULT_USER_PRESERVE_BUDGET = 8_000     # context: CHARS (either budget unit) of mid-conversation user messages kept verbatim (newest first). Always chars by design: the preserve pool is a coarse guard, and routing it through the anchor-calibrated char/token ratio would inject conversion noise into a threshold chars serve fine.
-DEFAULT_SUMMARY_MAX_TOKENS = 4_096       # context: summarizer output hard cap, not a target; avoids truncating verbose snapshots
-# Accepted values for ``context.summary_reasoning_effort``.  Provider
-# support is not uniform: ``none`` disables thinking where the endpoint
-# allows it (DeepSeek, OpenAI GPT-5.1+, Qwen, OpenRouter, GLM-5.2), while
-# ``minimal`` is the lowest effort older OpenAI reasoning models accept
-# and is *not* a true off switch.  ``None`` omits the parameter and keeps
-# the provider default (which is thinking-enabled on several endpoints).
+DEFAULT_USER_PRESERVE_BUDGET = 8_000     # context: chars of mid-conversation user messages kept verbatim (newest first); always chars by design — the preserve pool is a coarse guard, and the anchor ratio would only add conversion noise
+DEFAULT_SUMMARY_MAX_TOKENS = 4_096       # context: summarizer output hard cap, not a target
+# Accepted values for ``context.summary_reasoning_effort``.  Provider support is
+# not uniform: ``none`` disables thinking where the endpoint allows it, while
+# ``minimal`` is the lowest effort older OpenAI reasoning models accept and is
+# *not* a true off switch.  ``None`` omits the parameter and keeps the provider
+# default (thinking-enabled on several endpoints).
 SUMMARY_REASONING_EFFORTS: tuple[str, ...] = (
     "none", "minimal", "low", "medium", "high", "xhigh", "max")
-# Summarizing is a mechanical, template-driven extraction task: thinking
-# buys nothing and eats the ``summary_max_tokens`` budget, so the default
-# is off.  A harness on a thinking-only endpoint (GLM-5.3, Kimi k3) that
-# rejects the parameter sets the gene to null to omit it.
+# Summarizing is mechanical, template-driven extraction: thinking buys nothing
+# and eats the ``summary_max_tokens`` budget, so the default is off.  A harness on
+# a thinking-only endpoint that rejects the parameter sets the gene to null.
 DEFAULT_SUMMARY_REASONING_EFFORT = "none"
-# Cap (chars) for the summarizer's input on the retry attempt. Pathological
-# segments (hundreds of k chars after repeated failures stall the boundary)
-# make the model return empty/off-schema snapshots; TB-2.1 showed invalid
-# inputs at p50 177k / max 548k chars while successes cluster far below.
-# Attempt 1 always reads the full segment; only the retry folds first, so
-# normal cases never pay the coverage cost of the cap.
+# Cap (chars) for the summarizer's input on the retry attempt.  Pathological
+# segments make the model return empty/off-schema snapshots (TB-2.1: invalid
+# inputs at p50 177k / max 548k chars).  Attempt 1 always reads the full segment;
+# only the retry folds first, so normal cases never pay the coverage cost.
 DEFAULT_SUMMARIZER_INPUT_CAP_CHARS = 150_000
 
-# Tool names whose observations outlive the comfort window verbatim and
-# only fold under real budget pressure (last-folded, never exempt from
-# the budget itself).  Retrieval results (grep/read/find) are anchors
-# for multi-step reasoning; folding them early forces re-query rounds.
+# Tool names whose observations outlive the comfort window verbatim and only fold
+# under real budget pressure (last-folded, never exempt from the budget itself).
+# Retrieval results are anchors for multi-step reasoning; folding them early
+# forces re-query rounds.
 DEFAULT_RETRIEVAL_EXEMPT_TOOLS: tuple[str, ...] = ()
 
-# Units the request-view budget can be measured in.  ``chars`` is the
-# legacy cheap proxy; ``tokens`` combines the last measured prompt usage
-# with per-message char estimates (see agent.context).
+# Units the request-view budget can be measured in.  ``chars`` is the legacy
+# cheap proxy; ``tokens`` combines the last measured prompt usage with
+# per-message char estimates (see agent.context).
 MEMORY_BUDGET_UNITS: tuple[str, ...] = ("chars", "tokens")
 CONTEXT_BUDGET_UNITS: tuple[str, ...] = MEMORY_BUDGET_UNITS
 DEFAULT_MAX_OBSERVATION_CHARS = 16_000   # control: inline observation budget before windowing
@@ -207,12 +198,10 @@ class ContextGenome:
     window_rounds: int = DEFAULT_WINDOW_ROUNDS
     keep_recent_rounds: int = DEFAULT_KEEP_RECENT_ROUNDS
     summary_tail_rounds: int = DEFAULT_SUMMARY_TAIL_ROUNDS
-    user_preserve_budget: int = DEFAULT_USER_PRESERVE_BUDGET  # chars, either budget unit (coarse guard; no token conversion)
+    user_preserve_budget: int = DEFAULT_USER_PRESERVE_BUDGET  # chars, either budget unit
     summary_max_tokens: int = DEFAULT_SUMMARY_MAX_TOKENS
-    # Per-call reasoning effort for the summarizer.  Summaries are
-    # extraction, not problem solving; disabling thinking keeps
-    # ``summary_max_tokens`` a content cap instead of a reasoning+content
-    # cap.  None omits the parameter and keeps the provider default.
+    # Per-call reasoning effort for the summarizer.  None omits the parameter
+    # and keeps the provider default.
     summary_reasoning_effort: str | None = DEFAULT_SUMMARY_REASONING_EFFORT
     retrieval_exempt_tools: tuple[str, ...] = DEFAULT_RETRIEVAL_EXEMPT_TOOLS
 
@@ -224,9 +213,9 @@ MemoryGenome = ContextGenome
 @dataclass(frozen=True)
 class RecoveryGenome:
     tool_error: str = "feed_error_and_continue"
-    # Consecutive identical tool failures tolerated before the turn stops
-    # early with a manual-handling message. 0 disables the guard (legacy
-    # behavior: retry until control.max_iterations is exhausted).
+    # Consecutive identical tool failures tolerated before the turn stops early
+    # with a manual-handling message.  0 disables the guard (legacy behavior:
+    # retry until control.max_iterations is exhausted).
     tool_error_max_retries: int = 0
     llm_errors: dict[str, LLMRetryPolicy] = field(
         default_factory=_default_llm_errors)
@@ -236,9 +225,9 @@ class RecoveryGenome:
 class VerificationGenome:
     """Reserved placeholder for the former verification gate.
 
-    The runtime no longer consumes this field.  It stays in the genome so
-    manifests can keep a ``verification`` block for a future gate without
-    failing validation; flipping it has no behavioral effect.
+    The runtime no longer consumes this field.  It stays so manifests can keep a
+    ``verification`` block for a future gate without failing validation;
+    flipping it has no behavioral effect.
     """
 
     enabled: bool = False
@@ -263,8 +252,8 @@ class HarnessSpec:
     reason: str | None = None
     # Not selectable by a user or a board task: the harness exists for one
     # internal job (``evaluation-v1`` diagnoses runs).  Kept out of
-    # ``genes_dict()`` so flipping it cannot change ``genes_hash``: it
-    # describes who may pick the harness, not how it behaves.
+    # ``genes_dict()`` so flipping it cannot change ``genes_hash``: it describes
+    # who may pick the harness, not how it behaves.
     internal: bool = False
     prompt: PromptGenome = field(default_factory=PromptGenome)
     tools: ToolGenome = field(default_factory=ToolGenome)
@@ -321,7 +310,7 @@ class HarnessSpec:
         return strategy(exc, **context)
 
 
-# The neutral built-in genome (the dataclass defaults). It mirrors
-# harnesses/baseline-v0.yaml and is the fallback used when no manifest
-# can be found; the harness a run actually gets by default is common-v0.
+# The neutral built-in genome (the dataclass defaults).  It mirrors
+# harnesses/baseline-v0.yaml and is the fallback when no manifest can be found;
+# the harness a run actually gets by default is ``general-v1``.
 BUILTIN_HARNESS = HarnessSpec()

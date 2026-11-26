@@ -1,4 +1,4 @@
-"""edit_match.py — shared SEARCH/old_text matching semantics for edit_file / apply_patch.
+"""Shared SEARCH/old_text matching semantics for edit_file / apply_patch.
 
 Match ladder; each level must resolve to exactly ONE location before it applies:
 
@@ -116,8 +116,8 @@ def _lineno_variants(old_lines: list[str]) -> list[str]:
 
     ``12:LINE`` (grep/rg) and ``    12\tLINE`` (cat -n) carry no separator
     whitespace, but awk-style ``12: LINE`` adds one — and swallowing that
-    space blindly would also eat the first space of ``12:    LINE``.  So we
-    try both strip widths and let uniqueness decide.
+    space blindly would also eat the first space of ``12:    LINE``.  So try
+    both strip widths and let uniqueness decide.
     """
     if not any(_LINE_NO.match(ln) for ln in old_lines):
         return []
@@ -170,8 +170,7 @@ def _make_replacement(new: str, old: str, window_lines: list[str],
 
     The shift applies only when every non-blank line pair shows the same
     indent delta (a rigid whole-block offset — the common "miscounted
-    nesting level" failure).  Ragged per-line mismatches are not guessed
-    at: new_text lands as authored and the mode says so.
+    nesting level" failure).  Ragged mismatches are not guessed at.
     """
     deltas: list[int] = []
     same_char = True

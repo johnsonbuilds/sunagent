@@ -1,39 +1,24 @@
 """One place that decides where the runtime keeps what it writes.
 
-The runtime persists two kinds of run state, and they used to live in
-unrelated directories: browser sessions under ``runs/webui/`` and run
-traces under ``runs/webui/traces/``.  Every writer resolved its own path,
-so there was no way to answer "what does this project write to disk?" by
-reading one file.
+Everything the runtime persists lives under one root (``<home>/``):
 
-This module is that answer.  Everything the runtime persists lives
-under one root:
+    sessions/   one JSON document per browser conversation
+    traces/     one JSONL file per agent turn
+    metrics/    one JSONL index of run-level measurements
+    diagnosis/  one evidence bundle per diagnosis (bundle.json + summary.md)
+    memory/     persistent cross-session memory (AGENT_RUNTIME_MEMORY)
+    board.json  the single web UI task board
+    board_events.jsonl  board lifecycle events (append-only history)
 
-    <home>/
-      sessions/   one JSON document per browser conversation
-      traces/     one JSONL file per agent turn
-      metrics/    one JSONL index of run-level measurements
-      diagnosis/  one evidence bundle per diagnosis (bundle.json + summary.md)
-      memory/     persistent cross-session memory (AGENT_RUNTIME_MEMORY)
-      board.json  the single web UI task board
-      board_events.jsonl  board lifecycle events (append-only history)
+``<home>`` is ``AGENT_RUNTIME_HOME`` when set, and ``workspace/`` next to the
+project root otherwise.  Persistent memory sits here rather than in the
+sandbox because it must survive a change of sandbox; the model is still told
+a sandbox-relative path, because the file tools refuse anything outside it.
 
-``<home>`` is ``AGENT_RUNTIME_HOME`` when set, and ``workspace/`` next
-to the project root otherwise.
-
-Persistent memory sits here rather than in the sandbox because it is
-durable state: it has to survive a change of sandbox, and a sandbox
-narrowed to a subdirectory must not hide it.  ``memory.memory_root()``
-resolves the directory (``AGENT_RUNTIME_MEMORY_DIR`` overrides it); the
-model is still told a *sandbox-relative* path, because the file tools
-refuse anything outside the sandbox.
-
-What this module does *not* own is the agent's sandbox (``AGENT_RUNTIME_WORKSPACE``
-with its ``.outputs/`` spills and ``.scripts/``) and the
-versioned research artefacts (``harnesses/``, ``evaluation/records/``).  Those
-are deliberately separate: the sandbox is the agent's own working area and
-its paths are part of the model's contract, while the research artefacts
-are meant to be committed and compared across runs.
+Not owned here: the agent's sandbox (``AGENT_RUNTIME_WORKSPACE`` with its
+``.outputs/`` spills and ``.scripts/``) and the versioned research artefacts
+(``harnesses/``, ``evaluation/records/``) — the sandbox is part of the
+model's contract, the artefacts are meant to be committed and compared.
 """
 
 from __future__ import annotations
@@ -42,9 +27,8 @@ import os
 from pathlib import Path
 
 
-# The project root, i.e. the directory that holds ``src/`` and
-# ``webui/``.  Anchored on this module so the default root does not
-# depend on the process working directory.
+# The project root, i.e. the directory that holds ``src/`` and ``webui/``.
+# Anchored on this module so the default root ignores the process cwd.
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 DEFAULT_HOME_DIRNAME = "workspace"
@@ -53,9 +37,8 @@ DEFAULT_HOME_DIRNAME = "workspace"
 def runtime_home() -> Path:
     """The root directory of everything the runtime persists.
 
-    ``AGENT_RUNTIME_HOME`` overrides it; the default is ``workspace/``
-    inside the project.  Read per call so the environment can be
-    changed without rebuilding anything.
+    ``AGENT_RUNTIME_HOME`` overrides it; the default is ``workspace/`` inside
+    the project.  Read per call so the environment can change at runtime.
     """
     raw = os.getenv("AGENT_RUNTIME_HOME")
     if raw:
@@ -96,9 +79,8 @@ def metrics_dir() -> Path:
 def diagnosis_dir() -> Path:
     """Evidence bundles written for model-driven diagnosis.
 
-    These live in the runtime home, not in the agent sandbox: the
-    diagnosis tools read them directly, and a sandbox narrowed to a
-    subdirectory must not be able to hide or rewrite them.
+    They live in the runtime home, not the agent sandbox: the diagnosis tools
+    read them directly, and a narrowed sandbox must not hide or rewrite them.
     """
     return runtime_home() / "diagnosis"
 

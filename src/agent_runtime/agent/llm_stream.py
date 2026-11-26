@@ -1,15 +1,14 @@
 """Streaming chunk assembly: merge provider deltas, detect dead streams.
 
-Pure stream mechanics: how the chunks a provider streams are merged into
-one response (including provider-specific tool-call fields that must be
-echoed back verbatim), and the ways a stream delivers nothing — an idle
-gap past the timeout, a close without a finish marker, a clean but empty
-stream, or a thinking turn still going when our reasoning-character
-budget cuts it.  A response the *provider* cut at its own output limit is
-not diagnosed here: it is a complete response, handed back for
-``llm_request`` to classify.  Failures raise the stream-side taxonomy
-errors (``llm_category`` on each) that ``llm_recovery`` classifies; this
-module never retries.
+Pure stream mechanics: merging provider chunks into one response (including
+provider-specific tool-call fields that must be echoed back verbatim) and
+the ways a stream delivers nothing — an idle gap past the timeout, a close
+without a finish marker, a clean but empty stream, or a thinking turn still
+going when our reasoning-character budget cuts it.  A response the
+*provider* cut at its own output limit is not diagnosed here: it is a
+complete response, handed back for ``llm_request`` to classify.  Failures
+raise the stream-side taxonomy errors (``llm_category`` on each) that
+``llm_recovery`` classifies; this module never retries.
 """
 
 from __future__ import annotations
@@ -42,8 +41,8 @@ def _reasoning_budget_chars(runtime: RuntimeConfig | None = None) -> int | None:
     """Max accumulated reasoning chars before a thinking-only turn is cut.
 
     Guards against reasoning models that spiral into unbounded chain of
-    thought without ever emitting content or tool calls (observed on
-    ARS-class tasks). 0 or a negative value disables the guard.
+    thought without ever emitting content or tool calls.  0 or a negative
+    value disables the guard.
     """
     return (runtime or RuntimeConfig.from_env()).max_reasoning_chars
 
@@ -87,10 +86,9 @@ def merge_stream_tool_call(calls: list[dict[str, Any]], delta: Mapping[str, Any]
         if isinstance(function.get("arguments"), str):
             target_function["arguments"] += function["arguments"]
     # Provider-specific fields stay opaque: carried verbatim onto the
-    # assembled call so history can echo them back unchanged (Gemini
-    # rejects the next request when a functionCall's thought_signature is
-    # missing). ``index`` is a stream-position artifact, not part of the
-    # call, so it is never kept.
+    # assembled call so history can echo them back unchanged (Gemini rejects
+    # the next request when a functionCall's thought_signature is missing).
+    # ``index`` is a stream-position artifact, not part of the call.
     for key, value in delta.items():
         if key not in _STREAM_CALL_KEYS:
             target[key] = value
@@ -131,16 +129,15 @@ async def consume_stream(llm: ChatModel, messages: list[dict[str, Any]],
             ) from exc
         if not isinstance(chunk, Mapping):
             raise TypeError("LLM stream chunks must be objects")
-        # A trailing usage chunk carries no payload but may or may not
-        # carry finish_reason (provider-dependent): harvest usage first so
-        # the token-budget anchor is fed on streaming turns too.
+        # A trailing usage chunk carries no payload but may or may not carry
+        # finish_reason: harvest usage first so the token-budget anchor is fed
+        # on streaming turns too.
         chunk_usage = chunk.get("usage")
         if isinstance(chunk_usage, Mapping) and chunk_usage:
             # Keep nested detail objects (``prompt_tokens_details``) as well
-            # as the flat ints: ``response_usage`` reads the prompt-cache
-            # count out of either shape, so dropping the nested one here
-            # would make a streamed turn report fewer cached tokens than
-            # the same turn sent without streaming.
+            # as the flat ints: ``response_usage`` reads the prompt-cache count
+            # out of either shape, so dropping the nested one would under-report
+            # cached tokens on streamed turns.
             usage = {key: value for key, value in chunk_usage.items()
                      if isinstance(value, (int, Mapping))
                      and not isinstance(value, bool)}
@@ -179,9 +176,8 @@ async def consume_stream(llm: ChatModel, messages: list[dict[str, Any]],
         if ttft_ms is None and (text or reasoning_text or chunk.get("tool_calls")):
             ttft_ms = round((time.monotonic() - stream_started) * 1000, 3)
         # NOTE: per-chunk logging intentionally disabled: a stuck run can
-        # stream tens of thousands of whitespace-only chunks and each one
-        # printed a log line. Full content stays available in trace
-        # llm.chunk records and the assembled llm.end message.
+        # stream tens of thousands of whitespace-only chunks. Full content
+        # stays available in trace llm.chunk records and llm.end.
         # logger.debug("llm.chunk iteration=%d content=%r reasoning=%r tool_calls=%r",
         #              iteration, text, reasoning_text, chunk.get("tool_calls") or [])
         if trace is not None and trace.trace_chunks:
@@ -202,21 +198,20 @@ async def consume_stream(llm: ChatModel, messages: list[dict[str, Any]],
     if ttft_ms is not None:
         response["ttft_ms"] = ttft_ms
     if finish_reason is None:
-        # The server cut the stream without a finish marker (observed on
-        # free-tier reasoning models after very long thinking). Treat the
-        # truncated stream as a failed turn so it can be retried instead
-        # of silently becoming an empty final answer.
+        # The server cut the stream without a finish marker. Treat it as a
+        # failed turn so it can be retried instead of silently becoming an
+        # empty final answer.
         raise StreamTruncated(
             "LLM stream ended without a finish_reason "
             "(stream may have been truncated by the server)")
     if not content and not reasoning and not tool_calls:
         if finish_reason == "length":
-            # Nothing visible was produced *because the output limit was
-            # hit*, most likely while the model was still thinking on an
-            # endpoint that does not stream reasoning back.  That is not
-            # an empty stream (a replay would only hit the same wall):
-            # hand the response on so the caller reads it as a truncated
-            # thinking turn, exactly like the non-streaming path does.
+            # Nothing visible was produced *because the output limit was hit*,
+            # most likely while the model was still thinking on an endpoint
+            # that does not stream reasoning back.  That is not an empty stream
+            # (a replay would only hit the same wall): hand the response on so
+            # the caller reads it as a truncated thinking turn, exactly like
+            # the non-streaming path does.
             return response
         raise StreamEmpty(
             "LLM stream ended without any content, reasoning, or tool calls")

@@ -1,17 +1,8 @@
 """Harness genome: the named, versioned configuration that decides how an
 agent works, expressed as data instead of code.
 
-The runtime engine (loop, trace, events) stays stable; a harness spec
-selects prompt, tools, control flow, context, recovery and skills
-behavior.  Specs are loaded from YAML manifests so harness versions can
-be diffed, compared, and later mutated one gene at a time:
-
-    baseline-v0  --(raise max_iterations)-->  baseline-v1
-
-Every run records its harness id and a content hash of the genes, so a
-trace can always be traced back to the exact harness that produced it.
-The harness used when none is requested is ``common-v0``, the generic
-task base loaded from ``harnesses/common-v0.yaml``.
+See :mod:`agent_runtime.harness.schema` for the genome itself and
+:mod:`agent_runtime.harness.loader` for manifest parsing and resolution.
 """
 
 from .loader import (

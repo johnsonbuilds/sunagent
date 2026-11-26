@@ -16,24 +16,19 @@ logger = logging.getLogger(__name__)
 class ContextWindowExceededError(RuntimeError):
     """The provider rejected the request for exceeding the context window.
 
-    Carries ``llm_category = "context_window"`` so the recovery layer
-    routes it to the ``recovery.llm_errors.context_window`` policy.  An
-    in-place retry can never succeed: the caller must compact the request
-    view before resending (``TurnHistory.shrink_view``).
+    Carries ``llm_category = "context_window"`` so the recovery layer routes it
+    to the ``recovery.llm_errors.context_window`` policy.  An in-place retry can
+    never succeed: the caller must compact the view before resending.
     """
 
     llm_category = "context_window"
 
 
-# Substring markers for context-window rejections.  Providers word the
-# same 400 differently ("context_length_exceeded", "maximum context
-# length", …), so the match is a lowercase substring scan over the
-# exception text — same approach as the OpenHands error classifier.
-# Specific markers match on their own; the two generic ones ("context
-# window", "too many tokens") only count alongside an overflow companion
-# word, so unrelated errors mentioning a context window (e.g. "invalid
-# context window parameter") stay on the provider_error retry policy
-# instead of burning the hard gate's compaction budget.
+# Substring markers for context-window rejections: providers word the same 400
+# differently, so the match is a lowercase substring scan over the exception
+# text.  The generic markers only count alongside an overflow companion word,
+# so an unrelated "invalid context window parameter" stays on the
+# provider_error retry policy instead of burning the hard gate's budget.
 _CONTEXT_OVERFLOW_SPECIFIC: tuple[str, ...] = (
     "context_length_exceeded",
     "maximum context length",
@@ -78,10 +73,10 @@ def _usage_field(usage: Any, name: str) -> Any:
 def _cached_tokens(usage: Any) -> int:
     """The prompt-cache hit count, however the provider spells it.
 
-    OpenAI nests it under ``prompt_tokens_details.cached_tokens`` (and
-    some gateways flatten it to ``cached_tokens``); DeepSeek-native APIs
-    call it ``prompt_cache_hit_tokens``.  It is a *subset* of the prompt
-    count wherever it appears, so it is reported, never added.
+    OpenAI nests it under ``prompt_tokens_details.cached_tokens``, some gateways
+    flatten it to ``cached_tokens``, DeepSeek-native APIs call it
+    ``prompt_cache_hit_tokens``.  It is a *subset* of the prompt count wherever
+    it appears, so it is reported, never added.
     """
     details = _usage_field(usage, "prompt_tokens_details")
     for value in (_usage_field(usage, "cached_tokens"),
@@ -95,10 +90,9 @@ def _cached_tokens(usage: Any) -> int:
 def _usage_dict(usage: Any) -> dict[str, int]:
     """Normalise a provider ``usage`` object to a plain int dict.
 
-    ``prompt_tokens`` is the measured size of the request as the provider
-    billed it — the ground truth the token-budget layer anchors its
-    estimates on.  Missing fields fall back to 0 rather than raising so a
-    partial usage object never breaks a successful call.
+    ``prompt_tokens`` is the ground truth the token-budget layer anchors its
+    estimates on.  Missing fields fall back to 0 so a partial usage object never
+    breaks a successful call.
     """
     prompt = _usage_field(usage, "prompt_tokens")
     completion = _usage_field(usage, "completion_tokens")
@@ -111,15 +105,13 @@ def _reasoning_text(message: Any) -> str:
     """Read a provider's chain of thought off a response or a delta.
 
     The field name is not standardised: DeepSeek-native APIs expose
-    ``reasoning_content``, OpenRouter and other OpenAI-compatible
-    gateways expose ``reasoning`` (plus a structured ``reasoning_details``
-    array).  All of them are normalised into the runtime's single
-    ``reasoning_content`` field so nothing downstream has to know which
-    provider answered.
+    ``reasoning_content``, OpenRouter-style gateways expose ``reasoning`` (plus
+    a structured ``reasoning_details`` array).  All are normalised into the
+    runtime's single ``reasoning_content`` field.
 
-    An empty string means the provider sent no reasoning at all — the
-    caller must treat that as "not a thinking model", not as "thinking
-    with nothing to say".
+    An empty string means the provider sent no reasoning at all — the caller
+    must treat that as "not a thinking model", not as "thinking with nothing to
+    say".
     """
     for field in ("reasoning_content", "reasoning"):
         value = getattr(message, field, None)
@@ -153,20 +145,11 @@ def _repair_tool_call_pairing(
 ) -> tuple[list[dict[str, Any]], WireRepair]:
     """Enforce the provider pairing contract on the wire copy.
 
-    The contract is stronger than "every call id has a response somewhere":
-    each assistant ``tool_calls`` block must be followed *immediately* by
-    the matching ``role: tool`` messages, with no user/assistant/system
-    message in between.
-
-    Repairs, in order of importance:
-
-    * a response that exists but is separated from its assistant call by a
-      non-tool message (the tb-v9 ``assistant → user → tool`` 400) is moved
-      directly after the assistant;
-    * a call with no response at all is dropped;
-    * an orphan tool response that no assistant references is dropped.
-
-    Only the wire copy is repaired; the stored history is untouched.
+    Each assistant ``tool_calls`` block must be followed *immediately* by the
+    matching ``role: tool`` messages, with no user/assistant/system message in
+    between.  Repairs: a response separated from its call is moved directly
+    after the assistant; a call with no response is dropped; an orphan tool
+    response is dropped.  Only the wire copy is repaired.
     """
     positions = {id(message): index for index, message in enumerate(messages)}
 
@@ -189,10 +172,8 @@ def _repair_tool_call_pairing(
             if isinstance(call_id, str) and call_id:
                 referenced.add(call_id)
 
-    # Prefix count of non-tool messages lets the "was this response
-    # separated from its assistant?" check run in O(1) per call instead
-    # of slicing/scanning the gap, which would be O(n^2) for a large
-    # single batch.
+    # Prefix count of non-tool messages makes the "was this response separated
+    # from its assistant?" check O(1) per call instead of O(n^2) per batch.
     nontool_prefix = [0] * (len(messages) + 1)
     for index, message in enumerate(messages):
         nontool_prefix[index + 1] = (
@@ -255,20 +236,12 @@ def _project_messages_for_wire(messages: Sequence[dict[str, Any]],
                                echo: bool) -> list[dict[str, Any]]:
     """Return the request-side projection of ``messages``.
 
-    Pure and non-mutating: conversation history and traces keep the full
-    turn (including chain-of-thought), only the wire copy is shaped.
-
-    - Assistant ``tool_calls`` blocks are repaired to the provider's
-      adjacency contract: matching ``role: tool`` responses are moved
-      directly after the assistant, completely unanswered calls are
-      dropped, and orphan tool messages are dropped.  Only the wire copy
-      changes; stored history keeps the original order.
-    - ``metadata`` (observation spill paths and other runtime side-channel
-      data) is stripped unconditionally — no provider understands it.
-    - ``reasoning_content`` is kept only when ``echo`` is true.  Where it
-      is stripped, a thinking-only assistant turn would collapse to an
-      empty message, so it gets a placeholder instead (the protocol
-      requires assistant messages to carry something).
+    Pure and non-mutating: history and traces keep the full turn (including
+    chain-of-thought), only the wire copy is shaped.  Tool-call pairing is
+    repaired, ``metadata`` is stripped (no provider understands it), and
+    ``reasoning_content`` is kept only when ``echo`` is true — where it is
+    stripped, a thinking-only turn gets a placeholder because the protocol
+    requires assistant messages to carry something.
     """
     paired, repair = _repair_tool_call_pairing(messages)
     if repair.dropped_calls:
@@ -370,9 +343,8 @@ class OpenAICompatibleLLM:
         """Yield provider-independent content and tool-call deltas.
 
         After the last payload delta, yields one final dict carrying the
-        ``finish_reason`` (e.g. ``stop``, ``tool_calls``) when the stream
-        terminated normally.  If the server cuts the stream without a
-        finish marker, no such signal is emitted.
+        ``finish_reason`` when the stream terminated normally.  If the server
+        cuts the stream without a finish marker, no such signal is emitted.
         """
         echo = self.echo_reasoning
         kwargs = {"model": self.model,
@@ -399,8 +371,8 @@ class OpenAICompatibleLLM:
             if chunk_usage is not None:
                 usage = _usage_dict(chunk_usage)
             if not chunk.choices:
-                # Some providers append a final chunk with empty choices
-                # (e.g. a usage summary); it carries no delta payload.
+                # Some providers append a final chunk with empty choices (e.g. a
+                # usage summary); it carries no delta payload.
                 continue
             choice = chunk.choices[0]
             delta = choice.delta
@@ -413,9 +385,8 @@ class OpenAICompatibleLLM:
             for call in (delta.tool_calls or []):
                 # Serialize the whole SDK object instead of rebuilding a
                 # known-fields dict: some providers attach per-call extras
-                # (Gemini's ``extra_content.google.thought_signature``) that
-                # must be echoed back on the next request or the call is
-                # rejected as malformed.
+                # (Gemini's ``extra_content.google.thought_signature``) that must
+                # be echoed back on the next request or the call is rejected.
                 calls.append(call.model_dump(exclude_none=True))
             if calls:
                 data["tool_calls"] = calls

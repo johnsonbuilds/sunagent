@@ -42,10 +42,8 @@ def _text(value: Any) -> str:
 
 # A command string crosses several exec layers (local shell, docker CLI,
 # container runtime), each accounting argv against kernel limits
-# (MAX_ARG_STRLEN, 128 KiB per string). File content therefore never rides
-# argv past this budget; larger writes are split into pieces (see
-# HarborWorkspace.write_file). The margin is deliberately wide: observed
-# production failures sat in the hundreds of KiB.
+# (MAX_ARG_STRLEN, 128 KiB per string).  File content therefore never rides
+# argv past this budget; larger writes are split into pieces.
 _WRITE_CHUNK_CHARS = 32 * 1024
 _WRITE_CHUNK_THRESHOLD = 64 * 1024
 
@@ -94,22 +92,20 @@ class HarborWorkspace:
     """Workspace backed by a Harbor environment's ``exec``.
 
     File content crosses the boundary base64-encoded, so no quoting or
-    escaping can corrupt it.  The container itself is the sandbox: with
-    no root configured, paths are used as-is (relative paths resolve
-    against the environment's default working directory).  With a root
-    configured, paths are normalized and must stay inside it; symlinks
-    cannot be resolved remotely, so containment is purely lexical.
+    escaping can corrupt it.  The container itself is the sandbox: with no
+    root configured, paths are used as-is (relative paths resolve against the
+    environment's default working directory).  With a root configured, paths
+    are normalized and must stay inside it; symlinks cannot be resolved
+    remotely, so containment is purely lexical.
 
-    Listing relies on GNU find's ``-printf`` (present in the Ubuntu
-    images used by terminal-bench).
+    Listing relies on GNU find's ``-printf`` (present in the Ubuntu images
+    used by terminal-bench).
     """
 
     def __init__(self, environment: HarborEnvironment,
                  root: str | None = None) -> None:
         # Same convention as LocalWorkspace: explicit argument wins, then
-        # ``RuntimeConfig.workspace_root``, then open (None). Deployments
-        # that need containment (eval) set the variable; free-roaming
-        # setups (terminal-bench) leave it unset. No task paths in code.
+        # ``RuntimeConfig.workspace_root``, then open (None).
         if root is None:
             from agent_runtime.runtime_config import RuntimeConfig
 
@@ -170,9 +166,9 @@ class HarborWorkspace:
                              encoded: str, byte_count: int) -> dict[str, Any]:
         """Write large content piece by piece, then decode atomically.
 
-        Every individual command stays far below argv limits; the pieces
-        land in a temp file and only the final decode touches the target,
-        so a mid-write failure never truncates the original.
+        Every individual command stays far below argv limits; the pieces land
+        in a temp file and only the final decode touches the target, so a
+        mid-write failure never truncates the original.
         """
         tmp = target + ".writetmp"
         commands = [
@@ -221,10 +217,10 @@ class HarborWorkspace:
                               max_results: int = 200) -> dict[str, Any] | None:
         """Single-exec server-side grep via rg (fallback grep -rn).
 
-        Same contract as tools.grep_search. Returns None only when the
+        Same contract as tools.grep_search.  Returns None only when the
         container has neither rg nor grep (caller falls back to walk+read).
-        borrows labs-OO-Agents fail-closed ideas: rg exit 2 (bad regex
-        dialect) is reported as an error instead of guessed anchors.
+        Fail-closed: rg exit 2 (bad regex dialect) is reported as an error
+        instead of guessed anchors.
         """
         import fnmatch
 

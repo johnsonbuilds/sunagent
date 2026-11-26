@@ -1,16 +1,9 @@
 """The execute_code composite tool: write a script, run it, observe once.
 
-This is the "code interpreter" execution pattern: instead of N round
-trips (write file, run command, read output), the model ships one
-complete script per tool call.  Intermediate data stays in workspace
-files or in-memory variables; only what the script prints comes back.
-
-Results are returned with a source-level output cap applied by the
-executor (``MAX_OUTPUT_CHARS`` per stream, see
-``agent_runtime.execution.base``) so a runaway print cannot OOM the
-process; anything still oversized is spilled to ``.outputs/`` at the
-transcript boundary (agent_runtime.agent.observations), so every
-tool's bulky output is handled uniformly.
+One complete script per tool call instead of N round trips; intermediate
+data stays in workspace files or variables and only printed output comes
+back.  The executor caps each stream (``MAX_OUTPUT_CHARS``) and anything
+still oversized is spilled to ``.outputs/`` at the transcript boundary.
 """
 
 from __future__ import annotations
@@ -48,10 +41,8 @@ LANGUAGE_SPECS: dict[str, dict[str, str]] = {
 }
 LANGUAGES = {name: spec["extension"] for name, spec in LANGUAGE_SPECS.items()}
 
-# Input tolerance: models routinely pass the interpreter name ("python3")
-# or a familiar short form instead of the canonical language key.  Mapping
-# aliases here prevents a wasted tool call without changing the canonical
-# names used by the spec, guard, extension table, and result payload.
+# Models routinely pass the interpreter name ("python3") instead of the
+# canonical key; aliasing avoids a wasted tool call.
 LANGUAGE_ALIASES: dict[str, str] = {
     "python": "python", "python3": "python", "py": "python", "py3": "python",
     "bash": "bash", "sh": "bash", "shell": "bash",
@@ -67,20 +58,15 @@ _UNSUPPORTED_LANGUAGE_HINTS: dict[str, str] = {
     "c": _C_HINT, "cc": _C_HINT, "gcc": _C_HINT,
     "cpp": _C_HINT, "c++": _C_HINT, "cxx": _C_HINT,
 }
-# Canonical definitions live in execution.base; re-exported here for
-# backwards compatibility (older imports used ``tools.code.OUTPUTS_DIR``).
 DEFAULT_TIMEOUT = 120.0
 
 _SEQUENCE = re.compile(r"^(\d{4})\.")
 
-# Serializes auto-naming (list .scripts/ -> max+1 -> write) so concurrent
-# execute_code calls cannot claim the same NNNN number.
+# Serializes auto-naming so concurrent calls cannot claim the same NNNN.
 _SCRIPT_LOCK = asyncio.Lock()
 
-# Python footgun guardrails (mistake-proofing, not a security boundary:
-# static AST checks are trivially bypassable by design — the real
-# containment is OS-level isolation, not this list). Mirrors the
-# labs-OO-Agents RestrictionsConfig subset that matters for scripts.
+# Mistake-proofing, not a security boundary: static AST checks are
+# trivially bypassable; real containment is OS-level isolation.
 _BLOCKED_PY_MODULES = frozenset({"subprocess", "socket"})
 _BLOCKED_PY_CALLS = frozenset({
     "os.system", "os.popen", "os.execv", "os.execve", "os.execl",
@@ -96,10 +82,9 @@ def _interpreter_for(language: str) -> str:
 def normalize_language(language: str) -> str:
     """Return the canonical language key for ``language``.
 
-    Accepts case-insensitive aliases (``python3``, ``py``, ``sh``, ``js``,
-    ``Rscript``, ...).  Languages that cannot be handled by a single
-    interpreter invocation (C/C++) or that would silently change runtime
-    semantics (python2) get an actionable error instead of a wrong alias.
+    Languages that cannot be handled by a single interpreter invocation
+    (C/C++) or that would change semantics (python2) get an actionable
+    error instead of a wrong alias.
     """
     key = (language or "").strip().lower()
     hint = _UNSUPPORTED_LANGUAGE_HINTS.get(key)
@@ -136,17 +121,13 @@ def _is_scripts_path(path: str) -> bool:
 def validate_script_path(path: str, root: Any = None) -> tuple[str | None, str | None]:
     """Check and normalize an explicit ``execute_code(path=...)``.
 
-    Scripts must live under ``.scripts/``: the auto-naming default
-    already does, and allowing arbitrary paths would let one tool call
-    silently overwrite workspace source files.  Inside that boundary the
-    resolver is forgiving: a bare filename is placed under ``.scripts/``
-    and an absolute path inside a known workspace root is relativized.
+    Scripts must live under ``.scripts/`` so one tool call cannot
+    overwrite workspace source files.  Inside that boundary the resolver
+    is forgiving: a bare filename is placed under ``.scripts/`` and an
+    absolute path inside a known root is relativized.
 
-    Returns ``(script, reason)``: on success ``script`` is the
-    normalized workspace-relative path to write; on failure ``script``
-    is None and ``reason`` distinguishes a true workspace escape from a
-    mere convention violation, so the model is not misled into
-    re-orienting itself when only the spelling was wrong.
+    Returns ``(script, reason)``; ``reason`` distinguishes a true
+    workspace escape from a mere convention violation.
     """
     if not path or not path.strip():
         return None, "path must not be empty"
@@ -196,9 +177,7 @@ def ensure_script_extension(script: str,
                             language: str) -> tuple[str | None, str | None]:
     """Append the language extension when missing; reject a mismatch.
 
-    Writing Python source to ``.scripts/foo.sh`` and running it with
-    ``python3`` works by accident but makes the saved script misleading
-    and breaks the "re-run with run_command" contract.
+    A misleading extension breaks the "re-run with run_command" contract.
     """
     expected = LANGUAGES[language]
     _, ext = posixpath.splitext(script)
@@ -223,10 +202,9 @@ async def _script_exists(workspace: Workspace, script: str) -> bool:
 def _check_python_footguns(code: str) -> str | None:
     """Best-effort AST check for common Python footguns; None means OK.
 
-    Guardrail, not a jail: ``open()`` alone gives arbitrary file I/O,
-    so this list only catches what the model reaches for by mistake
-    (process spawning, socket use, interpreter suicide). Unparseable
-    code is left alone — the runtime will report the SyntaxError.
+    Catches what the model reaches for by mistake (process spawning,
+    socket use, interpreter suicide).  Unparseable code is left alone —
+    the runtime reports the SyntaxError.
     """
     try:
         tree = ast.parse(code)
@@ -261,14 +239,9 @@ def _guard_decision(executor: ShellExecutor, script: str,
                     language: str) -> GuardDecision | None:
     """Check the script's own text against the executor's guard.
 
-    Bash scripts are checked line by line: the wrapper command
-    (``bash .scripts/0001.sh``) is always harmless, so what needs
-    vetting is the script content.  Python gets a best-effort AST
-    footgun check (blocked process/network calls) — still a
-    guardrail, not a security boundary: Python is Turing-complete,
-    so any check on its source is trivially bypassed and must not
-    block legitimate file work; the real boundary for code is the
-    execution environment (hardened container vs local process).
+    The wrapper command (``bash .scripts/0001.sh``) is always harmless,
+    so bash is vetted line by line.  Python gets the AST footgun check —
+    a guardrail only; the real boundary is the execution environment.
     """
     guard = getattr(executor, "guard", None)
     if language == "bash":
@@ -292,13 +265,7 @@ def _guard_decision(executor: ShellExecutor, script: str,
 
 def _with_interpreter_hint(result: dict[str, Any],
                            language: str) -> dict[str, Any]:
-    """Append an install hint when the interpreter was not found.
-
-    Exit code 127 means the shell could not find the interpreter binary
-    (e.g. ``Rscript: command not found`` on a machine without R).  Turn
-    that opaque failure into an actionable hint so the agent can install
-    the runtime via ``run_command`` and retry.
-    """
+    """Append an install hint when the interpreter was not found (exit 127)."""
     if result.get("exit_code") != 127:
         return result
     interpreter = _interpreter_for(language)
@@ -318,10 +285,8 @@ async def execute_code(code: str, language: str = "python",
                        executor: ShellExecutor | None = None) -> dict[str, Any]:
     """Write ``code`` to the workspace, execute it, return one result.
 
-    Composes the Workspace and ShellExecutor protocols: the script is
-    saved (default ``.scripts/NNNN.ext``, re-runnable later via
-    ``run_command``), executed from the workspace root, and the command
-    result is returned with ``script_path`` and ``language`` attached.
+    The script is saved (default ``.scripts/NNNN.ext``, re-runnable via
+    ``run_command``) and executed from the workspace root.
     """
     ws = workspace or LocalWorkspace()
     ex = executor or LocalShellExecutor()
@@ -360,12 +325,8 @@ async def execute_code(code: str, language: str = "python",
     result = await ex.execute(command, cwd=cwd, timeout=timeout)
     result = _with_interpreter_hint(result, language)
 
-    # Source-level truncation happens in the executor (MAX_OUTPUT_CHARS
-    # per stream); oversized output still reaching here is spilled to
-    # .outputs/ once at the transcript boundary
-    # (agent_runtime.agent.observations), which handles every tool's
-    # bulky results uniformly.  Returning the result as-is keeps tool
-    # handlers policy-free.
+    # Truncation is the executor's job; spill-to-.outputs/ happens once at
+    # the transcript boundary, so handlers stay policy-free.
     return {**result, "script_path": script, "language": language,
             "overwritten": overwritten}
 

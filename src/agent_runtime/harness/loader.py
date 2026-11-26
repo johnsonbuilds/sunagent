@@ -1,8 +1,8 @@
 """Load and validate harness manifests.
 
 The loader owns manifest parsing, validation, and resolution.  It has no
-dependency on the CLI or on lineage/evaluation, so importing it never
-pulls the research tooling into a runtime process.
+dependency on the CLI or on lineage/evaluation, so importing it never pulls the
+research tooling into a runtime process.
 """
 
 from __future__ import annotations
@@ -48,9 +48,9 @@ from .schema import (
 )
 
 
-# The manifests live beside the package source, not inside it, so they
-# are also looked up relative to the repository root: the package can
-# run from a directory other than the project root.
+# The manifests live beside the package source, not inside it, so they are also
+# looked up relative to the repository root: the package can run from a
+# directory other than the project root.
 REPO_HARNESSES_DIR = Path(__file__).resolve().parents[3] / "harnesses"
 
 logger = logging.getLogger(__name__)
@@ -66,10 +66,10 @@ def _positive_int(value: Any, label: str, default: int) -> int:
 
 @lru_cache(maxsize=1)
 def default_harness() -> HarnessSpec:
-    """The default harness: ``harnesses/common-v0.yaml``.
+    """The default harness: ``harnesses/general-v1.yaml``.
 
-    Falls back to the built-in neutral genome (baseline-v0) when the
-    manifest is unavailable, e.g. a wheel install without the repo.
+    Falls back to the built-in neutral genome (baseline-v0) when the manifest is
+    unavailable, e.g. a wheel install without the repo.
     """
     try:
         return load_named_harness(DEFAULT_HARNESS_ID)
@@ -102,10 +102,10 @@ def _summary_reasoning_effort(section: Mapping[str, Any]) -> str | None:
     """Parse ``context.summary_reasoning_effort`` as a normalized token.
 
     The value is passed verbatim to the provider as ``reasoning_effort``;
-    validating the union of values the supported endpoints document keeps
-    a typo from turning every compaction into a failed summarizer call.
-    An absent key keeps the genome default (thinking off); an explicit
-    ``null`` omits the parameter for thinking-only endpoints.
+    validating the documented union keeps a typo from turning every compaction
+    into a failed summarizer call.  An absent key keeps the genome default
+    (thinking off); an explicit ``null`` omits the parameter for thinking-only
+    endpoints.
     """
     if "summary_reasoning_effort" not in section:
         return DEFAULT_SUMMARY_REASONING_EFFORT
@@ -205,8 +205,8 @@ def _budget_reminder(value: Any) -> BudgetReminder:
 
 
 def _context_genome(data: Mapping[str, Any]) -> ContextGenome:
-    # ``memory`` is the legacy gene name: old manifests still carry it.
-    # New manifests use ``context``. Both present is ambiguous -> reject.
+    # ``memory`` is the legacy gene name: old manifests still carry it, new ones
+    # use ``context``.  Both present is ambiguous -> reject.
     if "context" in data and "memory" in data:
         if data.get("context") is not None and data.get("memory") is not None:
             raise HarnessError("use 'context', not both 'context' and legacy 'memory'")
@@ -334,8 +334,8 @@ def from_dict(data: Mapping[str, Any]) -> HarnessSpec:
     """Validate manifest data and build a harness spec."""
     if not isinstance(data, Mapping):
         raise HarnessError("harness manifest must be a mapping")
-    # "source" and "genes_hash" are outputs of to_dict(); accepted so a
-    # spec can round-trip, but ignored and recomputed here.
+    # "source" and "genes_hash" are outputs of to_dict(); accepted so a spec can
+    # round-trip, but ignored and recomputed here.
     _check_keys(data, {"id", "parent", "mutation", "reason", "internal",
                        "prompt", "tools",
                        "control", "context", "memory", "recovery",
@@ -384,8 +384,8 @@ def manifest_candidates(harness_id: str) -> list[Path]:
 def harnesses_dir() -> Path:
     """The directory a harness listing scans.
 
-    The same precedence as :func:`manifest_candidates`: a ``harnesses/``
-    directory in the working directory wins over the repository's own.
+    Same precedence as :func:`manifest_candidates`: a ``harnesses/`` directory in
+    the working directory wins over the repository's own.
     """
     local = Path("harnesses")
     return local if local.is_dir() else REPO_HARNESSES_DIR
@@ -394,15 +394,13 @@ def harnesses_dir() -> Path:
 def list_harnesses(*, include_internal: bool = True) -> list[HarnessSpec]:
     """Every selectable harness, sorted by id.
 
-    Only ``harnesses/*.yaml`` is scanned — never subdirectories — so the
-    archived manifests under ``harnesses/archived/`` stay out of the
-    picker.  A manifest that fails to load is logged and skipped instead
-    of hiding the rest of the list.
+    Only ``harnesses/*.yaml`` is scanned — never subdirectories — so the archived
+    manifests under ``harnesses/archived/`` stay out of the picker.  A manifest
+    that fails to load is logged and skipped instead of hiding the rest.
 
-    ``include_internal=False`` drops manifests marked ``internal: true``
-    (the diagnosis harness).  They still load by id: the diagnosis turn
-    resolves ``evaluation-v1`` through :func:`resolve_harness`, which does
-    not consult this filter.
+    ``include_internal=False`` drops manifests marked ``internal: true`` (the
+    diagnosis harness).  They still load by id: the diagnosis turn resolves
+    ``evaluation-v1`` through :func:`resolve_harness`, which ignores this filter.
     """
     directory = harnesses_dir()
     if not directory.is_dir():
@@ -434,8 +432,8 @@ def load_named_harness(harness_id: str) -> HarnessSpec:
 def resolve_harness(value: str | None) -> HarnessSpec:
     """Resolve a CLI/env harness reference to a spec.
 
-    Accepts a file path or a bare id resolved against ``harnesses/``;
-    falls back to the default harness (common-v0) when nothing is given.
+    Accepts a file path or a bare id resolved against ``harnesses/``; falls back
+    to the default harness when nothing is given.
     """
     if not value:
         return default_harness()
@@ -444,8 +442,8 @@ def resolve_harness(value: str | None) -> HarnessSpec:
         return load_harness(direct)
     # Search the same places as load_named_harness, but let a manifest that
     # exists yet fails validation report its own error: wrapping every
-    # HarnessError as "not found" sends people looking for a missing file
-    # when the real problem is the contents.
+    # HarnessError as "not found" sends people looking for a missing file when
+    # the real problem is the contents.
     candidates = manifest_candidates(value)
     for path in candidates:
         if path.is_file():

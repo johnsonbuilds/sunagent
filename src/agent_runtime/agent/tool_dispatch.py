@@ -27,8 +27,7 @@ class ValidatedToolCall:
 
     ``extras`` holds provider-specific per-call fields (e.g. Gemini's
     ``extra_content.google.thought_signature``) exactly as received. The
-    runtime never reads them; they ride along so the conversation history
-    can echo them back on the next request, which some providers require.
+    runtime never reads them; they ride along so history can echo them back.
     """
 
     id: str
@@ -61,9 +60,9 @@ def _schema_for_tool(schemas: list[dict[str, Any]], name: str) -> Mapping[str, A
 def available_tools_hint(schemas: list[dict[str, Any]]) -> str:
     """Factual one-line catalog of registered tools, built from schemas.
 
-    Programmatic (never hand-written) so it cannot go stale when tools
-    are added or renamed. No similarity guessing: when the model names
-    something unknown, only facts are offered and it re-routes itself.
+    Programmatic (never hand-written) so it cannot go stale when tools are
+    added or renamed.  No similarity guessing: when the model names something
+    unknown, only facts are offered and it re-routes itself.
     """
     parts: list[str] = []
     for schema in schemas:
@@ -138,8 +137,7 @@ def validate_tool_call(tool_call: Any, schemas: list[dict[str, Any]]) -> Validat
             raise ValueError(f"argument '{field}' must be {expected}")
 
     # Constraints declared inside a schema (array items, nested objects) are
-    # enforced here too, before the handler runs, so a tool never has to
-    # re-implement its own schema in hand-written checks.
+    # enforced here too, so a tool never re-implements its own schema.
     problem = nested_problem(arguments, parameters, name)
     if problem:
         raise ValueError(problem)
@@ -188,9 +186,8 @@ def tool_observation_message(tool_call: Any, content: str,
                               ) -> dict[str, Any]:
     """Build the observation message for a tool call's outcome.
 
-    ``metadata`` carries programmatic side-channel data (e.g. a spill
-    path for the memory strategies); it never enters the model-facing
-    ``content``.
+    ``metadata`` carries programmatic side-channel data (e.g. a spill path);
+    it never enters the model-facing ``content``.
     """
     call_id = tool_call.get("id", "") if isinstance(tool_call, Mapping) else ""
     if isinstance(call_id, str) and call_id:
@@ -299,9 +296,8 @@ def error_kind(name: Any) -> str:
 def tool_outcome_fields(result: Any, tool: str | None = None) -> dict[str, Any]:
     """Judge a tool *result*: a returned ``{"error": ...}`` is a failure.
 
-    Shell and file tools report failures as data instead of raising, so
-    the trace must read the result, not the exception, or every broken
-    command would be counted as a success.
+    Shell and file tools report failures as data instead of raising, so the
+    trace must read the result, not the exception.
     """
     status = "success"
     kind: str | None = None

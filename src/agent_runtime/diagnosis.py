@@ -6,10 +6,8 @@ trace with read-only tools, and writes Markdown with four fixed headings
 (``docs/evaluation.md`` §7).  This module owns the parts that belong to the
 runtime rather than to the web UI:
 
-* :func:`build_bundle` — the bundle document (task / runs / environment /
-  human feedback / aggregate) from data the caller already indexed;
-* :func:`write_bundle` — ``<runtime_home>/diagnosis/<id>/bundle.json`` and
-  ``summary.md``, capped at 1 MB;
+* :func:`build_bundle` / :func:`write_bundle` — the bundle document and its
+  ``<runtime_home>/diagnosis/<id>/`` files, capped at 1 MB;
 * :func:`collect_run_evidence` — per-iteration evidence carrying
   ``event_id``s, read straight from ``traces/``;
 * :func:`parse_report` / :func:`verify_report` — the four-heading contract
@@ -20,7 +18,6 @@ runtime rather than to the web UI:
 The tools read ``storage`` directly instead of going through the sandbox:
 ``AGENT_RUNTIME_HOME`` and ``AGENT_RUNTIME_WORKSPACE`` are different roots,
 and a sandbox narrowed to a subdirectory cannot see the traces at all.
-Nothing here imports the web UI — diagnosis data is prepared by the caller.
 """
 
 from __future__ import annotations
@@ -48,8 +45,7 @@ REPORT_HEADINGS: tuple[str, ...] = ("Conclusion", "Root cause", "Evidence",
                                     "Top 5 improvements")
 
 # Reports written before the English contract (and the wording the web UI used
-# for the label) keep rendering: aliases normalize onto the canonical heading
-# instead of turning into unknown body text.
+# for the label) keep rendering: aliases normalize onto the canonical heading.
 REPORT_HEADING_ALIASES: dict[str, str] = {
     "结论": REPORT_HEADINGS[0],
     "根因": REPORT_HEADINGS[1],
@@ -111,9 +107,9 @@ def _check_id(diagnosis_id: Any) -> str:
 def compute_hash(bundle: Mapping[str, Any]) -> str:
     """Fingerprint of a bundle's *evidence*, not of when it was built.
 
-    ``generated_at`` is excluded so re-running a diagnosis minutes later
-    over unchanged evidence hits the duplicate check instead of paying
-    for the same analysis twice.
+    ``generated_at`` is excluded so re-running a diagnosis over unchanged
+    evidence hits the duplicate check instead of paying for the same analysis
+    twice.
     """
     evidence = {key: value for key, value in bundle.items()
                 if key != "generated_at"}
@@ -157,8 +153,7 @@ def compact_bundle(bundle: dict[str, Any],
     """Trim a bundle to ``limit`` bytes, richest evidence last to go.
 
     Priority is failure run > rework run > passed run (docs §5.2), so a
-    passing run loses its per-iteration detail first and the model still
-    sees every failure in full.
+    passing run loses its per-iteration detail first.
     """
     if _size(bundle) <= limit:
         # Never clear a flag that is already set: ``write_bundle`` compacts a

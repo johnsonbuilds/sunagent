@@ -1,20 +1,12 @@
 """Reliable LLM communication layer: one request, attempted and retried.
 
-This module owns one request end-to-end: how it is sent (streaming or
-not), what a failed attempt recovers to, and the turn-level bookkeeping
-that every attempt owes regardless of outcome (billed usage).  It knows
-the request view — ``TurnHistory`` — not the tool loop, so it is the one
-place an LLM failure is dispatched.  The two facets it composes live
-beside it: ``llm_stream`` (chunk merging, idle-timeout and
-empty/truncated-stream detection) and ``llm_recovery`` (failure taxonomy,
-:class:`RecoveryPlan`, nudge wording).
-
-``chat_with_recovery`` is the dispatcher for the three recovery
-strategies (see ``llm_recovery``): ``replay`` / ``refresh`` resend the
-request inside this call, so they never consume the iteration budget;
-``nudge`` rewrites the conversation and returns ``None`` so the caller
-simply reads the next view on its next turn.  The loop only says where
-the history is and whether a next turn exists at all.
+This module owns one request end-to-end: how it is sent (streaming or not),
+what a failed attempt recovers to, and the turn-level bookkeeping every
+attempt owes regardless of outcome (billed usage).  It knows the request view
+— ``TurnHistory`` — not the tool loop, so it is the one place an LLM failure
+is dispatched.  Its two facets live beside it: ``llm_stream`` (chunk merging,
+idle-timeout, empty/truncated-stream detection) and ``llm_recovery`` (failure
+taxonomy, :class:`RecoveryPlan`, nudge wording).
 """
 
 from __future__ import annotations
@@ -79,8 +71,8 @@ def _request_chars(messages: list[dict[str, Any]]) -> int:
 def use_streaming(runtime: RuntimeConfig | None = None) -> bool:
     """Whether the runtime should consume LLM streaming (AGENT_RUNTIME_STREAM).
 
-    The env read lives in ``RuntimeConfig.from_env``; passing ``None`` is
-    the legacy shape used by callers that have no config to thread.
+    Passing ``None`` is the legacy shape used by callers with no config to
+    thread.
     """
     return (runtime or RuntimeConfig.from_env()).streaming
 
@@ -90,9 +82,8 @@ class ChatModel(Protocol):
     def echo_reasoning(self) -> bool:
         """Whether this endpoint replays ``reasoning_content`` on the wire.
 
-        Optional for Duck-typed fakes: callers must use
-        ``runtime_config.resolve_echo_reasoning`` with a runtime fallback
-        instead of accessing it directly.
+        Optional for duck-typed fakes: callers must use
+        ``runtime_config.resolve_echo_reasoning`` with a runtime fallback.
         """
         ...
 
@@ -114,16 +105,10 @@ async def _chat_response(llm: ChatModel, history: TurnHistory,
     """Consume either runtime streaming or a single runtime response.
 
     This is one real provider attempt, so it owns the ``llm.start`` /
-    ``llm.end`` pair: the request payload is written once on start, the
-    assembled response plus usage/timing once on end.  A retried attempt
-    (same iteration, ``attempt > 1``) therefore gets its own pair instead
-    of inflating one span's duration.
-
-    It also owns the turn's usage ledger: every attempt that came back —
-    including one this module then rejects as a truncated thinking turn —
-    was billed, and a rejected turn's tokens are often the largest single
-    charge of the run.  Recording here means no recovery path can drop
-    it, whichever strategy handles the failure.
+    ``llm.end`` pair: a retried attempt gets its own pair instead of inflating
+    one span's duration.  It also owns the turn's usage ledger, because every
+    attempt that came back was billed — including one this module then rejects
+    as a truncated thinking turn, often the largest single charge of the run.
     """
     request = list(history.view)
     started = time.monotonic()
@@ -134,8 +119,8 @@ async def _chat_response(llm: ChatModel, history: TurnHistory,
                    request_chars=_request_chars(request),
                    request_hash=_fingerprint(request),
                    # The parent chain, not the leaf: a stable hash of the
-                   # conversation minus the newest message is what a
-                   # provider prompt cache can reuse across iterations.
+                   # conversation minus the newest message is what a provider
+                   # prompt cache can reuse across iterations.
                    prefix_hash=_fingerprint(request[:-1]),
                    messages=request)
     if events is not None:
@@ -182,22 +167,17 @@ async def _chat_response(llm: ChatModel, history: TurnHistory,
     usage = response.get("usage")
     usage = usage if isinstance(usage, Mapping) else {}
     # One parser for every billed response (``tokens.py``): it tolerates a
-    # provider that reports a non-numeric field and reads the cached count
-    # from any of the shapes a direct endpoint returns
-    # (``prompt_tokens_details.cached_tokens``, ``prompt_cache_hit_tokens``),
-    # so the ledger does not silently lose cache hits or crash a turn on a
-    # weird usage payload.
+    # non-numeric field and reads the cached count from any shape a direct
+    # endpoint returns, so the ledger never silently loses cache hits.
     prompt_tokens, completion_tokens, cached_tokens = response_usage(response)
     tool_calls = response.get("tool_calls") or []
-    # Bill the attempt before deciding whether to accept it: this is the
-    # one place that sees every response, accepted or not.
+    # Bill before deciding whether to accept: this is the one place that sees
+    # every response, accepted or not.
     history.record_usage(prompt_tokens, completion_tokens, cached_tokens)
-    # A provider that cuts the response at ``max_tokens`` while the model
-    # is still thinking yields neither content nor a tool call.  Left
-    # alone, the loop reads that as a legitimate final answer and the turn
-    # ends with an empty answer (the UI keeps only the thinking block).
-    # ``reasoning_content`` may be empty too (endpoints that hide it), so
-    # the cut itself is the signal, not the reasoning length.
+    # A provider that cuts the response at ``max_tokens`` while the model is
+    # still thinking yields neither content nor a tool call, which the loop
+    # would read as a legitimate final answer.  ``reasoning_content`` may be
+    # empty too, so the cut itself is the signal, not the reasoning length.
     truncated_thinking = (response.get("finish_reason") == "length"
                           and not (response.get("content") or "").strip()
                           and not tool_calls)
@@ -222,10 +202,8 @@ async def _chat_response(llm: ChatModel, history: TurnHistory,
                     tool_calls=[tool_trace_metadata(call).get("tool")
                                 for call in tool_calls])
     if truncated_thinking:
-        # Trace is fully recorded above (reasoning chars, finish_reason,
-        # final=False) and the attempt is already billed; raise so the
-        # dispatcher nudges the model to deliver instead of the caller
-        # accepting the empty response as the answer.
+        # Already traced and billed above; raise so the dispatcher nudges the
+        # model to deliver instead of the caller accepting an empty answer.
         raise ReasoningTruncated(
             len(response.get("reasoning_content") or ""))
     return response
@@ -241,35 +219,23 @@ async def chat_with_recovery(llm: ChatModel, history: TurnHistory,
                              allow_nudge: bool = True,
                              runtime: RuntimeConfig | None = None,
                              ) -> dict[str, Any] | None:
-    """One chat request, recovered per the plan :func:`recovery_plan`
-    resolves for the failure.
+    """One chat request, recovered per the plan :func:`recovery_plan` resolves.
 
     This is the only dispatcher of LLM failures; the three strategies are
     described once, in the taxonomy table of ``llm_recovery``.
 
-    It takes the ``history`` rather than a message list because two of the
-    three strategies rewrite it: ``refresh`` shrinks the view
-    (``TurnHistory.shrink_view``) and ``nudge`` appends the placeholder
-    and guidance.  Reading ``history.view`` fresh on every attempt is what
-    makes a second retry see the first retry's compaction — a rebinding
-    compaction can never be applied to a list reference held from before
-    it ran.
+    It takes ``history`` rather than a message list because two strategies
+    rewrite it: ``refresh`` shrinks the view and ``nudge`` appends the
+    placeholder and guidance.  Reading ``history.view`` fresh on every attempt
+    is what lets a second retry see the first retry's compaction.
 
-    ``replay`` retries replay the identical request in place and do not
-    consume ``control.max_iterations``. Attempt counts are kept per
-    category so one exhausted policy cannot eat another category's
-    budget.
-
-    ``refresh`` (``context_window``) can never succeed as a replay, so it
-    shrinks before the resend; when the view cannot shrink further the
-    error propagates instead of burning retries.  No backoff sleep on
-    this strategy: the compaction itself is the delay.
-
-    ``nudge`` (a thinking-only turn) rewrites the conversation and
-    returns ``None`` so the caller continues with its next turn instead
-    of reading the empty response as an answer.  ``allow_nudge=False``
-    (the forced summary turn, which has no next turn and no tools)
-    re-raises instead, leaving the caller's own fallback to answer.
+    ``replay`` does not consume ``control.max_iterations``, and attempt counts
+    are kept per category so one exhausted policy cannot eat another's budget.
+    ``refresh`` shrinks before the resend (an identical replay can only be
+    rejected again) and propagates when the view cannot shrink further; no
+    backoff sleep, the compaction itself is the delay.  ``nudge`` returns
+    ``None`` so the caller continues with its next turn; ``allow_nudge=False``
+    (the forced summary turn, which has no next turn) re-raises instead.
     """
     attempted: dict[str, int] = {}
     while True:
@@ -288,8 +254,7 @@ async def chat_with_recovery(llm: ChatModel, history: TurnHistory,
                 return None
             category = plan.category
             if category is None:
-                # A strategy with no policy key: there is nothing to look
-                # a retry count up in, so it is not recoverable here.
+                # No policy key to look a retry count up in: not recoverable.
                 raise
             policy = harness.recovery.llm_errors.get(category)
             tried = attempted.get(category, 0)
@@ -314,9 +279,8 @@ async def chat_with_recovery(llm: ChatModel, history: TurnHistory,
 
 
 # The public surface of the LLM layer stays here — including the taxonomy
-# types (``llm_recovery``) and stream errors (``llm_stream``) re-exported
-# from the two facet modules — so the loop's and the entry points'
-# dependency surface never changes.
+# types and stream errors re-exported from the two facet modules — so the
+# loop's and the entry points' dependency surface never changes.
 __all__ = [
     "ChatModel",
     "ReasoningBudgetExceeded",

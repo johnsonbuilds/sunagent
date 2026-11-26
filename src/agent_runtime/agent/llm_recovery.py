@@ -1,19 +1,16 @@
 """LLM failure taxonomy, recovery planning, and the nudge rewrite.
 
 Every failed LLM request resolves to a :class:`RecoveryPlan`, and
-``chat_with_recovery`` is the only place that acts on it.  All three
-strategies live here:
+``chat_with_recovery`` is the only place that acts on it:
 
-* ``replay`` / ``refresh`` resend the request inside ``llm_request``, so
-  they never consume the iteration budget;
-* ``nudge`` (a turn that delivered nothing but thinking) rewrites the
-  conversation — placeholder plus guidance — and returns ``None`` so the
-  caller simply reads the next view on its next turn.
+* ``replay`` / ``refresh`` resend the request inside ``llm_request``, so they
+  never consume the iteration budget;
+* ``nudge`` rewrites the conversation and returns ``None``, so the caller
+  simply reads the next view on its next turn.
 
-The distinction that matters is not "whose turn is next" but "who owns
-the decision": the failure taxonomy, the retry counts and the wording
-handed back to the model all stay in this module, and the loop only says
-where the history is and whether a next turn exists at all.
+The taxonomy, the retry counts and the wording handed back to the model all
+stay here; the loop only says where the history is and whether a next turn
+exists at all.
 """
 
 from __future__ import annotations
@@ -33,30 +30,15 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------
 # LLM failure taxonomy: one table, one dispatcher
 #
-# Every failed LLM request resolves to a :class:`RecoveryPlan`, and
-# :func:`chat_with_recovery` is the only place that acts on it.  Three
-# strategies cover every case, including "do not retry":
+# ``replay`` resends the identical request (the harness's
+# ``recovery.llm_errors.<category>`` policy owns count and delay; ``max_retries:
+# 0`` is the fail-fast path).  ``refresh`` rewrites the request first, since an
+# identical replay can only be rejected again.  ``nudge`` rewrites the
+# conversation and continues on the next turn, bounded by
+# ``control.max_iterations`` rather than by a retry policy.
 #
-#   ``replay``   resend the identical request.  The harness's
-#                ``recovery.llm_errors.<category>`` policy owns the count
-#                and the delay; ``max_retries: 0`` means "fail the turn
-#                now" (the fail-fast path of ``invalid_request``).
-#   ``refresh``  rewrite the request before resending (shrink the
-#                view); an identical replay can only be rejected again.
-#                The same policy owns the count.
-#   ``nudge``    rewrite the *conversation* and continue on the next
-#                turn.  No policy applies: this is not a replay of the
-#                same request, and ``control.max_iterations`` is what
-#                bounds it.
-#
-# Both rewrites are performed by the dispatcher in ``llm_request``
-# (``chat_with_recovery``), through the ``TurnHistory`` it is handed: one
-# object carries the request view, the usage ledger and the append point,
-# so no caller passes callbacks in and no reference to a stale list is
-# held across a retry.
-#
-# Adding a failure mode is therefore one line here plus its wording on
-# the exception, never a second, hidden handling path in the caller.
+# Adding a failure mode is one line here plus its wording on the exception,
+# never a second, hidden handling path in the caller.
 REPLAY = "replay"
 REFRESH = "refresh"
 NUDGE = "nudge"
@@ -71,23 +53,17 @@ class RecoveryPlan:
     """``recovery.llm_errors`` key; ``None`` when no policy governs it."""
 
 
-# Categories an identical resend cannot fix: the payload itself has to
-# change first.  Everything else is a plain replay whose retry count the
-# harness owns.
+# Categories an identical resend cannot fix: the payload must change first.
 _CATEGORY_STRATEGY = {"context_window": REFRESH}
 
 
 class ThinkingOnlyTurn(RuntimeError):
     """A response that spent itself thinking and delivered nothing.
 
-    No content and no tool call, so the loop cannot read it as an answer.
-    The remedy is a conversation rewrite — an honest placeholder for the
-    missing turn plus :meth:`guidance` telling the model what went wrong
-    and that the next turn must deliver — never an identical replay:
-    resending the same request reproduces the same turn.
-
-    Subclasses supply the wording; the recovery layer only needs
-    :attr:`llm_strategy` and :attr:`reasoning_chars`.
+    No content and no tool call, so the loop cannot read it as an answer.  The
+    remedy is a conversation rewrite — an honest placeholder plus
+    :meth:`guidance` — never an identical replay: resending the same request
+    reproduces the same turn.
     """
 
     llm_strategy = NUDGE
@@ -113,9 +89,8 @@ class ThinkingOnlyTurn(RuntimeError):
 def _thinking_cut_clause(reasoning_chars: int) -> str:
     """Describe where a truncated turn was cut, for both wordings above.
 
-    Endpoints that hide their chain of thought stream no reasoning back,
-    so the honest description of a 0-char cut is "before anything
-    visible", not "after 0 chars of reasoning".
+    Endpoints that hide their chain of thought stream no reasoning back, so a
+    0-char cut is "before anything visible", not "after 0 chars".
     """
     if reasoning_chars > 0:
         return f"after {reasoning_chars} chars of reasoning"
@@ -154,16 +129,10 @@ class ReasoningBudgetExceeded(ThinkingOnlyTurn):
 class ReasoningTruncated(ThinkingOnlyTurn):
     """The provider cut a thinking turn at its own output limit.
 
-    ``finish_reason == "length"`` with no content and no tool call: the
-    model did not choose to stop, the maximum token count did it for
-    them, so the truncated thought is not an answer.  Left alone it looks
-    like a legitimate empty final answer and the turn ends with nothing
-    but a reasoning block.
-
-    ``reasoning_chars`` may be 0 when the endpoint hides its reasoning
-    (nothing was streamed back), so the wording never claims a reasoning
-    length it cannot see: it says the response was cut before anything
-    visible came out.
+    ``finish_reason == "length"`` with no content and no tool call: the model
+    did not choose to stop, so the truncated thought is not an answer.  Left
+    alone it looks like a legitimate empty final answer and the turn ends with
+    nothing but a reasoning block.
     """
 
     kind = "response_truncated"
@@ -195,16 +164,15 @@ class ReasoningTruncated(ThinkingOnlyTurn):
                 "while still thinking; the work above stands as delivered)")
 
 
-# Statuses that say "this request can never succeed as written": the
-# provider parsed it and refused the payload itself. Replaying them is
-# pure waste (one incident spent 126s on six replays of a rejected
-# request before the 400 reached the user).
+# Statuses that say "this request can never succeed as written": the provider
+# parsed it and refused the payload.  Replaying them is pure waste (one
+# incident spent 126s on six replays of a rejected request).
 _DETERMINISTIC_REJECTION_STATUSES = frozenset({400, 404, 422})
 
 
 def _status_code(exc: BaseException) -> int | None:
-    """HTTP status on a provider error, duck-typed so the optional SDK
-    never enters this module (openai's ``APIStatusError`` exposes it)."""
+    """HTTP status on a provider error, duck-typed so the optional SDK never
+    enters this module (openai's ``APIStatusError`` exposes it)."""
     code = getattr(exc, "status_code", None)
     if isinstance(code, bool) or not isinstance(code, int):
         return None
@@ -221,10 +189,7 @@ def llm_error_category(exc: BaseException,
     """Map an LLM-call failure to its ``recovery.llm_errors`` category.
 
     Returns ``None`` when the failure has no replay policy at all (a
-    thinking-only turn is rewritten here instead of replayed).  A
-    deterministic rejection (malformed request, unknown endpoint) is
-    ``invalid_request``; everything else is ``provider_error``, whose
-    policy owns the transient cases (5xx, connection drops, rate limits).
+    thinking-only turn is rewritten instead of replayed).
     """
     category = getattr(exc, "llm_category", None)
     if isinstance(category, str):
@@ -241,12 +206,8 @@ def recovery_plan(exc: BaseException,
                    runtime: RuntimeConfig | None = None) -> RecoveryPlan:
     """Resolve one LLM failure to the single place that acts on it.
 
-    Precedence is: an error that declared its own strategy (a
-    thinking-only turn) keeps it; otherwise the category decides, and
-    only ``context_window`` needs its payload rewritten before the
-    resend.  Everything else is a plain replay whose retry count and
-    delay come from the harness — including the fail-fast case, which is
-    simply a policy with ``max_retries: 0``.
+    An error that declared its own strategy keeps it; otherwise the category
+    decides, and only ``context_window`` needs its payload rewritten.
     """
     strategy = getattr(exc, "llm_strategy", None)
     if isinstance(strategy, str):
@@ -259,11 +220,9 @@ def nudge_thinking_only(history: TurnHistory, exc: ThinkingOnlyTurn, *,
                          iteration: int, trace: RunTrace | None) -> None:
     """Rewrite the conversation after a turn that delivered nothing.
 
-    An honest placeholder stands in for the answer that never came, and
-    the guidance tells the model what actually happened — our budget cut
-    it, or the provider's output limit did — and that the next turn must
-    deliver.  Both wordings come from the exception, next to the
-    diagnosis, so a new cause cannot inherit another one's story.
+    An honest placeholder stands in for the answer that never came, and the
+    guidance says what actually happened and that the next turn must deliver.
+    Both wordings come from the exception, next to the diagnosis.
     """
     logger.warning("llm.nudge iteration=%d kind=%s %s",
                    iteration, exc.kind, exc)

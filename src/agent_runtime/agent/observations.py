@@ -1,21 +1,13 @@
 """Compact observation rendering with spill-at-birth archiving.
 
-Every tool result becomes a ``role:"tool"`` message that is re-sent to the
-model on every iteration, so the transcript is the scarce resource.  The
-invariant maintained here: **any observation that compaction could ever
-truncate is archived at birth under ``.outputs/obs-<tool_call_id>.txt``**
-(Manus-style "file system as ultimate context").  Shorter observations
-can never lose data — ``context`` compaction leaves them untouched — so
-they skip the archive (in remote environments each write is a container
-round-trip).
-
-With the archive in place, later compaction in
-:mod:`agent_runtime.agent.context` shortens old observations without any
-I/O — the reference already travels in the message metadata — and the
-model can always page the original back with ``read_output``.
-
-This is the agent layer's transcript policy; the ``read_output`` *paging
-tool* that dereferences archived files lives in the tools layer.
+Every tool result is re-sent on every iteration, so the transcript is the
+scarce resource.  Invariant: any observation that compaction could ever
+truncate is archived at birth under ``.outputs/obs-<tool_call_id>.txt``.
+Shorter ones can never lose data, so they skip the archive (in remote
+environments each write is a container round-trip).  Later compaction then
+shortens old observations without I/O: the reference already travels in the
+message metadata and the model can page the original back with
+``read_output``.
 """
 
 from __future__ import annotations
@@ -38,11 +30,11 @@ _UNSAFE_CHARS = re.compile(r"[^\w.-]")
 
 @dataclass(frozen=True)
 class RenderedObservation:
-    """The transcript text for one tool result plus its archive reference.
+    """Transcript text for one tool result plus its archive reference.
 
-    ``spill_path`` is set when the full text was written to ``.outputs/``
-    — the structured channel the memory strategies read (the inline
-    marker in ``text`` is the model-facing copy).
+    ``spill_path`` is set when the full text was written to ``.outputs/`` —
+    the structured channel memory strategies read; the inline marker in
+    ``text`` is the model-facing copy.
     """
 
     text: str
@@ -51,7 +43,7 @@ class RenderedObservation:
 
 def _spill_name(call_id: str) -> str | None:
     """Deterministic archive filename for one tool call, or ``None`` when
-    the call has no usable id (nothing to name the file after)."""
+    the call has no usable id."""
     safe = _UNSAFE_CHARS.sub("-", call_id).strip("-.")
     return f"obs-{safe}.txt" if safe else None
 
@@ -59,10 +51,8 @@ def _spill_name(call_id: str) -> str | None:
 def format_tool_result(result: Any) -> str:
     """Render a tool result as compact observation text.
 
-    Shell results (``stdout``/``stderr``/``exit_code`` — produced by
-    ``run_command`` and ``execute_code``) get a dedicated minimal layout;
-    other mappings render as JSON; strings and everything else pass
-    through ``str``.
+    Shell results get a dedicated minimal layout; other mappings render as
+    JSON; everything else passes through ``str``.
     """
     if isinstance(result, str):
         return result
@@ -77,11 +67,7 @@ def format_tool_result(result: Any) -> str:
 
 
 def _format_shell_result(result: Mapping[str, Any]) -> str:
-    """One compact block per shell result; empty fields never render.
-
-    The model-facing counterpart of ``tool_result_summary`` (which
-    renders the same shape as structured event fields for the CLI).
-    """
+    """One compact block per shell result; empty fields never render."""
     lines: list[str] = []
     error = result.get("error")
     if isinstance(error, Mapping):
@@ -105,18 +91,16 @@ class OutputSpill:
     """Archive observation text under ``.outputs/`` — the single spill writer.
 
     File names derive from the ``tool_call_id``, so re-archiving the same
-    observation (e.g. a request view rebuilt from history) overwrites the
-    same path instead of accumulating files, and no directory scan is
-    ever needed to find the next name.
+    observation overwrites the same path instead of accumulating files.
     """
 
     def __init__(self, workspace: Workspace) -> None:
         self.workspace = workspace
 
     async def write(self, text: str, call_id: str) -> str | None:
-        """Archive ``text`` for ``call_id``; returns the path, or ``None``
-        when the call has no usable id or the write fails (the caller
-        must then degrade honestly instead of referencing a ghost file)."""
+        """Archive ``text`` for ``call_id``; returns the path, or ``None`` when
+        the call has no usable id or the write fails (the caller must then
+        degrade honestly instead of referencing a ghost file)."""
         name = _spill_name(call_id)
         if name is None:
             return None
@@ -129,17 +113,9 @@ class ObservationFormatter:
     """Render tool results at the transcript boundary, archiving what could
     ever be lost.
 
-    ``context`` compaction truncates observation text beyond
-    ``head_chars`` — anything at or below that size can never lose data
-    and skips the archive (a ``printf hello`` observation does not need a
-    file, and in remote environments each write is a container
-    round-trip).  Everything above it is archived at birth, so compaction
-    later shortens text without any I/O and the model can always page the
-    original back with ``read_output``.
-
-    The knobs are injected from the harness genome: ``max_chars`` /
-    ``spill_preview_chars`` come from ``control``, ``archive_min_chars``
-    is derived from ``context.head_chars`` so the invariant is structural.
+    Compaction truncates observation text beyond ``head_chars``, so anything at
+    or below that size skips the archive; ``archive_min_chars`` is derived from
+    ``context.head_chars`` so the invariant is structural.
     """
 
     def __init__(self, workspace: Workspace,
@@ -166,10 +142,8 @@ class ObservationFormatter:
         return RenderedObservation(self._window(text, spill_path), spill_path)
 
     def _window(self, text: str, spill_path: str | None) -> str:
-        """Head/tail window with an honest marker.  When there is no real
-        middle to omit (or no archive), the text passes through verbatim —
-        the observation must never grow, and without an archive no data
-        is destroyed either."""
+        """Head/tail window with an honest marker.  When there is no real middle
+        to omit (or no archive), the text passes through verbatim."""
         head, tail = (text[:self.spill_preview_chars],
                       text[-self.spill_preview_chars:])
         omitted = len(text) - len(head) - len(tail)

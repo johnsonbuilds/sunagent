@@ -1,27 +1,24 @@
 """Best-effort dangerous-command guard for local shell execution.
 
-This is a fool-proofing layer, not a security boundary.  It catches
-destructive or sensitive commands a model issues by mistake (for
-example ``rm -rf /`` while cleaning a workspace).  A determined or
-obfuscated command can bypass textual matching, and a
-Turing-complete ``execute_code`` script can read files directly; the
-real sandbox is OS-level isolation (the Harbor container path).
+Fool-proofing, not a security boundary: it catches destructive or sensitive
+commands a model issues by mistake (``rm -rf /`` while cleaning a workspace).
+A determined or obfuscated command can bypass textual matching, and a
+Turing-complete ``execute_code`` script can read files directly; the real
+sandbox is OS-level isolation (the Harbor container path).
 
 Policies:
 
 * ``off``        — no interception (tests, trusted automation).
-* ``blocklist``  — block destructive commands, sensitive targets,
-                   privilege escalation, and pipe-to-shell (default).
+* ``blocklist``  — block destructive commands, sensitive targets, privilege
+                   escalation, and pipe-to-shell (default).
 * ``allowlist``  — additionally require every command to start with a
                    known-safe prefix.  High-lockdown environments only;
                    breaks most real tasks, including terminal-bench.
 
-Matching normalizes whitespace and quotes, and resolves ``..``
-segments in paths, so ``/etc/../etc/shadow`` is caught like
-``/etc/shadow``.  A blocked command never raises: it comes back as a
-structured ``{"error": {"type": "CommandBlocked", "message": ...}}``
-result so the agent loop can turn it into an observation and try a
-safer route.
+Matching normalizes whitespace and quotes and resolves ``..`` segments, so
+``/etc/../etc/shadow`` is caught like ``/etc/shadow``.  A blocked command
+never raises: it comes back as a structured
+``{"error": {"type": "CommandBlocked", "message": ...}}`` result.
 """
 
 from __future__ import annotations

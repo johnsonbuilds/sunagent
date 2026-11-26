@@ -1,38 +1,14 @@
 """Run-level measurement records: ``run.config`` and ``run.metrics``.
 
-The evaluation pipeline reads exactly two machine-written sources: the
-per-run trace (``traces/run-*.jsonl``, the authoritative replay log) and
-the compact metrics index (``metrics/runs.jsonl``, one line per run).
-This module owns the shape of the second one so every writer agrees on
-it and every reader can be written against it.
+``RunConfig`` records the conditions of a run (model params, tool schemas,
+runtime settings, env whitelist, git state) — without it a trace is not
+reproducible.  ``RunMetrics`` records the measurements.  Both carry the join
+keys so the ``metrics/runs.jsonl`` index can be sliced without re-reading
+traces, and a line can be rebuilt from its trace, so deleting ``metrics/``
+loses no information.
 
-Two record types, both keyed by the same join keys:
-
-``RunConfig``
-    The conditions of a run: model parameters, tool schemas, runtime
-    settings, environment whitelist, git state.  Without it a trace is
-    not reproducible even though it is complete.  Written once per run
-    as the ``run.config`` trace event.
-
-``RunMetrics``
-    The measurements of a run: outcome, iterations, tool counts, token
-    usage, latency, retries, edited files.  Written once per run as the
-    ``run.metrics`` trace event and appended to ``metrics/runs.jsonl``.
-
-Both records carry the join keys (``origin``/``run_id``/``session_id``/
-``task_id``/``run_index``/``harness_id``/``genes_hash``/``model``), which
-is what lets the evaluation index slice by origin, harness, model, or
-day without re-reading traces.
-
-Who writes ``runs.jsonl``: the caller that owns the run (``webui/server.py``,
-``run_agent.py``, ``integrations/harbor.py``), by calling
-:func:`append_run_metrics` once the run has finished.  ``RunTrace`` stays
-a trace writer and never decides where the metrics index lives.  A line
-can be rebuilt from its trace, so deleting ``metrics/`` loses no
-information (see ``scripts/rebuild_metrics.py``).
-
-Add fields by giving them a default; readers ignore unknown keys and
-missing ones fall back to the default, so old lines stay readable.
+Add fields by giving them a default: readers ignore unknown keys and fall back
+to the default for missing ones, so old lines stay readable.
 """
 
 from __future__ import annotations
@@ -57,24 +33,24 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Which surface started the run.  This is a slicing dimension, not a
-# filter: diagnosis/improvement runs are kept in ``runs.jsonl`` but are
-# excluded from harness and board metrics.
+# Which surface started the run.  A slicing dimension, not a filter: diagnosis
+# and improvement runs stay in ``runs.jsonl`` but are excluded from harness and
+# board metrics.
 ORIGINS = ("cli", "webui", "harbor", "diagnosis", "improvement")
 DEFAULT_ORIGIN = "cli"
 
 RUN_STATUSES = ("completed", "error", "cancelled")
 
 # Events whose payload is large enough that keeping them in ``trace.events``
-# for a long run costs more memory than the diagnosis value they add.  They
-# are still written to the trace file and still counted in ``RunStats``.
+# costs more memory than the diagnosis value they add.  They are still written
+# to the trace file and still counted in ``RunStats``.
 PAYLOAD_EVENT_TYPES = frozenset({
     "llm.start", "llm.end", "llm.chunk", "tool.start", "tool.end",
     "tool.error", "context.llm_summary.text",
 })
 
-# Environment keys that change how a run behaves.  Read explicitly rather
-# than "every AGENT_RUNTIME_*" so credentials can never leak into a trace.
+# Environment keys that change how a run behaves.  Read explicitly rather than
+# "every AGENT_RUNTIME_*" so credentials can never leak into a trace.
 ENV_WHITELIST = (
     "AGENT_RUNTIME_HARNESS", "AGENT_RUNTIME_WORKSPACE", "AGENT_RUNTIME_HOME",
     "AGENT_RUNTIME_MEMORY", "AGENT_RUNTIME_MEMORY_DIR",
@@ -86,8 +62,8 @@ ENV_WHITELIST = (
 
 _APPEND_LOCK = Lock()
 
-# Keep one JSONL line comfortably below the size where a concurrent
-# ``os.write`` from two processes could interleave.
+# Keep one JSONL line comfortably below the size where concurrent ``os.write``
+# calls from two processes could interleave.
 _MAX_LINE_BYTES = 1_000_000
 
 
@@ -100,8 +76,8 @@ def _text(value: Any) -> str | None:
 
 
 def _int(value: Any, default: int = 0) -> int:
-    # ``bool`` is an ``int`` subclass, but ``{"iterations": true}``
-    # must not turn into a count of one.
+    # ``bool`` is an ``int`` subclass, but ``{"iterations": true}`` must not
+    # turn into a count of one.
     if isinstance(value, bool):
         return default
     try:
@@ -173,10 +149,9 @@ def _text_list(value: Any) -> list[str]:
 class RunStats:
     """Live counters a :class:`~agent_runtime.trace.RunTrace` feeds per event.
 
-    Everything a ``run.metrics`` record needs is accumulated here while the
-    run executes, so the record survives the ``retain_events`` policy: with
-    ``control`` the payload events never stay in ``trace.events``, and a
-    reader that scanned the leftover list would report zeros.
+    Accumulated here rather than derived from ``trace.events`` so the record
+    survives the ``retain_events`` policy: with ``control`` the payload events
+    never stay in the list, and a reader scanning it would report zeros.
     """
 
     started_at: float = 0.0
@@ -240,17 +215,17 @@ class RunStats:
             kind = _text(data.get("error_kind")) or "unknown"
             self.error_kinds[kind] = self.error_kinds.get(kind, 0) + 1
             if kind == "command_blocked":
-                # A guard or policy block surfaces as a failed tool call,
-                # not as a ``policy.block`` event (nothing emits one), so
-                # this is where the VCR's "no block" condition is counted.
+                # A guard or policy block surfaces as a failed tool call, not as
+                # a ``policy.block`` event (nothing emits one), so this is where
+                # the VCR's "no block" condition is counted.
                 self.policy_blocks += 1
         for path in _text_list(data.get("edited_files")):
             if path not in self.edited_files:
                 self.edited_files.append(path)
 
     def _observe_agent_end(self, data: Mapping[str, Any]) -> None:
-        # The turn ledger already sums main + summarizer billing; split it
-        # back apart so ``tokens`` keeps its documented invariants.
+        # The turn ledger already sums main + summarizer billing; split it back
+        # apart so ``tokens`` keeps its documented invariants.
         prompt = _int(data.get("prompt_tokens"))
         completion = _int(data.get("completion_tokens"))
         summarizer_prompt = _int(data.get("summarizer_prompt_tokens"))
@@ -279,12 +254,9 @@ class RunStats:
 class TokenUsage:
     """Token counts of one run, kept split so cost can be attributed.
 
-    Two invariants keep readers from double counting:
-
-    - ``cached`` is a subset of ``prompt`` (the OpenAI/DeepSeek shape),
-      so it is reported next to it but never added to ``total``.
-    - ``summarizer`` is billed on top of the turn's own ``prompt`` and
-      ``completion``, so ``total`` adds it once.
+    ``cached`` is a subset of ``prompt``, so it is reported next to it but never
+    added to ``total``.  ``summarizer`` is billed on top of the turn's own
+    ``prompt``/``completion``, so ``total`` adds it once.
     """
 
     prompt: int = 0
@@ -320,8 +292,8 @@ class LatencyBreakdown:
     overhead: float = 0.0
 
     def __post_init__(self) -> None:
-        # A wall-clock subtraction can go ``NaN``/``inf``; such a record
-        # would serialize to JSON that no strict reader accepts.
+        # A wall-clock subtraction can go ``NaN``/``inf``; such a record would
+        # serialize to JSON that no strict reader accepts.
         self.llm = _finite(self.llm)
         self.tool = _finite(self.tool)
         self.summarizer = _finite(self.summarizer)
@@ -400,8 +372,8 @@ class RunConfig:
 class RunMetrics:
     """The measurements of one run (``run.metrics``, one per JSONL line).
 
-    Join keys live here too: the evaluation index reads ``runs.jsonl``
-    alone and must be able to slice without opening traces.
+    Join keys live here too: the evaluation index reads ``runs.jsonl`` alone and
+    must be able to slice without opening traces.
     """
 
     run_id: str = ""
@@ -438,8 +410,8 @@ class RunMetrics:
         self.started_at = _finite(self.started_at)
         self.finished_at = _finite(self.finished_at)
         self.duration_ms = _finite(self.duration_ms)
-        # First-token latency is optional: an unusable value means
-        # "unknown", not "instant" (``0`` would drag the p50 down).
+        # First-token latency is optional: an unusable value means "unknown",
+        # not "instant" (``0`` would drag the p50 down).
         self.ttft_ms = _optional_float(self.ttft_ms)
 
     @property
@@ -545,9 +517,9 @@ def finalize_run(trace: "RunTrace", *, status: str, answer: str = "",
                  model: str = "", path: Path | None = None) -> RunMetrics:
     """Close one run: build its metrics, emit ``run.metrics``, append it.
 
-    The single entry point every run owner (webui, CLI, Harbor) calls on
-    its way out, so the trace event and the ``runs.jsonl`` line can never
-    disagree and an error/cancel path cannot silently skip the record.
+    The single entry point every run owner (webui, CLI, Harbor) calls on its way
+    out, so the trace event and the ``runs.jsonl`` line cannot disagree and an
+    error/cancel path cannot silently skip the record.
     """
     stats = trace.stats
     finished = time.time()
@@ -593,24 +565,17 @@ def finalize_run(trace: "RunTrace", *, status: str, answer: str = "",
 async def afinalize_run(trace: "RunTrace", **kwargs: Any) -> RunMetrics:
     """Finalize a run and persist the closing trace events.
 
-    ``finalize_run`` emits ``run.metrics``, and the owning turn has
-    usually already flushed in its own ``finally``.  Emitting then starts
-    a fresh writer task, so without the second flush that task parks on
-    the queue forever (one leaked task per run, holding the trace alive)
-    and the record may never reach the file.  Run owners therefore call
-    this instead of ``finalize_run``.
+    ``finalize_run`` emits ``run.metrics``, and the owning turn has usually
+    already flushed in its own ``finally``.  Emitting then starts a fresh writer
+    task, so without the second flush that task parks on the queue forever (one
+    leaked task per run, holding the trace alive) and the record may never reach
+    the file.  Run owners therefore call this instead of ``finalize_run``.
 
-    Neither flush may mask the run's own error, so a failure is logged.
-
-    Cancellation is honoured rather than swallowed, but it does not cost
-    the record: a ``cancel()`` landing on either flush (a second click on
-    Cancel, cancel-then-delete, shutdown) is remembered, the record is
-    still built and appended, and the ``CancelledError`` is re-raised
-    once the trace tail is on disk -- ``flush``'s own cancel path drains
-    the queue synchronously, so even a second cancel persists
-    ``run.metrics``.  ``asyncio.shield`` is deliberately not used: it
-    hands the cancellation back to the caller anyway and orphans the
-    shielded coroutine as a stray task.
+    A cancellation landing on either flush is remembered rather than swallowed:
+    the record is still built and appended, and the ``CancelledError`` is
+    re-raised once the trace tail is on disk.  ``asyncio.shield`` is deliberately
+    not used — it hands the cancellation back to the caller anyway and orphans
+    the shielded coroutine as a stray task.
     """
     run_id = getattr(trace, "run_id", "")
     # Drain first so the record reports the trace's final size.
@@ -652,16 +617,14 @@ def append_run_metrics(record: RunMetrics | Mapping[str, Any],
                        path: Path | None = None) -> Path:
     """Append one metrics line to ``metrics/runs.jsonl``.
 
-    One newline-terminated line is appended with ``O_APPEND`` so
-    concurrent writers (Harbor runs several trials at once) cannot
-    interleave inside a line.  ``allow_nan=False`` keeps the file valid
-    JSON; the dataclasses already clamp non-finite floats.
+    One newline-terminated line is appended with ``O_APPEND`` so concurrent
+    writers (Harbor runs several trials at once) cannot interleave inside a
+    line.  ``allow_nan=False`` keeps the file valid JSON; the dataclasses already
+    clamp non-finite floats.
 
-    A failed write is logged and swallowed: this runs in the ``finally``
-    path of a run and must never mask the run's own error.  A truncated
-    line fails to parse and is skipped on read.  For the same reason a
-    record that no longer serializes (a field mutated after construction
-    to ``NaN``) is logged rather than raised.
+    A failed write is logged and swallowed: this runs in the ``finally`` path of
+    a run and must never mask the run's own error.  A truncated line fails to
+    parse and is skipped on read.
     """
     entry = record if isinstance(record, RunMetrics) else RunMetrics.from_dict(record)
     target = Path(path) if path is not None else storage.metrics_path()
@@ -715,8 +678,8 @@ def read_run_metrics(path: Path | None = None) -> list[RunMetrics]:
                 parsed = json.loads(line)
             except ValueError:
                 parsed = None
-            # Valid JSON that is not an object (``null``, ``123``, ``[]``)
-            # would otherwise default into a fake ``completed`` run.
+            # Valid JSON that is not an object (``null``, ``123``, ``[]``) would
+            # otherwise default into a fake ``completed`` run.
             if not isinstance(parsed, Mapping):
                 logger.warning("metrics.run.line_skipped path=%s line=%d",
                                target, number)

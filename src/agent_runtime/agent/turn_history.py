@@ -1,26 +1,13 @@
 """The turn-local conversation: full history plus its request view.
 
-``messages`` is the single source of truth shared across turns; ``view``
-is the (possibly compacted) projection actually sent to the model and
-watched by the budget gate. The two are appended in lockstep through a
-single entry point, so the invariant that used to rest on discipline at
-every append site — update one list, never forget the other — is now
-enforced by construction.
+``messages`` is the single source of truth shared across turns; ``view`` is the
+(possibly compacted) projection actually sent to the model. Both are appended
+through one entry point, so they cannot drift apart.
 
-Two cross-compaction anchors live here as projection metadata (they
-never travel on the wire):
-
-* ``_summary_boundary`` — the ``messages`` length when the latest
-  compaction summary was PRODUCED. Only a genuinely new snapshot moves it
-  (no-op refreshes and snapshot reuses keep it): the incremental
-  summarizer reads only ``messages[boundary:]`` plus the previous
-  summary, so a second compaction costs O(new segment), not O(full
-  history). Advancing it on every refresh would chase ``len(messages)``
-  and starve later compactions of input, freezing the snapshot.
-* ``_usage_anchor`` — (measured prompt tokens, view length) from the
-  last response that reported billed usage. Token-budget estimates
-  extrapolate from this anchor: measured truth below it, per-message
-  char-ratio estimates above it.
+Two cross-compaction anchors live here as projection metadata (never on the
+wire): ``_summary_boundary`` (``messages`` length when the latest snapshot was
+produced) and ``_usage_anchor`` (measured prompt tokens + view size from the
+last billed response).
 """
 
 from __future__ import annotations
@@ -45,19 +32,10 @@ def ensure_system_prompt(conversation: Conversation, system: str,
                          memory_block: str = "") -> bool:
     """Insert the harness system prompt once, before the first user message.
 
-    Returns True when a system message was inserted, False when the
-    conversation already had one (or there was nothing to insert).
-    Callers use the return value to decide whether injection-point-A
-    trace events (``skills.loaded``, ``memory.recall``) describe a
-    prompt the model will actually see.
-
-    ``memory_block`` (persistent-memory convention plus tree) comes
-    before ``skills_block`` (rendered plain skill text) after ``system``
-    as part of the same system message (injection point A): memory
-    carries session-level identity (who the user is, what persists),
-    skills carry task-level procedure (how to act) — the more stable
-    context leads.  One resident system message keeps memory
-    strategies coherent.
+    Returns True when a system message was inserted, so callers can tell
+    whether injection-point-A trace events describe a prompt the model will
+    actually see.  Memory precedes skills: session-level identity is more
+    stable than task-level procedure.
     """
     parts = [part for part in (system, memory_block, skills_block) if part]
     if not parts:
@@ -88,21 +66,16 @@ class TurnHistory:
                  runtime: RuntimeConfig | None = None) -> None:
         self.messages = messages
         self.view: list[dict[str, Any]] = list(messages)
-        # Explicit summarizer (provider object or lazy factory); when
-        # omitted, the context layer's context-local default applies.
+        # Explicit summarizer (provider object or lazy factory); when omitted,
+        # the context layer's context-local default applies.
         self.summarizer = summarizer
         self._count_reasoning = count_reasoning
         self._runtime = runtime
-        # messages length at the last summary-producing compaction.
         self._summary_boundary: int = 0
-        # (prompt_tokens, view length, view chars) of the last measured
-        # response: the token estimator's calibration anchor.
         self._usage_anchor: tuple[int, int, int] | None = None
-        # Turn-level billed-token ledger (main LLM + summarizer sub-calls).
-        # ``record_usage`` feeds the anchor AND the main counters;
-        # ``record_summarizer_usage`` feeds only the summarizer counters
-        # (its request never travels on ``view`` so it must not move the
-        # anchor). ``token_totals`` is what ``agent.end`` reports.
+        # Turn-level billed-token ledger.  Summarizer sub-calls feed only their
+        # own counters: their request never travels on ``view``, so they must
+        # not move the anchor.
         self._main_prompt_tokens: int = 0
         self._main_completion_tokens: int = 0
         self._main_cached_tokens: int = 0
@@ -131,16 +104,10 @@ class TurnHistory:
                      cached_tokens: int = 0) -> None:
         """Anchor the token estimate at the provider's billed usage.
 
-        ``prompt_tokens`` is the measured size of the request the
-        provider just accepted. Anchoring at the current view length
-        lets the estimator extrapolate only over messages appended
-        after the measurement — the short, well-calibrated tail.
-        Reasoning chars are counted exactly as the budget layer counts
-        them (echo policy); otherwise the anchor ratio would skew the
-        moment the endpoint stops replaying reasoning.
-
-        Both counters also feed the turn-level token ledger so
-        ``agent.end`` can report the true billed cost offline.
+        Anchoring at the current view length lets the estimator extrapolate
+        only over messages appended after the measurement.  Reasoning chars
+        are counted with the same echo policy as the budget layer, or the
+        ratio would skew the moment the endpoint stops replaying reasoning.
         """
         prompt_tokens = int(prompt_tokens or 0)
         completion_tokens = int(completion_tokens or 0)
@@ -153,12 +120,7 @@ class TurnHistory:
 
     def record_summarizer_usage(self, prompt_tokens: int,
                                 completion_tokens: int = 0) -> None:
-        """Accumulate one summarizer sub-call into the turn ledger.
-
-        The summarizer request never travels on ``view`` so it must not
-        move ``_usage_anchor``; it still burns billed tokens and belongs
-        in the ``agent.end`` totals.
-        """
+        """Accumulate one summarizer sub-call into the turn ledger."""
         self._summarizer_prompt_tokens += int(prompt_tokens or 0)
         self._summarizer_completion_tokens += int(completion_tokens or 0)
 
@@ -187,9 +149,9 @@ class TurnHistory:
                            force_budget: int | None = None) -> None:
         """Rebuild the request view via the context genome's strategy.
 
-        ``force_budget`` (used by the context-window hard gate) shrinks
-        the working budget so the strategy must compact below the size
-        that the provider just rejected.
+        ``force_budget`` (used by the context-window hard gate) shrinks the
+        working budget so the strategy must compact below the size the
+        provider just rejected.
         """
         new_view = await apply_context_strategy(
             self.messages, context, compact_messages=self.view,
@@ -202,23 +164,15 @@ class TurnHistory:
             usage_sink=self.record_summarizer_usage)
         if new_view is not self.messages:
             if new_view != self.view:
-                # The view content changed: the anchor measured the OLD
-                # mix (tool-heavy), not the new summary-heavy mix. Drop it
-                # so the next estimate uses the default ratio until the
-                # next billed response re-anchors (one iteration later) —
-                # a stale ratio drifts worse than no ratio. A strategy
-                # that rebuilds an identical view (turn_fold) keeps the
-                # anchor: the measured mix has not changed.
+                # The anchor measured the old tool-heavy mix, not the new
+                # summary-heavy one; a stale ratio drifts worse than none.
                 self._usage_anchor = None
             old_summary = extract_summary(self.view)
             self.view = new_view
             new_summary = extract_summary(new_view)
-            # Advance past the summarized region only when a NEW snapshot
-            # was produced. No-op refreshes (view already under budget) and
-            # snapshot reuses (nothing novel to summarise) keep the old text:
-            # advancing there would chase len(messages) every iteration,
-            # leaving later compactions an empty segment and freezing the
-            # snapshot forever while history grows past it.
+            # Advance only on a genuinely new snapshot: advancing on no-op
+            # refreshes would chase ``len(messages)``, leaving later
+            # compactions an empty segment and freezing the snapshot.
             if new_summary is not None and new_summary != old_summary:
                 self._summary_boundary = len(self.messages)
 
@@ -228,25 +182,15 @@ class TurnHistory:
                           factor: float = 0.7) -> bool:
         """Force the view below the size the provider just rejected.
 
-        The context-window hard gate: estimates can undershoot, and when
-        the provider answers 400 the estimate is not the ruler that
-        matters.  Rebuild the view against 70% of its *measured* size,
-        so the resend is below whatever limit rejected it.
-
-        Returns whether the view actually got strictly smaller.  ``False``
-        means resending would be rejected again — the caller must not
-        spend a retry on it.
-
-        This lives on the history, not on the recovery policy layer,
-        because it only ever touches ``view``/``_usage_anchor``: the
-        caller re-reads ``history.view`` for the next attempt, so no
-        reference to the old list has to be updated from the outside.
+        Estimates can undershoot, and when the provider answers 400 the
+        estimate is not the ruler that matters: rebuild against 70% of the
+        *measured* size.  Returns whether the view got strictly smaller;
+        ``False`` means a resend would be rejected again.
         """
         current = request_view_size(self.view, context, self._usage_anchor,
                                     count_reasoning=self._resolve_count_reasoning())
-        # Measure the shrink with the PRE-refresh anchor: refresh clears
-        # it (stale mix), and comparing old vs new sizes with different
-        # rulers would misjudge the result.
+        # Measure with the PRE-refresh anchor: refresh clears it, and
+        # comparing sizes taken with different rulers would misjudge.
         anchor_before = self._usage_anchor
         target = max(1, int(current * factor))
         before = self.view
@@ -259,8 +203,7 @@ class TurnHistory:
                 iteration, exc)
             return False
         if self.view is before:
-            # The strategy rebuilt nothing: the view is identical, so a
-            # resend would hit the same wall.
+            # Nothing was rebuilt, so a resend would hit the same wall.
             return False
         after = request_view_size(self.view, context, anchor_before,
                                   count_reasoning=self._resolve_count_reasoning())

@@ -1,8 +1,7 @@
 """Request-view adapter: genome in, provider-ready view out.
 
-Unpacks the harness :class:`ContextGenome` (strategy plus all
-view-shaping knobs) into the strategy functions, which stay pure and
-parameter-driven.
+Unpacks the harness :class:`ContextGenome` into the strategy functions, which
+stay pure and parameter-driven.
 """
 
 from __future__ import annotations
@@ -40,24 +39,21 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
     """Build the request view of ``messages`` under the memory genome.
 
     ``messages`` is the FULL conversation (the source of truth, never mutated
-    here). ``compact_messages`` is the working/compacted view carried across
-    turns: it is used *only* to decide whether a re-compaction is due (its size
-    vs the context budget), while the actual compaction always summarizes or
-    compacts the FULL history. This keeps the per-turn request bounded and
-    avoids re-compacting on every iteration.
+    here). ``compact_messages`` is the working view carried across turns: it is
+    used *only* to decide whether a re-compaction is due (its size vs the
+    budget), while compaction always works on the FULL history — that keeps the
+    per-turn request bounded without re-compacting on every iteration.
 
-    When a re-compaction actually produces a new view, a ``context.{strategy}``
-    event is emitted on ``trace`` (if provided) so the caller stays free of
-    strategy logic.
+    When a re-compaction produces a new view, a ``context.{strategy}`` event is
+    emitted on ``trace`` so the caller stays free of strategy logic.
 
-    ``fallback_strategy`` names the registry entry used when a
-    ``force_budget`` hard gate produces no shrinkage (resending the view
-    would be rejected again). It defaults to the deterministic compactor;
-    pass a registered custom name to override without touching this
-    adapter (OCP: new strategies plug in via ``register_context_strategy``).
+    ``fallback_strategy`` names the registry entry used when a ``force_budget``
+    hard gate produces no shrinkage (resending the view would be rejected
+    again).  It defaults to the deterministic compactor; pass a registered
+    custom name to override without touching this adapter.
 
-    Reasoning chars are budgeted only when the echo policy will replay
-    them on the wire (see the shared wire policy).
+    Reasoning chars are budgeted only when the echo policy will replay them on
+    the wire.
     """
     from agent_runtime.agent.context.strategies import ContextStrategyRequest
 
@@ -80,8 +76,8 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
             and _view_size(working, count, unit, usage_anchor) <= budget):
         return working
 
-    # Wall time spent building the view: summarizer calls plus the
-    # deterministic compactor.  ``run.metrics`` sums it from this event.
+    # Wall time spent building the view: summarizer calls plus the deterministic
+    # compactor.  ``run.metrics`` sums it from this event.
     started = time.monotonic()
     request = ContextStrategyRequest(
         messages=messages,
@@ -105,11 +101,10 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
             and result is not messages
             and _view_size(result, count, unit, usage_anchor)
             >= _view_size(working, count, unit, usage_anchor)):
-        # Hard gate with no shrinkage: resending this view would be
-        # rejected again, burning a retry. Fall back to the registered
-        # ``fallback_strategy`` (deterministic compactor by default) —
-        # if even that cannot shrink, ``TurnHistory.shrink_view`` reports
-        # no-progress by size.
+        # Hard gate with no shrinkage: resending this view would be rejected
+        # again, burning a retry.  Fall back to ``fallback_strategy``; if even
+        # that cannot shrink, ``TurnHistory.shrink_view`` reports no-progress by
+        # size.
         logger.warning("context.force_budget.no_shrink falling back to %s",
                        fallback_strategy)
         fallback = CONTEXT_STRATEGY_DEFINITIONS.get(fallback_strategy)
@@ -133,10 +128,10 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
             summarizer=summarizer,
             usage_sink=usage_sink if usage_sink is not None else options.get("usage_sink"),
         )
-        # The deterministic compactor path is char-metered: convert an
-        # explicit token-unit force budget through the anchor ratio.
-        # Custom fallback strategies receive the raw force budget and do
-        # their own unit handling.
+        # The deterministic compactor path is char-metered: convert an explicit
+        # token-unit force budget through the anchor ratio.  Custom fallback
+        # strategies receive the raw force budget and do their own unit
+        # handling.
         if fallback_strategy == "compact_observations":
             if unit == "tokens":
                 force_chars = max(1, int(force_budget
@@ -162,8 +157,8 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
                    budget_unit=unit, budget=budget)
         summary = extract_summary(result)
         if summary is not None:
-            # The summary text lives on the trace (per-run, queryable)
-            # instead of a shared on-disk file.
+            # The summary text lives on the trace (per-run, queryable) instead of
+            # a shared on-disk file.
             trace.emit(f"context.{strategy}.text", iteration, summary=summary)
     return result
 

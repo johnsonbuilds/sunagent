@@ -83,10 +83,8 @@ Use exactly these sections:
 ## 4. Open Questions
 - ..."""
 
-# Appended when a previous compaction summary exists: the new summary
-# must integrate it, not replace it — earlier work state and failure
-# lessons survive every compaction (same anchoring rule as Gemini CLI /
-# opencode update mode).
+# Appended when a previous snapshot exists: the new summary must integrate
+# it, so earlier work state and failure lessons survive every compaction.
 SUMMARIZER_INTEGRATION_ADDENDUM = f"""
 
 A PREVIOUS SNAPSHOT message — one that starts with the
@@ -104,13 +102,7 @@ conversation history. You must merge it into your output:
 
 
 def _is_summary_message(message: dict[str, Any]) -> bool:
-    """Whether ``message`` is a machine-generated compaction summary.
-
-    Summaries ride the request view as ``user`` messages so every provider
-    accepts them.  Provenance metadata identifies the runtime-authored
-    snapshot; the content prefix remains its payload marker and the text
-    sliced off by :func:`extract_summary`.
-    """
+    """Whether ``message`` is a machine-generated compaction summary."""
     metadata = message.get("metadata")
     return (
         is_runtime_user_message(message)
@@ -134,19 +126,16 @@ def _resolve_summarizer(llm: Any) -> Any:
     """Resolve an injected summarizer object or lazy factory."""
     if llm is None:
         return None
-    # A factory (e.g. the provider builder) is called on first use; a
-    # ready adapter exposes ``chat`` and is used as-is.
     if callable(llm) and not hasattr(llm, "chat"):
         return llm()
     return llm
 
 
 def _strip_leading_system(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Drop any leading ``system`` messages (the agent's persona/system prompt).
+    """Drop leading ``system`` messages.
 
-    The summarizer must see the interaction *history*, not be re-primed with the
-    agent's own system prompt, which would make it re-enter the agent/tool-calling
-    role and emit a tool call instead of a summary.
+    Re-priming the summarizer with the agent's own system prompt makes it
+    re-enter the tool-calling role and emit a tool call instead of a summary.
     """
     index = 0
     while index < len(messages) and messages[index].get("role") == "system":
@@ -155,12 +144,7 @@ def _strip_leading_system(messages: list[dict[str, Any]]) -> list[dict[str, Any]
 
 
 class _SummaryCall(NamedTuple):
-    """One summarizer response plus the metadata needed to diagnose it.
-
-    ``finish_reason`` and ``reasoning_chars`` distinguish a snapshot that
-    the provider cut at ``max_tokens`` from one the model stopped on its
-    own without emitting every required section.
-    """
+    """One summarizer response plus the metadata needed to diagnose it."""
 
     content: str | None
     prompt_tokens: int
@@ -178,22 +162,10 @@ async def _generate_summary(messages: list[dict[str, Any]], *,
                             prompt: str | None = None) -> _SummaryCall:
     """Ask the LLM for a structured summary of the compaction segment.
 
-    The payload is assembled as: a fixed summarizer-identity system message, the
-    raw interaction history (agent system prompt stripped), optionally the
-    previous snapshot as a leading user message, and a final user
-    instruction carrying the extraction schema. Ordering the instruction last
-    exploits recency to dominate the model's output, and removing the agent's
-    system prompt stops the model from imitating the agent's tool calls.
-
-    ``summary_max_tokens`` caps the summarizer's output at the request
-    level (pi-style bound: a snapshot is a checkpoint, not a retelling).
-    ``summary_reasoning_effort`` is forwarded as the provider's
-    ``reasoning_effort`` and defaults to ``none``: summarizing is a
-    mechanical, template-driven extraction, so thinking only eats the
-    output budget.  Passing ``None`` omits the parameter for endpoints
-    that reject it.  Exceptions propagate to the caller, which records
-    them on the trace and falls back to the deterministic compactor
-    instead of aborting the turn.
+    The instruction goes last so recency dominates the output.  Reasoning
+    defaults to ``none``: extraction is mechanical, so thinking only eats the
+    output budget.  Exceptions propagate; the caller falls back to the
+    deterministic compactor instead of aborting the turn.
     """
     from agent_runtime.agent.tokens import response_usage
 
@@ -240,15 +212,10 @@ _REQUIRED_SECTIONS = [
 
 def _validate_summary(summary: str, *,
                       summary_max_tokens: int = DEFAULT_SUMMARY_MAX_TOKENS) -> None:
-    """Raise ``ValueError`` when ``summary`` does not look like a valid
-    structured summary produced by the summarizer.
+    """Raise ``ValueError`` when ``summary`` is not a usable snapshot.
 
-    A valid summary must be non-empty, contain all four required sections,
-    and stay within the output cap — a summary that grows toward the
-    history it replaces defeats compaction (Gemini CLI rejects an
-    inflated summary outright; we do the same at roughly 6 chars per
-    token, generous to CJK text where the ratio is closer to 2-3).
-    section headers.
+    The cap is ~6 chars per token, generous to CJK text (closer to 2-3): a
+    summary that grows toward the history it replaces defeats compaction.
     """
     stripped = summary.strip()
     if not stripped:
@@ -285,32 +252,18 @@ async def summarize_history(messages: list[dict[str, Any]], *,
 
     Structure: ``leading + [summary] + preserved user messages + tail``.
 
-    * ``leading`` — the system prompt and the original task (round 0);
-      it anchors the final answer to the task definition and never moves,
-      which also keeps the request prefix stable across compactions.
-    * summary — a structured snapshot injected as a ``user`` message.
-    * preserved users — mid-conversation user messages kept VERBATIM
-      (newest first within ``user_preserve_budget`` chars, either budget
-      unit).  User messages are
-      the authoritative record of intent; summarising them risks the
-      next reasoning step missing a mid-session redirect (opencode /
-      Codex keep them verbatim for the same reason).  The budget is
-      applied to all history rather than only the new segment, so a
-      user message kept verbatim once is never lost when the incremental
-      boundary advances past it; messages beyond the budget feed the
-      summarizer instead of being dropped.
-    * tail — the most recent ``tail_rounds`` rounds verbatim, preserving
-      tool-call pairs and short-term coherence.
+    ``leading`` (system prompt + round 0) never moves, which anchors the task
+    and keeps the request prefix stable across compactions.  User messages are
+    kept verbatim because they are the authoritative record of intent, and the
+    budget spans all history so one kept by an earlier compaction survives the
+    boundary advancing past it.  The tail keeps the last ``tail_rounds`` rounds
+    verbatim so tool-call pairs stay intact.
 
-    Incremental input: with ``boundary`` (the messages length when the
-    previous summary was produced) and ``previous_summary``, the
-    summarizer reads only ``messages[boundary:]`` plus that snapshot and
-    must integrate it — a second compaction costs O(new segment), not
-    O(full history).  Below budget, or when nothing older can collapse,
-    the input list is returned unchanged; summarizer failure or an
-    invalid/oversized summary falls back to ``compact_observations``.
-    Observability: the summary text is emitted on ``trace`` (per-run)
-    rather than written to a shared file.
+    With ``boundary`` and ``previous_summary`` the summarizer reads only the new
+    segment and must integrate the snapshot, so a second compaction costs
+    O(new segment).  Below budget the input list is returned unchanged;
+    summarizer failure or an invalid summary falls back to
+    ``compact_observations``.
     """
     count = _count_reasoning(count_reasoning)
     if unit == "tokens":
@@ -328,28 +281,23 @@ async def summarize_history(messages: list[dict[str, Any]], *,
     if _view_size(messages, count, unit, usage_anchor) <= (budget or DEFAULT_CONTEXT_BUDGET):
         return messages
 
-    # A snapshot must never enter the source history; filter it so an
-    # imported one cannot freeze the incremental boundary via stale text.
+    # A snapshot must never enter the source history: stale text would freeze
+    # the incremental boundary.
     leading = [message for message in messages[:starts[0]]
                if not _is_summary_message(message)]
     tail_start = starts[-tail_rounds]
     tail = messages[tail_start:]
 
-    # Two scan pools with different jobs: ``segment`` is the *incremental*
-    # input the summarizer must integrate (O(new segment), not O(full
-    # history)); ``preserve_pool`` spans all of history because a user
-    # message kept verbatim by an earlier compaction must survive the
-    # boundary advancing past it.  Deriving both from one list is what
-    # silently dropped verbatim users on the second compaction.
+    # ``segment`` is the incremental summarizer input; ``preserve_pool`` spans
+    # all history so a user message kept by an earlier compaction survives the
+    # boundary advancing past it.
     segment = [message for message in messages[max(starts[0], boundary):tail_start]
                if not _is_summary_message(message)]
     preserve_pool = [message for message in messages[starts[0]:tail_start]
                      if not _is_summary_message(message)]
 
-    # user_preserve_budget stays in chars under either unit: routing it
-    # through the anchor ratio would add conversion noise to a coarse guard.
-    # Scanning newest-first keeps recency priority, so old users can never
-    # crowd a recent redirect out of the budget.
+    # Stays in chars under either unit: converting through the anchor ratio
+    # would add noise to a coarse guard.
     preserved: list[dict[str, Any]] = []
     user_chars = 0
     for message in reversed(preserve_pool):
@@ -361,11 +309,8 @@ async def summarize_history(messages: list[dict[str, Any]], *,
                 user_chars += len(content)
     preserved.reverse()  # restore chronological order
 
-    # Novelty is judged on the incremental segment alone: a boundary already
-    # covered by the previous snapshot must keep the zero-LLM-call fast path.
-    # The snapshot must cover the verbatim-kept users of this segment so the
-    # boundary can safely advance past them; older preserved users are
-    # already described by the text the previous summary was built from.
+    # Judged on the segment alone so a boundary already covered by the previous
+    # snapshot keeps the zero-LLM-call fast path.
     kept = {id(message) for message in preserved}
     novel = [message for message in segment if id(message) not in kept]
 
@@ -390,8 +335,7 @@ async def summarize_history(messages: list[dict[str, Any]], *,
     for attempt in (1, 2):
         attempt_input = summarizer_input
         if attempt == 2 and full_input_chars > DEFAULT_SUMMARIZER_INPUT_CAP_CHARS:
-            # Retry on a deterministically folded copy: same pairs/users,
-            # old observations shrunk — attacks the likely cause.
+            # Retry on a folded copy: same pairs/users, old observations shrunk.
             attempt_input = compact_observations(
                 summarizer_input, budget=DEFAULT_SUMMARIZER_INPUT_CAP_CHARS,
                 exempt_tools=exempt_tools, count_reasoning=count)
@@ -419,7 +363,7 @@ async def summarize_history(messages: list[dict[str, Any]], *,
                     logger.debug("context.summary.usage_sink_failed",
                                  exc_info=True)
         except Exception as exc:
-            # Billed call failed before producing a snapshot; fall back.
+            # Billed call failed before producing a snapshot.
             if trace is not None:
                 trace.emit("context.llm_summary.error", iteration,
                            error=str(exc)[:500], error_type=type(exc).__name__,
@@ -440,7 +384,7 @@ async def summarize_history(messages: list[dict[str, Any]], *,
             _validate_summary(summary, summary_max_tokens=summary_max_tokens)
             break
         except ValueError as exc:
-            # Unusable snapshot (flaky non-compliance); retry once, then fall back.
+            # Flaky non-compliance: retry once, then fall back.
             if trace is not None:
                 trace.emit("context.llm_summary.invalid", iteration,
                            reason=str(exc)[:500], attempt=attempt,

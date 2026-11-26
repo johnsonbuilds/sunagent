@@ -1,44 +1,21 @@
 """Persistent cross-session memory: workspace files the agent owns.
 
-Enabled by ``RuntimeConfig.memory_enabled`` (``AGENT_RUNTIME_MEMORY``,
-any of ``1``/``true``/``on``, case-insensitive; default off).
-The composition root resolves that flag once and passes it to
-:func:`render_memory_block`; ``enabled=None`` resolves the environment
-once here, for callers with no composition root.  This switch is the
-only control over whether memory is rendered: callers always supply a
-workspace, and the workspace's presence is never used as a hidden
-on/off switch.  When enabled, the agent loop renders a memory block into
-the system prompt at session start — injection point A, the same channel
-as the skills block — consisting of:
+Enabled by ``RuntimeConfig.memory_enabled`` (``AGENT_RUNTIME_MEMORY``, default
+off).  When on, the agent loop renders a memory block into the system prompt at
+session start (injection point A, same channel as the skills block): a short
+convention paragraph plus a flat listing of the memory directory.  File
+contents are never read.
 
-* a short convention paragraph (what memory is, how to update it), and
-* a flat listing of the memory directory (one line per file, path plus
-  human size; no file contents are read).
+The directory lives under the runtime home (``workspace/memory/`` by default),
+not in the sandbox, so memory survives a change of sandbox;
+``RuntimeConfig.memory_dir`` overrides it.  The listing is spelled
+sandbox-relative because the file tools resolve paths there and refuse
+anything that escapes, so a memory directory outside the sandbox is reported
+at warning level and skipped rather than rendered as unusable paths.
 
-The memory directory is *not* part of the sandbox.  It lives under the
-runtime home -- ``storage.runtime_home()/memory``, i.e. ``workspace/memory/``
-by default, next to ``sessions/`` and ``traces/`` -- so memory survives a
-change of sandbox and stays put even when the sandbox is narrowed to a
-subdirectory.  ``RuntimeConfig.memory_dir`` (``AGENT_RUNTIME_MEMORY_DIR``)
-overrides the location outright.  The listing is still *spelled* relative to the sandbox root
-(``workspace/memory/notes.md`` with the default layout) because the file
-tools resolve relative paths there and refuse anything that escapes it; a
-memory directory outside the sandbox therefore cannot be reached by the
-agent, and is reported at warning level and skipped rather than silently
-rendered as unusable paths.
-
-The agent reads and updates memory with the ordinary file tools
-(read_file / write_file / edit_file, run_command for renames and
-pruning).  The harness never parses or interprets memory content: the
-filesystem layout — folders, names, file formats — is entirely the
-agent's choice, refreshed only when the next session renders a new
-tree.  Benchmark harnesses (tb-v4, code-v16) never set the env var, so
-the memory feature leaves no trace on those paths.
-
-The convention text below is a working draft; it lives in code (not in
-harness YAML) because memory is a deployment property, not a task
-gene — same family as ``AGENT_RUNTIME_WORKSPACE``.  Change history is
-tracked by git alone.
+The agent reads and updates memory with the ordinary file tools; the harness
+never parses its content.  The convention text lives in code (not harness
+YAML) because memory is a deployment property, not a task gene.
 """
 
 from __future__ import annotations
@@ -67,10 +44,8 @@ MEMORY_DIR = "memory"
 #: Cap on listed entries, mirroring the skills-block budgets.
 MAX_MEMORY_ENTRIES = 200
 
-#: Cap on the rendered tree *listing* (the one-line-per-file section).
-#: The convention paragraph and section header are small and fixed, so
-#: this effectively bounds the whole block; the truncation marker may
-#: push the listing slightly over the cap, as with skills.
+#: Cap on the rendered tree *listing*; the convention paragraph and header
+#: are small and fixed, so this effectively bounds the whole block.
 MAX_MEMORY_CHARS = 4000
 
 #: Marker appended when the listing exceeds either cap.
@@ -118,12 +93,9 @@ class MemoryView:
 def memory_root(memory_dir: str | Path | None = None) -> Path:
     """The absolute directory that holds persistent memory.
 
-    Anchored on :func:`agent_runtime.storage.runtime_home` -- not on the
-    agent's sandbox -- so memory counts as durable run state, like
-    ``sessions/`` and ``traces/``.  ``memory_dir`` (from
-    ``RuntimeConfig.memory_dir``) overrides it; a relative override
-    resolves against the process working directory, exactly like
-    ``AGENT_RUNTIME_HOME``.
+    Anchored on :func:`agent_runtime.storage.runtime_home`, not on the agent's
+    sandbox, so memory counts as durable run state.  A relative override
+    resolves against the process working directory, like ``AGENT_RUNTIME_HOME``.
     """
     raw = (str(memory_dir).strip() if memory_dir is not None else "")
     if not raw:
@@ -144,12 +116,8 @@ def _display_prefix(memory_dir: Path, workspace_root: Path) -> str | None:
     """How the model must spell a memory path, or ``None`` if unreachable.
 
     File tools resolve relative paths against the sandbox root and reject
-    anything that escapes it, so the listing needs a sandbox-relative
-    prefix: ``"workspace/memory/"`` for the default layout (sandbox = the
-    project root, memory = the runtime home's ``memory/``), ``""`` when
-    memory *is* the sandbox root.  ``None`` means the memory directory is
-    outside the sandbox, where the agent could not open those files at
-    all.
+    anything that escapes it, so the listing needs a sandbox-relative prefix.
+    ``None`` means the agent could not open those files at all.
     """
     try:
         rel = memory_dir.resolve().relative_to(workspace_root.resolve())
@@ -180,10 +148,8 @@ def _human_size(size: int) -> str:
 def _scan_tree(memory_dir: Path, prefix: str) -> list[tuple[str, int]]:
     """Flat, deterministically ordered (path, size) pairs under memory/.
 
-    Hidden entries (dot-prefixed files and directories) and symbolic
-    links (file or directory) are skipped, so a link pointing outside
-    the workspace can never leak an external file's size into the tree
-    or its hash.  Directory symlinks are additionally never followed.
+    Hidden entries and symlinks are skipped so a link pointing outside the
+    workspace can never leak an external file's size into the tree or its hash.
     Sizes come from stat, so no file contents are read while rendering.
     """
     entries: list[tuple[str, int]] = []
@@ -213,18 +179,16 @@ def _scan_tree(memory_dir: Path, prefix: str) -> list[tuple[str, int]]:
 def _render_tree(entries: list[tuple[str, int]]) -> tuple[str, bool]:
     """Render entry lines under the entry/char caps.
 
-    The char budget counts each line plus its ``"\\n"`` separator, so the
-    listing (excluding the truncation marker) never exceeds
-    ``MAX_MEMORY_CHARS``.  Returns the rendered text and whether the
-    caps truncated anything.
+    The char budget counts each line plus its separator, so the listing never
+    exceeds ``MAX_MEMORY_CHARS``.  Returns the text and whether anything was
+    truncated.
     """
     lines: list[str] = []
     chars = 0
     shown = 0
     for path, size in entries:
         line = f"  {path} ({_human_size(size)})"
-        # +1 for the "\n" separator join() will insert before this line
-        # (every line except the first pays one separator char).
+        # +1 for the "\n" join() inserts before every line but the first.
         cost = len(line) + (1 if lines else 0)
         if (shown >= MAX_MEMORY_ENTRIES
                 or chars + cost > MAX_MEMORY_CHARS):
@@ -252,22 +216,12 @@ def render_memory_block(workspace: Workspace, *,
                         memory_dir: str | Path | None = None) -> MemoryView:
     """Render the memory block for the given workspace.
 
-    Whether memory is rendered is controlled by the ``enabled`` flag
-    (``RuntimeConfig.memory_enabled``).  ``enabled=None`` resolves the
-    environment here once, for callers with no composition root.
-    ``workspace`` is a
-    required collaborator: missing storage is a wiring error, not a
-    second way to turn the feature off.
-
-    A workspace without a ``root`` (Harbor's free-roaming mode) cannot
-    host persistent memory because the renderer scans the local
-    filesystem; that case is reported once at warning level and yields
-    an empty view instead of failing the whole task.
-
-    When enabled, the memory directory is created if absent and only the
-    tree is rendered — file contents are never read.  Filesystem
-    failures (permission denied, a colliding non-directory, a vanished
-    root) degrade to an empty view instead of failing the turn.
+    ``enabled=None`` resolves the environment here once, for callers with no
+    composition root.  ``workspace`` is required: missing storage is a wiring
+    error, not a second way to turn the feature off.  A workspace without a
+    ``root`` (Harbor's free-roaming mode) cannot host memory, since the renderer
+    scans the local filesystem; that and any filesystem failure degrade to an
+    empty view instead of failing the turn.
     """
     if workspace is None:
         raise ValueError(

@@ -1,18 +1,14 @@
 """Turn guard: the policies that can stop or reshape an in-flight turn.
 
-The loop decides *when* to call the model and which tools to run; this
-module owns the cross-cutting policy around those decisions:
+The loop decides *when* to call the model and which tools to run; this module
+owns the cross-cutting policy around those decisions: the same-tool /
+same-error fuse and its stop answer, the budget reminder injected at
+configured iteration fractions, and the observation returned when a tool call
+is rejected before execution.  Keeping these here lets the loop stay a
+coordinator.
 
-* the same-tool / same-error fuse, including its stop answer,
-* the budget reminder injected at configured iteration fractions, and
-* the observation returned to the model when a tool call is rejected
-  before execution.
-
-Keeping these here lets the loop stay a coordinator: it asks the guard
-whether to stop and otherwise continues with the next request.
-
-The context-window hard gate (shrink after a provider rejects a request)
-is NOT here: it only touches the request view, so it belongs to
+The context-window hard gate (shrink after a provider rejects a request) is
+NOT here: it only touches the request view, so it belongs to
 ``TurnHistory.shrink_view``.
 """
 
@@ -59,8 +55,7 @@ class TurnGuard:
         self.events = events
         self.max_iterations = max_iterations
         # ``runtime=None`` keeps the historical shape (env resolved once
-        # inside ``resolve_max_retries``); the composition root passes a
-        # config, and then the environment is never consulted again.
+        # inside ``resolve_max_retries``).
         self.error_budget = SameToolErrorBudget(
             resolve_max_retries(harness.recovery.tool_error_max_retries,
                                 runtime=runtime))
@@ -70,9 +65,8 @@ class TurnGuard:
 
         Fires once per threshold: reports the remaining iteration budget,
         explains what an iteration is, and points the model back at the
-        required result. Early reminders ask for an exploration cutoff;
-        later ones ask for production and verification. The reminder is
-        informational, not a restriction.
+        required result.  Early reminders ask for an exploration cutoff; later
+        ones ask for production and verification.
         """
         reminder = self.harness.control.budget_reminder
         if not reminder.enabled:
@@ -143,8 +137,7 @@ class TurnGuard:
         """Observe a tool call rejected by validation; it never executed.
 
         Side-effects (logging / trace events) happen exactly once here; the
-        returned observation message is the caller's responsibility to append
-        via :meth:`TurnHistory.append`.
+        caller appends the returned message via :meth:`TurnHistory.append`.
         """
         tool_call = outcome.tool_call
         rejection = outcome.rejection

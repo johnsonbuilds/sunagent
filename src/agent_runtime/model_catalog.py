@@ -17,10 +17,9 @@ a plain JSON document::
       ]
     }
 
-``id`` is the handle the web UI stores on a session; ``model_id`` is the
-name the provider expects on the wire.  ``api_key`` accepts a literal
-secret or an ``${ENV_VAR}`` / ``env:ENV_VAR`` reference, which is expanded
-when the catalog is loaded.
+``id`` is the handle the web UI stores on a session; ``model_id`` is the name
+the provider expects on the wire.  ``api_key`` accepts a literal secret or an
+``${ENV_VAR}`` / ``env:ENV_VAR`` reference, expanded when the catalog loads.
 
 The catalog is resolved once at the composition root and never exposed
 verbatim: :meth:`ModelCatalog.public` drops the endpoint and the secret so
@@ -103,9 +102,9 @@ def repo_root() -> Path:
 def catalog_candidates() -> list[Path]:
     """Where ``model.json`` may live, in priority order.
 
-    ``AGENT_RUNTIME_MODEL_CATALOG`` is an explicit choice: when it is set
-    the path must exist.  Otherwise the working directory's ``model.json``
-    wins over the repository's own file.
+    ``AGENT_RUNTIME_MODEL_CATALOG`` is an explicit choice: when it is set the
+    path must exist.  Otherwise the working directory's ``model.json`` wins
+    over the repository's own file.
     """
     raw = os.getenv(CATALOG_ENV, "").strip()
     if raw:

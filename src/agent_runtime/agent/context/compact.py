@@ -1,8 +1,7 @@
 """Deterministic observation compaction: LLM-free windowed folding.
 
-Three passes, oldest first — see :func:`compact_observations` for the
-full policy. Message structure is preserved so the result is always a
-protocol-legal sequence.
+Three passes, oldest first — see :func:`compact_observations` for the policy.
+Message structure is preserved so the result is always protocol-legal.
 """
 
 from __future__ import annotations
@@ -22,9 +21,8 @@ from agent_runtime.agent.context.metrics import _count_reasoning, total_chars
 def _round_starts(messages: list[dict[str, Any]]) -> list[int]:
     """Indices where each agent round begins.
 
-    A round is anchored by its first assistant message; the initial
-    user task belongs to round 0 (everything before the first assistant
-    message), so it can never fall inside a compaction cutoff.
+    A round is anchored by its first assistant message; the initial user task
+    belongs to round 0, so it can never fall inside a compaction cutoff.
     """
     starts: list[int] = []
     previous_role = None
@@ -41,15 +39,11 @@ def _round_starts(messages: list[dict[str, Any]]) -> list[int]:
 def _drop_stale_reasoning(message: dict[str, Any]) -> dict[str, Any]:
     """Erase one assistant message's chain-of-thought for replay.
 
-    Old-round thinking is replayed whole to echo-family providers yet has
-    little reuse value for the model's next step — the visible content and
-    tool trail carry the decisions.  A truncated fragment has no
-    independent semantics and can mislead (a half-finished hypothesis
-    reads like a settled conclusion), so the text is dropped wholesale.
-    The key survives as a one-space pad: echo contracts like DeepSeek's
-    require ``reasoning_content`` present on assistant messages, and an
-    empty string 400s on some endpoints.  Idempotent — an already-padded
-    message returns unchanged so pass-2 progress stays honest.
+    Old-round thinking has little reuse value and a truncated fragment can
+    mislead (a half-finished hypothesis reads like a settled conclusion), so
+    the text goes wholesale.  The key survives as a one-space pad: echo
+    contracts like DeepSeek's require ``reasoning_content`` present, and an
+    empty string 400s on some endpoints.  Idempotent.
     """
     reasoning = message.get("reasoning_content") or ""
     if reasoning == " ":
@@ -65,9 +59,8 @@ def _compact_tool_message(message: dict[str, Any], tool: str,
     if len(content) <= head_chars:
         return message
     spill_path = (message.get("metadata") or {}).get("spill_path")
-    # Spilled observations can be paged back losslessly; unspilled ones
-    # only exist in the (model-invisible) full history, so re-running is
-    # then the only recovery — say so honestly instead of forbidding it.
+    # Spilled observations can be paged back losslessly; unspilled ones only
+    # exist in the full history, so re-running is the only recovery.
     spill_note = (f" Full output file: {spill_path} (page it with "
                   f"read_output; do NOT re-run the tool)."
                   if spill_path
@@ -106,29 +99,16 @@ def compact_observations(messages: list[dict[str, Any]], *,
     Three passes, oldest first:
 
     1. Compact tool observations in rounds older than the last
-       ``window_rounds`` rounds (the comfort zone that is normally kept
-       intact), and drop those rounds' assistant reasoning to a one-space
-       pad the same way (stale chain-of-thought is replayed whole yet
-       rarely reused; a truncated fragment would mislead, so it goes
-       wholesale — the key stays for echo contracts).
-       Observations of ``exempt_tools`` survive pass 1 verbatim.
-    2. If the request would still exceed ``budget``, keep compacting
-       tool observations round by round from the oldest round still
-       intact — but never inside the most recent ``keep_recent_rounds``
-       rounds.  Those are the active working context; if they alone
-       exceed the budget the budget yields, not the context.
-       Exempt observations still survive: retrieval anchors (grep/read
-       results) outlive non-exempt ones so multi-step reasoning keeps
-       its references without a re-query round (Gemini CLI exempts
-       retrieval tools from its collapse layer for the same reason).
-    3. If the budget is still exceeded after pass 2 exhausted the
-       non-exempt rounds, exempt observations fold too, using the same
-       ``head_chars``.  Exemption is a fold order, never an exemption
-       from the budget.
+       ``window_rounds`` rounds, and drop those rounds' assistant reasoning to
+       a one-space pad.  Observations of ``exempt_tools`` survive verbatim.
+    2. If still over ``budget``, keep compacting round by round from the oldest
+       intact round, but never inside the most recent ``keep_recent_rounds``
+       rounds: those are the active working context, and if they alone exceed
+       the budget the budget yields, not the context.
+    3. If the budget is still exceeded, exempt observations fold too.
 
-    Reasoning chars count toward ``budget`` only when the echo policy
-    will actually replay them on the wire (see the shared wire policy).
-    Below budget the original list is
+    Reasoning chars count toward ``budget`` only when the echo policy will
+    actually replay them on the wire.  Below budget the original list is
     returned unchanged.
     """
     count = _count_reasoning(count_reasoning)
@@ -180,9 +160,8 @@ def compact_observations(messages: list[dict[str, Any]], *,
     window_cutoff = max(0, total_rounds - window_rounds)
     result, _ = _compact_at(window_cutoff)
 
-    # Pass 2: under budget pressure, shrink the window round by round
-    # until the budget is met or only the keep-recent core remains.
-    # Exempt observations keep surviving this pass.
+    # Pass 2: shrink the window round by round until the budget is met or only
+    # the keep-recent core remains.
     cutoff = window_cutoff
     while (total_chars(result, count) > budget
            and cutoff < never_touch_from_round):
@@ -191,10 +170,7 @@ def compact_observations(messages: list[dict[str, Any]], *,
         if not compacted_any:
             break
 
-    # Pass 3: budget still exceeded — exempt observations fold too.
-    # The exemption is a fold ORDER (retrieval anchors fold last), not
-    # an exemption from the budget; keep_recent_rounds still yields
-    # nothing (the budget yields to the working core, as before).
+    # Pass 3: exemption is a fold order, not an exemption from the budget.
     if exempt and total_chars(result, count) > budget:
         result, compacted_any = _compact_at(cutoff, fold_exempt=True)
     return result

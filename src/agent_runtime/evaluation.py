@@ -1,22 +1,19 @@
 """Evaluation records: one JSON file per benchmark run, aggregated later.
 
-A record closes the loop ``harness -> benchmark -> trace -> score``:
+A record closes the loop ``harness -> benchmark -> trace -> score``: it is
+generated from a Harbor ``jobs/`` directory after a run, keyed by harness id
++ genes hash read from the run's own trace headers (never hand-typed),
+annotated with failure modes during manual analysis, and aggregated by
+``report`` into the family tree with deltas.
 
-* generated from a Harbor ``jobs/`` directory after a run,
-* keyed by harness id + genes hash read from the run's own trace
-  headers (never hand-typed),
-* annotated with failure modes during manual failure analysis,
-* aggregated by ``report`` into the family tree with deltas.
+The headline score follows the benchmark's own reward, so it is comparable
+with Harbor's dataset metric: ``score.rewards`` counts the trials whose
+verifier returned reward 1.0 and ``score.accuracy`` is that count over every
+trial.  ``score.errored`` stays a diagnostic subset and may overlap.
 
-The headline score follows the benchmark's own reward, so it is
-comparable with Harbor's dataset metric: ``score.rewards`` counts the
-trials whose verifier returned reward 1.0 and ``score.accuracy`` is
-that count over every trial.  ``score.errored`` stays a diagnostic
-subset (trials that raised) and may overlap with ``rewards``.
-
-Records are immutable: re-running the same benchmark produces a new
-record file; existing ones are never rewritten (except the failure
-mode annotation, which is its explicit purpose).
+Records are immutable: re-running the same benchmark produces a new record
+file; existing ones are never rewritten (except the failure mode annotation,
+which is its explicit purpose).
 """
 
 from __future__ import annotations
@@ -135,14 +132,10 @@ def extract_record(job_dir: str | Path, *, model: str | None = None,
     for task in tasks:
         counts[task["status"]] = counts.get(task["status"], 0) + 1
 
-    # The headline numbers follow the benchmark's own reward, not the
-    # local status label. Harbor scores a trial by the reward the task's
-    # test.sh wrote, and its dataset metric is the mean of those rewards
-    # over every trial — a trial that errored still counts, worth 0.
-    # ``_trial_status`` additionally reports "error" for trials that
-    # raised, so counting statuses would silently drop trials that
-    # earned a reward before dying (e.g. killed by the agent timeout
-    # after the solution was already on disk).
+    # The headline numbers follow the benchmark's own reward, not the local
+    # status label: Harbor scores a trial by the reward its test.sh wrote and
+    # averages over every trial, so an errored trial still counts (worth 0).
+    # Counting statuses would drop trials that earned a reward before dying.
     rewarded = [task for task in tasks
                 if task.get("reward") is not None and task["reward"] >= 1.0]
     scored = [task for task in tasks if task.get("reward") is not None]
@@ -264,12 +257,10 @@ def annotate_record(reference: str, task: str, mode: str,
 def _record_accuracy(record: dict[str, Any]) -> float | None:
     """Accuracy of one record, recomputed from its per-task rewards.
 
-    Records written before the reward-aligned rename carry a ``score``
-    block with ``passed``/``rate``, where ``rate`` divided by the
-    *judged* trials only (errored ones excluded from the denominator).
-    Every record keeps the per-task rewards, so accuracy is recomputed
-    from them instead of reading that stale aggregate: the record files
-    stay immutable and every harness is compared on the same footing.
+    Records written before the reward-aligned rename carry a ``score`` block
+    with ``passed``/``rate``, where ``rate`` divided by the *judged* trials
+    only.  Every record keeps the per-task rewards, so accuracy is recomputed
+    from them instead of reading that stale aggregate.
     """
     tasks = record.get("tasks") or []
     if not tasks:

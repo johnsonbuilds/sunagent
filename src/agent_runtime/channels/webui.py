@@ -1,11 +1,10 @@
 """Render agent events as web UI frames for browser clients.
 
 The browser is a channel like any other: it consumes the same
-provider-independent events as the CLI and decides on its own how to
-present them. This module owns one thing only -- the translation from
-:class:`~agent_runtime.events.AgentEvent` to plain JSON-serializable
-frames. It performs no I/O of its own beyond handing finished frames to
-the injected sink.
+provider-independent events as the CLI and decides on its own how to present
+them.  This module owns one thing only -- the translation from
+:class:`~agent_runtime.events.AgentEvent` to plain JSON-serializable frames.
+It performs no I/O beyond handing finished frames to the injected sink.
 
 Frame vocabulary (``id`` ties a live frame to its finalized segment):
 
@@ -18,10 +17,9 @@ Frame vocabulary (``id`` ties a live frame to its finalized segment):
     run.completed    {answer, iterations}
     run.error        {stage, error}
 
-A ``segment`` frame is the authoritative, persistable form of a block.
-The browser upserts blocks by ``id``, so live frames and replayed
-history converge on the same DOM without the client tracking two code
-paths.
+A ``segment`` frame is the authoritative, persistable form of a block.  The
+browser upserts blocks by ``id``, so live frames and replayed history
+converge on the same DOM without the client tracking two code paths.
 """
 
 from __future__ import annotations
@@ -51,13 +49,12 @@ def _reasoning_enabled_by_default() -> bool:
 class WebUIChannel:
     """Channel adapter that turns agent events into web UI frames.
 
-    The channel owns presentation decisions (which blocks exist, how a
-    tool call is summarised, when a block is final) but never touches
-    the network: frames are pushed to the injected sink, which is
-    expected to be non-blocking.
+    The channel owns presentation decisions (which blocks exist, how a tool
+    call is summarised, when a block is final) but never touches the network:
+    frames are pushed to the injected sink, which must be non-blocking.
 
-    Unknown event types are ignored so newer runtimes keep working with
-    older channels.
+    Unknown event types are ignored so newer runtimes keep working with older
+    channels.
     """
 
     def __init__(self, *, sink: Callable[[dict[str, Any]], None],
@@ -108,9 +105,8 @@ class WebUIChannel:
     def _on_assistant_delta(self, event: AgentEvent) -> None:
         reasoning = event.data.get("reasoning") or ""
         content = event.data.get("content") or ""
-        # Reasoning is emitted before content: reasoning models stream
-        # the chain of thought ahead of the visible answer in the same
-        # chunk, and the browser renders them as separate blocks.
+        # Reasoning is emitted before content: reasoning models stream the
+        # chain of thought ahead of the visible answer in the same chunk.
         if reasoning and self._show_reasoning:
             self._append_text("reasoning", reasoning)
         if content:
@@ -194,9 +190,9 @@ class WebUIChannel:
     def _append_text(self, kind: str, text: str) -> None:
         if not text:
             return
-        # Consecutive deltas of the same kind extend the current block;
-        # a switch of kind starts a new one so interleaved reasoning and
-        # content keep their relative order in the transcript.
+        # Consecutive deltas of the same kind extend the current block; a
+        # switch of kind starts a new one so interleaved reasoning and content
+        # keep their relative order.
         if self._pending and self._pending[-1]["type"] == kind:
             block = self._pending[-1]
             block["text"] += text

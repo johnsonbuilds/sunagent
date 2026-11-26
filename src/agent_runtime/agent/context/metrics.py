@@ -1,8 +1,7 @@
 """Request-view size metrics: char counting and budget-unit conversion.
 
-Pure helpers with no strategy logic. Both the deterministic compactor
-and the LLM summarizer measure through here so budget accounting stays
-identical whichever strategy runs.
+Pure helpers with no strategy logic, shared by the deterministic compactor and
+the LLM summarizer so budget accounting stays identical either way.
 """
 
 from __future__ import annotations
@@ -15,21 +14,19 @@ from agent_runtime.reasoning_echo import reasoning_echo_enabled
 def _count_reasoning(enabled: bool | None) -> bool:
     """Explicit policy wins; otherwise read the env-backed wire default.
 
-    Production callers (``TurnHistory``) always pass the boolean resolved
-    from ``RuntimeConfig``/``llm.echo_reasoning`` so budget accounting
-    matches the wire projection.  Direct callers (tests, one-off scripts)
-    keep the historical env-backed behavior.
+    Production callers always pass the boolean resolved from
+    ``RuntimeConfig``/``llm.echo_reasoning`` so budget accounting matches the
+    wire projection; direct callers (tests, scripts) keep the env default.
     """
     return reasoning_echo_enabled() if enabled is None else enabled
 
 
 def _message_chars(message: dict[str, Any],
                    count_reasoning: bool = True) -> int:
-    # reasoning_content rides the wire on echo-family providers, so it
-    # must count toward the context budget there — otherwise
-    # long-thinking models outrun compaction without ever tripping it.
-    # When the echo policy strips it, counting it would overestimate the
-    # request and compact observations too early.
+    # reasoning_content rides the wire on echo-family providers, so it must
+    # count there — otherwise long-thinking models outrun compaction without
+    # ever tripping it.  When the echo policy strips it, counting it would
+    # overestimate the request and compact too early.
     total = len(message.get("content") or "")
     if count_reasoning:
         total += len(message.get("reasoning_content") or "")
@@ -55,13 +52,12 @@ def _view_size(messages: list[dict[str, Any]], count_reasoning: bool,
                anchor: tuple[int, int, int] | None = None) -> int:
     """Request-view size in the genome's budget unit.
 
-    ``chars`` (legacy) counts characters.  ``tokens`` extrapolates from
-    the usage anchor ``(measured prompt tokens, view length, view chars)``
-    produced by the last billed response: below the anchor's view length
-    the provider's own number is the truth, above it the tail is
-    estimated with the char ratio the anchor itself calibrates — no
-    tokenizer dependency, and the ratio converges as measurements
-    accumulate.
+    ``chars`` (legacy) counts characters.  ``tokens`` extrapolates from the
+    usage anchor ``(measured prompt tokens, view length, view chars)`` of the
+    last billed response: at the anchor's view length the provider's own number
+    is the truth, above it the tail is estimated with the ratio the anchor
+    itself calibrates — no tokenizer dependency, and the ratio converges as
+    measurements accumulate.
     """
     if unit != "tokens":
         return total_chars(messages, count_reasoning)
@@ -70,12 +66,11 @@ def _view_size(messages: list[dict[str, Any]], count_reasoning: bool,
     tokens, anchor_len, anchor_chars = anchor
     ratio = tokens / anchor_chars if anchor_chars > 0 else 0.25
     if len(messages) == anchor_len:
-        # Exactly the measured request: the provider's number is the
-        # truth, no conversion noise.
+        # Exactly the measured request: no conversion noise.
         return max(1, tokens)
     if len(messages) < anchor_len:
-        # View only shrank since the measurement: scale the measured
-        # number down by the calibrated ratio.
+        # View only shrank since the measurement: scale the measured number
+        # down by the calibrated ratio.
         return max(1, int(total_chars(messages, count_reasoning) * ratio))
     tail_chars = total_chars(messages[anchor_len:], count_reasoning)
     return tokens + int(tail_chars * ratio)
