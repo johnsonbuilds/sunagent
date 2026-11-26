@@ -63,12 +63,12 @@ AST 全量依赖扫描结果暴露出几个值得关注的架构边界问题：
 ### 三、 可扩展性与配置一致性（兼查过度设计）
 
 #### 1. 两个典型的“半迁移”阻断点
-- **`RuntimeConfig` 只迁了一半（35+ 处直接读 env）**：
-  `runtime_config.py` 的初衷很棒——“组合根一次解析，深层显式注入”。但实际扫描显示，**同一批环境变量仍在深层模块被重复读取**：
-  - `agent/chat.py:71,89,303,350` 仍在读 `AGENT_RUNTIME_STREAM_IDLE_TIMEOUT` / `MAX_REASONING_CHARS` / `RETRY_4XX` / `STREAM`；
-  - `providers/llm.py:25,131,144,145,372` 仍在读 `AGENT_RUNTIME_REASONING_EFFORT` / `STREAM_USAGE` / `MODEL_ID` / `LLM_BASE_URL` / `REASONING_ECHO`；
-  - `agent/tool_error_budget.py:36`、`execution/local.py:101`、`execution/harbor.py:115`、`execution/guard.py:208` 也各自直接 `os.getenv`；
-  - `integrations/harbor.py:55` 甚至直接修改全局进程状态 `os.environ[ENV_MEMORY] = "0"`（多任务并发或同进程单测下会污染其他执行流）。
+- **`RuntimeConfig` 已收口（P0 完成，2026-11-26）**：
+  `runtime_config.py` 的契约现在是“组合根一次解析，深层显式注入”。除 `runtime_config.py` 自身外，`agent_runtime` 里剩下的 `os.getenv` 可归为两类：
+  - **可接受的边缘/一次性读取**：`integrations/harbor.py`（日志流开关）、`channels/{cli,webui}.py`（渲染开关）、`storage.py`（`AGENT_RUNTIME_HOME`，按调用读取以便测试改环境）、`tools/code.py`（`AGENT_RUNTIME_PYTHON`）、`trace.py`（`ENV_WHITELIST` 快照——记录而非读取行为）；`reasoning_echo.py` 的两个无参入口是兼容壳，`RuntimeConfig.from_env()` 只在解析时调它们一次并冻结结果。
+  - **仍待收尾（P1，不在 P0 范围内）**：`skills.py:58` 的 `AGENT_RUNTIME_SKILLS_DIR` 仍是**每轮**读取（`turn_opening → resolve_skills → default_skills_dir`），`model_catalog.py:110` 的 `AGENT_RUNTIME_MODEL_CATALOG` 在 WebUI 启动时读一次。二者都是路径解析覆盖，未与任何已解析值冲突，故未纳入 P0。
+
+  本项已固定的一条硬语义：`resolve_max_retries(harness_value, runtime=...)` 在注入 `runtime` 时**永远不再读环境**——`tool_error_max_retries is None` 表示“沿用 harness gene”，而不是“回退到 env”。此前它会在 override 为 `None` 时二次 `RuntimeConfig.from_env()`，导致 `AGENT_RUNTIME_TOOL_ERROR_MAX_RETRIES` 能覆盖已注入的配置（即“一次解析、显式注入”契约被破坏）；`TurnGuard` 现在只传 `runtime=`，不再自行拆字段。
 - **Context 策略注册表是“假开放”**：
   - `agent/context/strategies.py` 提供了 `register_context_strategy()` 用来按 OCP 扩展新策略；
   - 但 `harness/loader.py:216` 校验的仍是 `harness/schema.py:130` 里的静态元组 `CONTEXT_STRATEGIES`（注册了新策略 YAML 根本加载不过去）；
@@ -103,8 +103,8 @@ AST 全量依赖扫描结果暴露出几个值得关注的架构边界问题：
 
 | 优先级 | 改动项 | 涉及文件 | 做法（最简方案） |
 | :--- | :--- | :--- | :--- |
-| **P0** | **收口 Run 生命周期包装** | 新增轻量 helper（如 `agent/session.py` 或 `run_session` 函数），简化 `run_agent.py`、`integrations/harbor.py`、`webui/server.py` | 提供一个约 50 行的 `execute_run(...)` async context manager / helper，统一 `record_config`、状态判定（`completed/error/cancelled`）、异常捕获与 `afinalize_run`。顺手修复 Harbor 的 `temperature` 漏记，且把 `memory` 开关改为显式参数传入，消除 `harbor.py` 修改 `os.environ` 的副作用。 |
-| **P0** | **彻底完成 `RuntimeConfig` 收口** | `agent/llm_request.py`, `providers/llm.py`, `agent/tool_error_budget.py`, `execution/{local,harbor,guard}.py` | 删除 `llm_request.py` / `llm_stream.py` 与 `llm.py` 里重复的 `os.getenv` 回退函数（测试若不传 `RuntimeConfig`，由最外层默认 `RuntimeConfig.from_env()` 一次即可）；把 `workspace_root`、`command_guard_mode`、`memory_enabled` 纳入配置或显式入参，避免深层隐式读环境。 |
+| **P0** | ~~收口 Run 生命周期包装~~ **不做（2026-11-26 决策）** | 新增轻量 helper（如 `agent/session.py` 或 `run_session` 函数），简化 `run_agent.py`、`integrations/harbor.py`、`webui/server.py` | 提供一个约 50 行的 `execute_run(...)` async context manager / helper，统一 `record_config`、状态判定（`completed/error/cancelled`）、异常捕获与 `afinalize_run`。顺手修复 Harbor 的 `temperature` 漏记，且把 `memory` 开关改为显式参数传入，消除 `harbor.py` 修改 `os.environ` 的副作用。<br><br>**决策：不做。** 未来主力入口只有 webui；CLI（`run_agent.py`）可能弃用，Harbor（`integrations/harbor.py`）只用于偶尔验证 benchmark 是否回落，三者不值得为一个共享 helper 付耦合成本。保留各自入口的独立 run 收尾逻辑。<br>**已核实**：`harbor.py` 改 `os.environ` 的副作用早已消除（现为 `replace(RuntimeConfig.from_env(), memory_enabled=False)`，见 `src/agent_runtime/integrations/harbor.py:56`）；`temperature` 漏记也已修（现读 `self._runtime.temperature`，见同文件 `record_config`）；`harness.control.temperature` 幻影字段已不存在。若哪天要退役 CLI，再顺手删 `run_agent.py` 即可，无需先合并生命周期。 |
+| **P0** | **彻底完成 `RuntimeConfig` 收口 — ✅ 已完成（2026-11-26）** | `agent/llm_request.py`, `providers/llm.py`, `agent/tool_error_budget.py`, `execution/{local,harbor,guard}.py` | 删除 `llm_request.py` / `llm_stream.py` 与 `llm.py` 里重复的 `os.getenv` 回退函数（测试若不传 `RuntimeConfig`，由最外层默认 `RuntimeConfig.from_env()` 一次即可）；把 `workspace_root`、`command_guard_mode`、`memory_enabled`、`memory_dir`、`tool_error_max_retries`、`harness` 纳入配置，避免深层隐式读环境。收口后深层的 `runtime=None` 只意味着“没有配置可传”，**任何已注入的 `RuntimeConfig` 都不再被环境二次覆盖**。 |
 | **P1** | **拆分 `agent/chat.py`（保持 `loop.py` 不动）— ✅ 已完成（2026-11-25）** | `agent/chat.py` → `agent/llm_request.py` + `agent/llm_stream.py` + `agent/llm_recovery.py` | 只沿已有清晰边界三刀切：`llm_stream.py`（纯流式 chunk 合并与超时/截断检测）、`llm_recovery.py`（错误分类、`RecoveryPlan`、nudge 逻辑），`llm_request.py` 只保留调用+重试主流程（`chat_with_recovery`）并从两个 facet 模块再导出，`loop.py` 与各入口的依赖面零改动。三个文件统一 `llm_` 前缀，与 `turn_*` / `tool_*` 命名惯例一致。 |
 | **P1** | **打断 `trace <-> metrics` 与根包循环依赖** | `src/agent_runtime/__init__.py`, `trace.py`, `metrics.py` | 1) 把 `RunStats` 抽成极简独立模块或让 `trace.py` 只接受可选 `observer` 回调（`RunTrace` 不 import `metrics`）；2) `metrics.py` 改为 `from agent_runtime.storage import metrics_path` 避免触发包根 `__init__`。 |
 | **P1** | **统一 `agent.completed` 发射出口** | `agent/loop.py`, `agent/turn_guard.py` | `TurnGuard` 只返回“是否早停 + 停止文案”，不再直接调 `events.emit("agent.completed", ...)`；所有自然结束、超步总结、熔断早停统一在 `AgentTurn._run` 单一出口发射 `agent.completed`，与 `trace.span("agent")` 严格 1:1 对齐。 |
@@ -118,4 +118,6 @@ AST 全量依赖扫描结果暴露出几个值得关注的架构边界问题：
 - `execution/local.py` 与 `ShellExecutor` / `Workspace` 基础契约：保持极简，不要往 `Workspace` 主协议里塞过多高级操作。
 - `harness` YAML 基因化 + `genes_hash` + `EventEmitter` 订阅模型：扩展性已经很够用，只需修补策略校验的单一事实源即可。
 
-如果你希望落地其中的某些改进（比如先做最稳妥、收益最高的 **P0：Run 生命周期收口 + `RuntimeConfig` 清理**，或 **P1：消除 `trace <-> metrics` 循环依赖**），告诉我从哪一项开始，我可以直接给出具体改动方案并带测试验证落地。
+如果你希望落地其中的某些改进（比如 **P0：`RuntimeConfig` 收口** 已完成，剩下的候选是 **P1：消除 `trace <-> metrics` 循环依赖**，或 **`RuntimeConfig` ↔ `harness` 职责再切一刀**），告诉我从哪一项开始，我可以直接给出具体改动方案并带测试验证落地。
+
+> 注（2026-11-26）：**“收口 Run 生命周期包装” 已决定不做** —— 未来主力入口是 webui，CLI 可能弃用、Harbor 仅用于偶尔的 benchmark 回归验证，不值得为三个入口抽共享生命周期。
