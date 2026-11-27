@@ -45,7 +45,6 @@ class TurnCollaborators:
     guard: TurnGuard
     tool_runner: ToolRunner
     summarizer: Any
-    stream: bool
     runtime: RuntimeConfig
 
 

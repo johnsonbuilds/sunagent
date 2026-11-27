@@ -68,9 +68,8 @@ class AgentTurn:
         self.guard = collaborators.guard
         self.tool_runner = collaborators.tool_runner
         self.summarizer = collaborators.summarizer
-        self.stream = collaborators.stream
-        self.max_iterations = collaborators.harness.control.max_iterations
         self.runtime: RuntimeConfig = collaborators.runtime
+        self.max_iterations = collaborators.harness.control.max_iterations
 
     async def run(self) -> str:
         """Execute the turn and always flush the trace."""
@@ -159,7 +158,8 @@ class AgentTurn:
                                        trace=trace, iteration=iteration)
             logger.debug(
                 "llm.request.start iteration=%d messages=%d tools=%d stream=%s",
-                iteration, len(history.messages), len(schemas), self.stream)
+                iteration, len(history.messages), len(schemas),
+                self.runtime.streaming)
             # ``chat_with_recovery`` owns the per-attempt llm.start/llm.end
             # events (a retry gets its own pair instead of inflating one
             # span), the usage ledger, and every recovery decision
@@ -167,7 +167,7 @@ class AgentTurn:
             # history the request reads from and where to put the result.
             response = await chat_with_recovery(
                 self.llm, history, schemas, iteration, harness,
-                stream=self.stream, trace=trace, events=events,
+                stream=self.runtime.streaming, trace=trace, events=events,
                 runtime=self.runtime)
             if response is None:
                 return None
@@ -202,13 +202,14 @@ class AgentTurn:
             await history.refresh_view(harness.context,
                                        trace=trace, iteration=iteration)
             logger.debug("llm.request.start iteration=%d messages=%d tools=0 stream=%s",
-                         iteration, len(history.view), self.stream)
+                         iteration, len(history.view),
+                         self.runtime.streaming)
             # ``allow_nudge=False``: the summary turn has no next turn to
             # continue, so a thinking-only response must raise and reach
             # the fallback below instead of rewriting the conversation.
             response = await chat_with_recovery(
                 self.llm, history, None, iteration, harness,
-                stream=self.stream, trace=trace, events=events,
+                stream=self.runtime.streaming, trace=trace, events=events,
                 allow_nudge=False, runtime=self.runtime)
             # ``allow_nudge=False`` means the nudge strategy re-raises
             # instead of returning ``None``; the only way out of the call

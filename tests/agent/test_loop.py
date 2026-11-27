@@ -1146,7 +1146,7 @@ class AgentTurnClassTests(unittest.IsolatedAsyncioTestCase):
 
         turn = create_agent_turn("hello", llm, make_registry(), runtime=runtime)
 
-        self.assertFalse(turn.stream)
+        self.assertFalse(turn.runtime.streaming)
 
     def test_explicit_stream_overrides_runtime(self) -> None:
         llm = FakeLLM([{"content": "hi", "tool_calls": []}])
@@ -1155,7 +1155,7 @@ class AgentTurnClassTests(unittest.IsolatedAsyncioTestCase):
         turn = create_agent_turn("hello", llm, make_registry(),
                                  runtime=runtime, stream=True)
 
-        self.assertTrue(turn.stream)
+        self.assertTrue(turn.runtime.streaming)
 
     async def test_class_attributes_honor_overrides(self) -> None:
         llm = FakeLLM([

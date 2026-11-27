@@ -11,6 +11,7 @@ or construct its own policy helpers.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 
 from agent_runtime.agent.llm_request import ChatModel
@@ -76,6 +77,11 @@ def create_agent_turn(
     transport for this turn.
     """
     resolved_runtime = runtime if runtime is not None else RuntimeConfig.from_env()
+    resolved_stream = (stream if stream is not None
+                       else resolved_runtime.streaming)
+    # Fold the per-turn override into the turn's own config copy: inside the
+    # turn, ``runtime.streaming`` stays the single source of truth.
+    resolved_runtime = replace(resolved_runtime, streaming=resolved_stream)
     resolved_harness = harness if harness is not None else default_harness()
     resolved_trace = (trace if trace is not None
                       else RunTrace(harness=resolved_harness))
@@ -85,8 +91,6 @@ def create_agent_turn(
                              else Conversation())
     resolved_workspace = (workspace if workspace is not None
                           else tools.workspace)
-    resolved_stream = (stream if stream is not None
-                       else resolved_runtime.streaming)
     observations = ObservationFormatter(
         resolved_workspace,
         max_chars=resolved_harness.control.max_observation_chars,
@@ -119,7 +123,6 @@ def create_agent_turn(
         guard=guard,
         tool_runner=tool_runner,
         summarizer=resolved_factory,
-        stream=resolved_stream,
         runtime=resolved_runtime,
     ))
 

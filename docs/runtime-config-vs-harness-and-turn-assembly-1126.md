@@ -200,7 +200,7 @@ RuntimeConfig.skills_dir（默认 ./skills，可被环境覆盖）
 - `AgentTurn.runtime` 改为 `RuntimeConfig`（factory 已保证非 None）；`AgentTurn.max_iterations` 直接读 `collaborators.harness.control.max_iterations`。
 - `open_turn(*, conversation, harness, workspace, trace, runtime=None)`：内部直接取 `runtime.skills_dir` / `runtime.memory_enabled` / `runtime.memory_dir`，loop 里原来的 6 行三元表达式变为一次传 runtime。`runtime=None` 仅保留给直接调用的库测试，兜底一次 `RuntimeConfig.from_env()`。
 - LLM 深层 helper 收紧为非 Optional：`use_streaming`、`_stream_idle_timeout`、`_reasoning_budget_chars`、`_retry_4xx_enabled` 不再自带 `from_env()`；`consume_stream` / `chat_with_recovery` / `llm_error_category` / `recovery_plan` 都要求调用方注入 runtime。
-- `stream` 仍是唯一的显式 override，但默认值改为 `stream: bool | None = None`：`None` 表示取 `runtime.streaming`（`RuntimeConfig` 默认 `True`）。测试在 `tests/conftest.py` 的 autouse fixture 里统一 `AGENT_RUNTIME_STREAM=0`，需要流式的用例仍显式传 `stream=True`；生产入口继续显式传值，行为不变。
+- `stream` 仍是唯一的显式 override，但默认值改为 `stream: bool | None = None`：`None` 表示取 `runtime.streaming`（`RuntimeConfig` 默认 `True`）。factory 会把 override `replace` 进本轮的 `RuntimeConfig` 副本；`TurnCollaborators.stream` 与 `AgentTurn.stream` 都已删除，loop 直接读 `self.runtime.streaming`。测试在 `tests/conftest.py` 的 autouse fixture 里统一 `AGENT_RUNTIME_STREAM=0`，需要流式的用例仍显式传 `stream=True`；生产入口继续显式传值，行为不变。
 - 测试迁移：`test_context_gates`、`test_tool_call_extras`、`test_llm_error_classification`、`test_loop` 改为显式传 `RuntimeConfig`；原先"无 runtime 时读 env"的用例改写为"env → RuntimeConfig → 分类"的可控路径。流式默认切换后，`tests/conftest.py` 统一设 `AGENT_RUNTIME_STREAM=0`，避免 55 个 chat-only 测试逐个补 `stream=False`。
 
 ### 4.12 删除 `max_iterations` 覆盖（已实施，2026-11-27）

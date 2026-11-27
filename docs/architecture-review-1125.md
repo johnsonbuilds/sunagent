@@ -23,7 +23,7 @@
     4. 重试与超窗压缩循环（`chat_with_recovery`）。
     任何一项改动（例如适配新模型的流式 chunk 格式或调整 nudge 文案）都要动到核心重试循环所在文件。
   - **退出路径上的事件发射分散**：`agent.completed`（面向 UI）分散在 **3 个文件/分支**（`agent/loop.py:_run`、`agent/loop.py:_summary_turn`、`agent/turn_guard.py:check_tool_error`），而 `agent.end`（面向 trace）统一在 `loop.py` 的 `trace.span("agent")` 里。`TurnGuard` 作为保护逻辑却直接承担了“发射最终完成事件”的职责，一旦新增终止条件极易漏发其中一条流。
-  - **`TurnCollaborators` 已达 13 个字段**（`agent/turn_collaborators.py`）：尚在可接受边界，但继续往里塞参数会让装配层变脆；应避免再把细碎策略拆成更多微对象注入。
+  - **`TurnCollaborators` 已达 12 个字段**（`agent/turn_collaborators.py`）：尚在可接受边界，但继续往里塞参数会让装配层变脆；应避免再把细碎策略拆成更多微对象注入。
 
 #### 2. 执行层（`execution/`）——`local.py` 干净，但 `base.py` 与 `harbor.py` 正在偏离“纯执行原语”
 - **做得好的地方**：`LocalShellExecutor` 和 `LocalWorkspace`（`execution/local.py`, 181 LOC）边界清晰、代码克制，路径越界检查（`resolve().is_relative_to`）和 CRLF 字节保真都很扎实。
