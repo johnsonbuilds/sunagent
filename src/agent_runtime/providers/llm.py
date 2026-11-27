@@ -241,7 +241,11 @@ def _project_messages_for_wire(messages: Sequence[dict[str, Any]],
     repaired, ``metadata`` is stripped (no provider understands it), and
     ``reasoning_content`` is kept only when ``echo`` is true — where it is
     stripped, a thinking-only turn gets a placeholder because the protocol
-    requires assistant messages to carry something.
+    requires assistant messages to carry something.  Where it is kept, a
+    turn that never produced reasoning gets a one-space pad: DeepSeek's
+    native contract requires the key on replayed assistant messages once the
+    request carries tools, and the immediate tool continuation is rejected
+    with a 400 otherwise.
     """
     paired, repair = _repair_tool_call_pairing(messages)
     if repair.dropped_calls:
@@ -257,10 +261,16 @@ def _project_messages_for_wire(messages: Sequence[dict[str, Any]],
     for message in paired:
         out = dict(message)
         out.pop("metadata", None)
-        if not echo and out.get("role") == "assistant":
-            out.pop("reasoning_content", None)
-            if not out.get("content") and not out.get("tool_calls"):
-                out["content"] = "(reasoning omitted)"
+        if out.get("role") == "assistant":
+            if not echo:
+                out.pop("reasoning_content", None)
+                if not out.get("content") and not out.get("tool_calls"):
+                    out["content"] = "(reasoning omitted)"
+            elif "reasoning_content" not in out:
+                # The turn produced no thinking (effort disabled, or a
+                # provider that does not stream it) but the endpoint still
+                # expects the key; " " matches the compaction placeholder.
+                out["reasoning_content"] = " "
         projected.append(out)
     return projected
 

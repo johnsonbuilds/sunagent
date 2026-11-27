@@ -42,8 +42,9 @@ def _drop_stale_reasoning(message: dict[str, Any]) -> dict[str, Any]:
     Old-round thinking has little reuse value and a truncated fragment can
     mislead (a half-finished hypothesis reads like a settled conclusion), so
     the text goes wholesale.  The key survives as a one-space pad: echo
-    contracts like DeepSeek's require ``reasoning_content`` present, and an
-    empty string 400s on some endpoints.  Idempotent.
+    contracts like DeepSeek's require ``reasoning_content`` present, and the
+    wire projection uses the same pad for turns that never produced any.
+    Idempotent.
     """
     reasoning = message.get("reasoning_content") or ""
     if reasoning == " ":

@@ -1,6 +1,7 @@
 import json
 import sys
 import unittest
+import unittest.mock
 from pathlib import Path
 from typing import Any
 
@@ -209,6 +210,43 @@ class ProjectMessagesForWireTests(unittest.TestCase):
 
         self.assertEqual(projected[2]["content"], "")
         self.assertTrue(projected[2]["tool_calls"])
+
+    def test_echo_pads_an_assistant_turn_that_never_had_reasoning(self) -> None:
+        # DeepSeek's native contract: once the request carries tools, a
+        # replayed assistant message must carry the key. A turn that produced
+        # no thinking (effort disabled) used to 400 on the immediate tool
+        # continuation, so the wire copy pads it with the compaction marker.
+        history: list[dict[str, Any]] = [
+            {"role": "user", "content": "task"},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "c1", "type": "function",
+                 "function": {"name": "run_command", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "c1", "content": "out"},
+            {"role": "assistant", "content": "done"},
+        ]
+
+        projected = _project_messages_for_wire(history, echo=True)
+
+        self.assertEqual(projected[1]["reasoning_content"], " ")
+        self.assertEqual(projected[3]["reasoning_content"], " ")
+        # The stored history is untouched: the pad exists on the wire only.
+        self.assertNotIn("reasoning_content", history[1])
+        self.assertNotIn("reasoning_content", history[3])
+
+    def test_echo_keeps_existing_reasoning_instead_of_padding(self) -> None:
+        projected = _project_messages_for_wire(self._history(), echo=True)
+
+        self.assertEqual(projected[1]["reasoning_content"], "inner monologue")
+        self.assertEqual(projected[2]["reasoning_content"], "thinking only")
+
+    def test_no_echo_never_pads_a_missing_reasoning_turn(self) -> None:
+        history: list[dict[str, Any]] = [
+            {"role": "assistant", "content": "done"},
+        ]
+
+        projected = _project_messages_for_wire(history, echo=False)
+
+        self.assertNotIn("reasoning_content", projected[0])
 
     def test_projection_does_not_mutate_history(self) -> None:
         history = self._history()
