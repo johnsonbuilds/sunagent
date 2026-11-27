@@ -236,31 +236,19 @@ class RuntimeConfig:
 
 def resolve_echo_reasoning(llm: Any | None,
                            runtime: RuntimeConfig | None = None) -> bool:
-    """Single source of truth for ``count_reasoning`` when no explicit bool.
+    """Whether assistant reasoning rides the wire, resolved exactly once.
 
-    Preference: ``llm.echo_reasoning`` (bound to the instance's own
-    ``model``/``base_url``) > ``runtime.echo_reasoning`` > legacy env-backed
-    default.  ``FakeLLM`` test doubles expose neither attribute and fall
-    through to the env default.
+    Called by the loop when it builds the turn's ``TurnHistory``: the answer is
+    stored there and every budget decision reads it, so no layer below the
+    composition root re-derives it or re-reads the environment.
+
+    Preference: ``llm.echo_reasoning`` (the adapter's decision, bound to the
+    endpoint it actually calls) > ``runtime.echo_reasoning`` > the env-backed
+    default for scripts and direct callers.
     """
     candidate = getattr(llm, "echo_reasoning", None)
     if isinstance(candidate, bool):
         return candidate
-    # ``runtime_config`` property is the explicit escape hatch for adapters
-    # that do not expose ``echo_reasoning`` directly.
-    config = getattr(llm, "runtime_config", None)
-    if isinstance(config, RuntimeConfig):
-        return config.echo_reasoning
-    # Plain ``model``/``base_url`` attributes (e.g. minimal fakes): compute
-    # with the runtime's echo mode when available so an explicit pin applies.
-    model = getattr(llm, "model", None)
-    base_url = getattr(llm, "base_url", None)
-    if isinstance(model, str):
-        from agent_runtime.reasoning_echo import should_echo_reasoning
-
-        mode = (runtime.reasoning_echo_mode
-                if runtime is not None else None)
-        return should_echo_reasoning(model, base_url, mode)
     if runtime is not None:
         return runtime.echo_reasoning
     from agent_runtime.reasoning_echo import reasoning_echo_enabled

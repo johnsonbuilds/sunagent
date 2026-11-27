@@ -19,11 +19,7 @@ from agent_runtime.harness import (
 )
 
 from agent_runtime.agent.context.compact import _round_starts, compact_observations
-from agent_runtime.agent.context.metrics import (
-    _count_reasoning,
-    _view_size,
-    total_chars,
-)
+from agent_runtime.agent.context.metrics import _view_size, total_chars
 from agent_runtime.agent.runtime_message import (
     is_runtime_user_message,
     runtime_user_message,
@@ -245,7 +241,7 @@ async def summarize_history(messages: list[dict[str, Any]], *,
                             trace: Any = None,
                             iteration: int | None = None,
                             llm: Any = None,
-                            count_reasoning: bool | None = None,
+                            echo_reasoning: bool = True,
                             usage_sink: Any = None,
                             ) -> list[dict[str, Any]]:
     """Return a summarized request view of ``messages`` once over ``budget``.
@@ -265,7 +261,7 @@ async def summarize_history(messages: list[dict[str, Any]], *,
     summarizer failure or an invalid summary falls back to
     ``compact_observations``.
     """
-    count = _count_reasoning(count_reasoning)
+    count = echo_reasoning
     if unit == "tokens":
         from agent_runtime.agent.context.metrics import _anchor_chars_per_token
         chars_per_token = _anchor_chars_per_token(usage_anchor)
@@ -338,7 +334,7 @@ async def summarize_history(messages: list[dict[str, Any]], *,
             # Retry on a folded copy: same pairs/users, old observations shrunk.
             attempt_input = compact_observations(
                 summarizer_input, budget=DEFAULT_SUMMARIZER_INPUT_CAP_CHARS,
-                exempt_tools=exempt_tools, count_reasoning=count)
+                exempt_tools=exempt_tools, echo_reasoning=count)
             used_capped_input = True
         try:
             call = await _generate_summary(
@@ -379,7 +375,7 @@ async def summarize_history(messages: list[dict[str, Any]], *,
                            "compact_observations: %s", exc)
             return compact_observations(messages, budget=char_budget,
                                         exempt_tools=exempt_tools,
-                                        count_reasoning=count)
+                                        echo_reasoning=count)
         try:
             _validate_summary(summary, summary_max_tokens=summary_max_tokens)
             break
@@ -410,7 +406,7 @@ async def summarize_history(messages: list[dict[str, Any]], *,
                 logger.warning("context.summary.invalid %s falling back to compact_observations", exc)
                 return compact_observations(messages, budget=char_budget,
                                             exempt_tools=exempt_tools,
-                                            count_reasoning=count)
+                                            echo_reasoning=count)
             logger.warning("context.summary.invalid %s retrying (%d/2)",
                            exc, attempt + 1)
     summary_msg = runtime_user_message(SUMMARY_PREFIX + summary, kind="summary")

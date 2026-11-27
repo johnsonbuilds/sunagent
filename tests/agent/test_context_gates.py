@@ -11,6 +11,7 @@ from agent_runtime.agent.context import (
     DEFAULT_SUMMARY_MAX_TOKENS,
     DEFAULT_USER_PRESERVE_BUDGET,
     SUMMARY_PREFIX,
+    ViewBudget,
     _anchor_chars_per_token,
     _view_size,
     apply_context_strategy,
@@ -117,6 +118,43 @@ class ViewSizeTests(unittest.TestCase):
         self.assertEqual(_anchor_chars_per_token(None), 4.0)
         self.assertAlmostEqual(_anchor_chars_per_token((100, 5, 500)), 5.0)
         self.assertEqual(_anchor_chars_per_token((0, 5, 0)), 4.0)
+
+
+class ViewBudgetTests(unittest.TestCase):
+    """The one valuation object every budget decision reads."""
+
+    def test_for_context_reads_the_genome_knobs(self) -> None:
+        budget = ViewBudget.for_context(
+            ContextGenome(budget_unit="tokens", context_budget=60_000),
+            anchor=(100, 2, 400), echo_reasoning=False)
+
+        self.assertEqual((budget.limit, budget.unit), (60_000, "tokens"))
+        self.assertEqual(budget.anchor, (100, 2, 400))
+        self.assertFalse(budget.echo_reasoning)
+
+    def test_echo_policy_decides_whether_reasoning_is_sized(self) -> None:
+        messages = [{"role": "assistant", "content": "x" * 10,
+                     "reasoning_content": "r" * 90}]
+        on = ViewBudget(limit=1, echo_reasoning=True)
+        off = ViewBudget(limit=1, echo_reasoning=False)
+
+        self.assertEqual((on.chars(messages), off.chars(messages)), (100, 10))
+        self.assertEqual((on.size(messages), off.size(messages)), (100, 10))
+
+    def test_char_limit_converts_a_token_budget_through_the_anchor(self) -> None:
+        budget = ViewBudget(limit=1_000, unit="tokens",
+                            anchor=(100, 5, 500))  # 5 chars per token
+
+        self.assertAlmostEqual(budget.chars_per_token, 5.0)
+        self.assertEqual(budget.char_limit, 5_000)
+        self.assertEqual(ViewBudget(limit=1_000).char_limit, 1_000)
+
+    def test_adjustments_return_new_values(self) -> None:
+        budget = ViewBudget(limit=100, anchor=(1, 1, 4), echo_reasoning=True)
+
+        self.assertEqual(budget.with_limit(10).limit, 10)
+        self.assertEqual(budget.with_anchor(None).anchor, None)
+        self.assertEqual(budget.limit, 100)
 
 
 class UserPreservationTests(unittest.IsolatedAsyncioTestCase):

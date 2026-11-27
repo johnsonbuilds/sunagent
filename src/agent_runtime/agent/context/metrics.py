@@ -1,34 +1,35 @@
-"""Request-view size metrics: char counting and budget-unit conversion.
+"""Request-view sizing: char counting, budget-unit conversion, and the one
+valuation object every budget decision reads.
 
 Pure helpers with no strategy logic, shared by the deterministic compactor and
 the LLM summarizer so budget accounting stays identical either way.
+
+:class:`ViewBudget` is the single carrier of "how is this view measured":
+
+* ``limit`` / ``unit`` — the genome's budget and its unit,
+* ``anchor`` — the measured-usage anchor of the last billed response,
+* ``echo_reasoning`` — whether reasoning chars ride the wire (and therefore
+  must be counted).
+
+It is built once per refresh by :class:`~agent_runtime.agent.turn_history.
+TurnHistory` and handed down as one object, so no layer below the composition
+root re-derives the echo policy or re-reads the environment.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass, replace
 from typing import Any
-
-from agent_runtime.reasoning_echo import reasoning_echo_enabled
-
-
-def _count_reasoning(enabled: bool | None) -> bool:
-    """Explicit policy wins; otherwise read the env-backed wire default.
-
-    Production callers always pass the boolean resolved from
-    ``RuntimeConfig``/``llm.echo_reasoning`` so budget accounting matches the
-    wire projection; direct callers (tests, scripts) keep the env default.
-    """
-    return reasoning_echo_enabled() if enabled is None else enabled
 
 
 def _message_chars(message: dict[str, Any],
-                   count_reasoning: bool = True) -> int:
-    # reasoning_content rides the wire on echo-family providers, so it must
-    # count there — otherwise long-thinking models outrun compaction without
-    # ever tripping it.  When the echo policy strips it, counting it would
-    # overestimate the request and compact too early.
+                   echo_reasoning: bool = True) -> int:
+    # reasoning_content rides the wire only when the echo policy replays it:
+    # count it then, or long-thinking models outrun compaction without ever
+    # tripping it.  When the endpoint drops it, counting would overestimate
+    # the request and compact too early.
     total = len(message.get("content") or "")
-    if count_reasoning:
+    if echo_reasoning:
         total += len(message.get("reasoning_content") or "")
     for call in message.get("tool_calls") or []:
         function = call.get("function") or {}
@@ -37,8 +38,8 @@ def _message_chars(message: dict[str, Any],
 
 
 def total_chars(messages: list[dict[str, Any]],
-                count_reasoning: bool = True) -> int:
-    return sum(_message_chars(message, count_reasoning)
+                echo_reasoning: bool = True) -> int:
+    return sum(_message_chars(message, echo_reasoning)
                for message in messages)
 
 
@@ -47,7 +48,7 @@ def _estimate_tokens(chars: int, chars_per_token: float = 4.0) -> int:
     return max(1, int(chars / chars_per_token)) if chars else 0
 
 
-def _view_size(messages: list[dict[str, Any]], count_reasoning: bool,
+def _view_size(messages: list[dict[str, Any]], echo_reasoning: bool,
                unit: str,
                anchor: tuple[int, int, int] | None = None) -> int:
     """Request-view size in the genome's budget unit.
@@ -60,9 +61,9 @@ def _view_size(messages: list[dict[str, Any]], count_reasoning: bool,
     measurements accumulate.
     """
     if unit != "tokens":
-        return total_chars(messages, count_reasoning)
+        return total_chars(messages, echo_reasoning)
     if anchor is None:
-        return _estimate_tokens(total_chars(messages, count_reasoning))
+        return _estimate_tokens(total_chars(messages, echo_reasoning))
     tokens, anchor_len, anchor_chars = anchor
     ratio = tokens / anchor_chars if anchor_chars > 0 else 0.25
     if len(messages) == anchor_len:
@@ -71,8 +72,8 @@ def _view_size(messages: list[dict[str, Any]], count_reasoning: bool,
     if len(messages) < anchor_len:
         # View only shrank since the measurement: scale the measured number
         # down by the calibrated ratio.
-        return max(1, int(total_chars(messages, count_reasoning) * ratio))
-    tail_chars = total_chars(messages[anchor_len:], count_reasoning)
+        return max(1, int(total_chars(messages, echo_reasoning) * ratio))
+    tail_chars = total_chars(messages[anchor_len:], echo_reasoning)
     return tokens + int(tail_chars * ratio)
 
 
@@ -86,14 +87,63 @@ def _anchor_chars_per_token(anchor: tuple[int, int, int] | None) -> float:
     return anchor_chars / tokens
 
 
-def request_view_size(view: list[dict[str, Any]], context: Any,
-                      usage_anchor: tuple[int, int, int] | None = None, *,
-                      count_reasoning: bool | None = None) -> int:
+@dataclass(frozen=True)
+class ViewBudget:
+    """How one request view is measured, resolved once per refresh.
+
+    Immutable on purpose: ``with_limit`` / ``with_anchor`` return a new value,
+    so a hard-gate shrink cannot leak into the next refresh.
+    """
+
+    limit: int
+    unit: str = "chars"
+    anchor: tuple[int, int, int] | None = None
+    echo_reasoning: bool = True
+
+    @classmethod
+    def for_context(cls, context: Any, *,
+                    anchor: tuple[int, int, int] | None = None,
+                    echo_reasoning: bool = True) -> "ViewBudget":
+        """Read the genome's budget knobs into one valuation.
+
+        ``context`` is only duck-typed (``context_budget`` / ``budget_unit``),
+        so this module keeps no dependency on the harness layer.
+        """
+        return cls(limit=context.context_budget, unit=context.budget_unit,
+                   anchor=anchor, echo_reasoning=echo_reasoning)
+
+    def with_limit(self, limit: int) -> "ViewBudget":
+        return replace(self, limit=limit)
+
+    def with_anchor(self, anchor: tuple[int, int, int] | None) -> "ViewBudget":
+        return replace(self, anchor=anchor)
+
+    def chars(self, messages: list[dict[str, Any]]) -> int:
+        """Characters of ``messages`` under this valuation's echo policy."""
+        return total_chars(messages, self.echo_reasoning)
+
+    def size(self, messages: list[dict[str, Any]]) -> int:
+        """Size of ``messages`` in this valuation's budget unit."""
+        return _view_size(messages, self.echo_reasoning, self.unit, self.anchor)
+
+    @property
+    def chars_per_token(self) -> float:
+        """Char-per-token ratio implied by the anchor (default 4.0)."""
+        return _anchor_chars_per_token(self.anchor)
+
+    @property
+    def char_limit(self) -> int:
+        """``limit`` expressed in chars, for char-metered strategies."""
+        if self.unit != "tokens":
+            return self.limit
+        return max(1, int(self.limit * self.chars_per_token))
+
+
+def request_view_size(view: list[dict[str, Any]], budget: ViewBudget) -> int:
     """Request-view size in the genome's unit, for gate decisions."""
-    return _view_size(view, _count_reasoning(count_reasoning),
-                      context.budget_unit, usage_anchor)
+    return budget.size(view)
 
 
 __all__ = [
-    "request_view_size", "total_chars",
+    "ViewBudget", "request_view_size", "total_chars",
 ]

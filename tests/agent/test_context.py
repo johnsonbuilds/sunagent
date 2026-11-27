@@ -1,4 +1,3 @@
-import os
 import sys
 import tempfile
 import unittest
@@ -12,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
 from agent_runtime.agent.context import (
     CONTEXT_STRATEGY_DEFINITIONS,
     SUMMARY_PREFIX,
+    ViewBudget,
     apply_context_strategy,
     compact_observations,
     register_context_strategy,
@@ -227,15 +227,15 @@ class CompactObservationsTests(unittest.TestCase):
             tool_message("c1", "x" * 500),
         ]
 
-        with patch.dict(os.environ, {"AGENT_RUNTIME_REASONING_ECHO": "always"}):
-            result = compact_observations(messages, budget=2_000, window_rounds=0)
+        result = compact_observations(messages, budget=2_000, window_rounds=0,
+                                      echo_reasoning=True)
 
         self.assertIn("observation compacted", result[3]["content"])
 
     def test_reasoning_not_counted_when_echo_strips(self) -> None:
         # The wire projection drops reasoning for non-echo endpoints, so
         # budgeting it would compact observations far too early. Same
-        # messages as above: under "never" they fit the budget untouched.
+        # messages as above: with echo off they fit the budget untouched.
         messages = [
             {"role": "system", "content": "sys"},
             {"role": "user", "content": "task"},
@@ -247,8 +247,8 @@ class CompactObservationsTests(unittest.TestCase):
             tool_message("c1", "x" * 500),
         ]
 
-        with patch.dict(os.environ, {"AGENT_RUNTIME_REASONING_ECHO": "never"}):
-            result = compact_observations(messages, budget=2_000, window_rounds=0)
+        result = compact_observations(messages, budget=2_000, window_rounds=0,
+                                      echo_reasoning=False)
 
         self.assertIs(result, messages)
 
@@ -361,7 +361,7 @@ class ApplyContextStrategyTests(unittest.IsolatedAsyncioTestCase):
             await apply_context_strategy([], ContextGenome(strategy="summarize"))
 
     async def test_registered_strategy_is_dispatched(self) -> None:
-        seen: list[int] = []
+        seen: list[ViewBudget] = []
 
         async def custom(request):
             seen.append(request.budget)
@@ -374,7 +374,9 @@ class ApplyContextStrategyTests(unittest.IsolatedAsyncioTestCase):
                 ContextGenome(strategy="custom", context_budget=100))
 
         self.assertEqual(result, [{"role": "user", "content": "custom view"}])
-        self.assertEqual(seen, [100])
+        # The handler receives the whole valuation, not loose knobs.
+        self.assertEqual(seen, [ViewBudget(limit=100, unit="chars",
+                                           echo_reasoning=True)])
 
 
 class FakeSummaryLLM:

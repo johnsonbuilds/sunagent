@@ -206,6 +206,25 @@ class RunRecordPolicyTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("run.metrics", written)
             self.assertIsInstance(record, RunMetrics)
 
+    async def test_run_config_records_the_resolved_reasoning_echo(self) -> None:
+        # Post-mortems of a cross-tool "amnesia" loop need the resolved bit,
+        # not only the knob: see docs/session-thinking-loop-analysis-1126.md.
+        from agent_runtime.runtime_config import RuntimeConfig
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "run.jsonl"
+            trace = self._trace(path, retain_events="control")
+            runtime = RuntimeConfig(model="deepseek/deepseek-v4.1-flash",
+                                    base_url="https://openrouter.ai/api/v1")
+            trace.record_config(model_params={"model": runtime.model},
+                                tools=[], runtime=runtime)
+            await trace.flush()
+
+            config = next(event.data for event in trace.events
+                          if event.event_type == "run.config")
+            self.assertEqual(config["runtime"]["reasoning_echo_mode"], "auto")
+            self.assertIs(config["runtime"]["reasoning_echo"], True)
+
     async def test_streamed_chunks_are_dropped_and_counted(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             trace = RunTrace(run_id="run-1",

@@ -16,13 +16,13 @@ import logging
 from typing import Any
 
 from agent_runtime.agent.context import (
+    ViewBudget,
     extract_summary,
     total_chars,
     apply_context_strategy,
     request_view_size,
 )
 from agent_runtime.harness import ContextGenome
-from agent_runtime.runtime_config import RuntimeConfig, resolve_echo_reasoning
 
 logger = logging.getLogger(__name__)
 
@@ -62,15 +62,15 @@ class TurnHistory:
 
     def __init__(self, messages: list[dict[str, Any]], *,
                  summarizer: Any = None,
-                 count_reasoning: bool | None = None,
-                 runtime: RuntimeConfig | None = None) -> None:
+                 echo_reasoning: bool = True) -> None:
         self.messages = messages
         self.view: list[dict[str, Any]] = list(messages)
         # Explicit summarizer (provider object or lazy factory); when omitted,
         # the context layer's context-local default applies.
         self.summarizer = summarizer
-        self._count_reasoning = count_reasoning
-        self._runtime = runtime
+        # Resolved once by the composition root (loop/turn factory) from the
+        # provider's own endpoint: the budget layer never re-derives it.
+        self.echo_reasoning = echo_reasoning
         self._summary_boundary: int = 0
         self._usage_anchor: tuple[int, int, int] | None = None
         # Turn-level billed-token ledger.  Summarizer sub-calls feed only their
@@ -92,12 +92,11 @@ class TurnHistory:
         """``messages`` index one past the last summarized message."""
         return self._summary_boundary
 
-    def _resolve_count_reasoning(self) -> bool:
-        if self._count_reasoning is not None:
-            return self._count_reasoning
-        if self._runtime is not None:
-            return self._runtime.echo_reasoning
-        return resolve_echo_reasoning(None)
+    def _budget(self, context: ContextGenome,
+                anchor: tuple[int, int, int] | None) -> ViewBudget:
+        """The one valuation of this view: genome budget + echo policy."""
+        return ViewBudget.for_context(context, anchor=anchor,
+                                      echo_reasoning=self.echo_reasoning)
 
     def record_usage(self, prompt_tokens: int,
                      completion_tokens: int = 0,
@@ -116,7 +115,7 @@ class TurnHistory:
         self._main_cached_tokens += int(cached_tokens or 0)
         if prompt_tokens > 0:
             self._usage_anchor = (prompt_tokens, len(self.view),
-                                  total_chars(self.view, self._resolve_count_reasoning()))
+                                  total_chars(self.view, self.echo_reasoning))
 
     def record_summarizer_usage(self, prompt_tokens: int,
                                 completion_tokens: int = 0) -> None:
@@ -157,10 +156,9 @@ class TurnHistory:
             self.messages, context, compact_messages=self.view,
             trace=trace, iteration=iteration,
             boundary=self._summary_boundary,
-            usage_anchor=self._usage_anchor,
+            budget=self._budget(context, self._usage_anchor),
             force_budget=force_budget,
             summarizer=self.summarizer,
-            count_reasoning=self._resolve_count_reasoning(),
             usage_sink=self.record_summarizer_usage)
         if new_view is not self.messages:
             if new_view != self.view:
@@ -187,8 +185,8 @@ class TurnHistory:
         *measured* size.  Returns whether the view got strictly smaller;
         ``False`` means a resend would be rejected again.
         """
-        current = request_view_size(self.view, context, self._usage_anchor,
-                                    count_reasoning=self._resolve_count_reasoning())
+        current = request_view_size(self.view,
+                                    self._budget(context, self._usage_anchor))
         # Measure with the PRE-refresh anchor: refresh clears it, and
         # comparing sizes taken with different rulers would misjudge.
         anchor_before = self._usage_anchor
@@ -205,8 +203,8 @@ class TurnHistory:
         if self.view is before:
             # Nothing was rebuilt, so a resend would hit the same wall.
             return False
-        after = request_view_size(self.view, context, anchor_before,
-                                  count_reasoning=self._resolve_count_reasoning())
+        after = request_view_size(self.view,
+                                  self._budget(context, anchor_before))
         if after >= current:
             logger.warning("llm.context_window.no_shrink iteration=%s",
                            iteration)
