@@ -94,7 +94,11 @@ class HarborAgentSmokeTests(unittest.IsolatedAsyncioTestCase):
     async def test_runtime_logging_can_be_enabled_for_task_and_stream(self) -> None:
         output = StringIO()
         previous = environ.get("AGENT_RUNTIME_LOG_STREAM")
+        previous_stream = environ.get("AGENT_RUNTIME_STREAM")
         environ["AGENT_RUNTIME_LOG_STREAM"] = "1"
+        # This test exercises the streaming log path; the suite default is
+        # non-streaming.
+        environ["AGENT_RUNTIME_STREAM"] = "1"
         try:
             with redirect_stderr(output), TemporaryDirectory() as directory:
                 agent = HarborAgent(Path(directory), model_name="test-model", llm=FakeLLM())
@@ -104,6 +108,10 @@ class HarborAgentSmokeTests(unittest.IsolatedAsyncioTestCase):
                 environ.pop("AGENT_RUNTIME_LOG_STREAM", None)
             else:
                 environ["AGENT_RUNTIME_LOG_STREAM"] = previous
+            if previous_stream is None:
+                environ.pop("AGENT_RUNTIME_STREAM", None)
+            else:
+                environ["AGENT_RUNTIME_STREAM"] = previous_stream
             runtime_logger = logging.getLogger("agent_runtime")
             for handler in runtime_logger.handlers[:]:
                 runtime_logger.removeHandler(handler)

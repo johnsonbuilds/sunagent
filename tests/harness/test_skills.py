@@ -170,7 +170,8 @@ class SkillTurnTests(unittest.IsolatedAsyncioTestCase):
             answer = await run_turn(
                 "hi", llm, registry, harness=harness, trace=trace,
                 runtime=RuntimeConfig(model="m", base_url=None,
-                                      skills_dir=directory))
+                                      skills_dir=directory,
+                                      streaming=False))
         self.assertEqual(answer, "done")
         system = llm.seen[0][0]
         self.assertEqual(system["role"], "system")

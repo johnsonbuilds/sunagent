@@ -49,7 +49,7 @@ def create_agent_turn(
     *,
     harness: HarnessSpec | None = None,
     conversation: Conversation | None = None,
-    stream: bool = False,
+    stream: bool | None = None,
     trace: RunTrace | None = None,
     events: EventEmitter | None = None,
     workspace: Workspace | None = None,
@@ -70,6 +70,10 @@ def create_agent_turn(
 
     Skills always come from ``runtime.skills_dir``; the runtime config is
     the single source of truth for this path.
+
+    ``stream`` defaults to ``runtime.streaming``; an explicit ``True`` /
+    ``False`` still overrides it for tests or a caller that must force one
+    transport for this turn.
     """
     resolved_runtime = runtime if runtime is not None else RuntimeConfig.from_env()
     resolved_harness = harness if harness is not None else default_harness()
@@ -81,6 +85,8 @@ def create_agent_turn(
                              else Conversation())
     resolved_workspace = (workspace if workspace is not None
                           else tools.workspace)
+    resolved_stream = (stream if stream is not None
+                       else resolved_runtime.streaming)
     observations = ObservationFormatter(
         resolved_workspace,
         max_chars=resolved_harness.control.max_observation_chars,
@@ -113,7 +119,7 @@ def create_agent_turn(
         guard=guard,
         tool_runner=tool_runner,
         summarizer=resolved_factory,
-        stream=stream,
+        stream=resolved_stream,
         runtime=resolved_runtime,
     ))
 
@@ -125,7 +131,7 @@ async def run_turn(
     *,
     harness: HarnessSpec | None = None,
     conversation: Conversation | None = None,
-    stream: bool = False,
+    stream: bool | None = None,
     trace: RunTrace | None = None,
     events: EventEmitter | None = None,
     workspace: Workspace | None = None,

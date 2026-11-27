@@ -1140,6 +1140,23 @@ class AgentTurnClassTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(turn.events.run_id, turn.trace.run_id)
         await turn.run()
 
+    def test_stream_defaults_to_runtime(self) -> None:
+        llm = FakeLLM([{"content": "hi", "tool_calls": []}])
+        runtime = RuntimeConfig(model="m", base_url=None, streaming=False)
+
+        turn = create_agent_turn("hello", llm, make_registry(), runtime=runtime)
+
+        self.assertFalse(turn.stream)
+
+    def test_explicit_stream_overrides_runtime(self) -> None:
+        llm = FakeLLM([{"content": "hi", "tool_calls": []}])
+        runtime = RuntimeConfig(model="m", base_url=None, streaming=False)
+
+        turn = create_agent_turn("hello", llm, make_registry(),
+                                 runtime=runtime, stream=True)
+
+        self.assertTrue(turn.stream)
+
     async def test_class_attributes_honor_overrides(self) -> None:
         llm = FakeLLM([
             {"content": "", "tool_calls": [{"id": "1", "function": {

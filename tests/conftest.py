@@ -32,4 +32,8 @@ def isolated_runtime_home(tmp_path, monkeypatch):
     for name in ("AGENT_RUNTIME_HARNESS", "AGENT_RUNTIME_WORKSPACE"):
         if name in os.environ:
             monkeypatch.delenv(name, raising=False)
+    # ``run_turn``/``create_agent_turn`` now default to ``runtime.streaming``
+    # (True).  Most tests use chat-only fakes, so keep the suite on the
+    # non-streaming path unless a test explicitly asks for streaming.
+    monkeypatch.setenv("AGENT_RUNTIME_STREAM", "0")
     return home
