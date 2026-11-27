@@ -107,19 +107,26 @@ class ShouldEchoReasoningTests(unittest.TestCase):
         with patch.dict(os.environ, {"AGENT_RUNTIME_REASONING_ECHO": "always"}):
             self.assertTrue(should_echo_reasoning("gpt-4o", None))
 
-    def test_a_gateway_never_gets_the_reasoning_replayed(self) -> None:
-        # OpenRouter serves "deepseek/..." models but drops the assistant
-        # turn's reasoning before it reaches the upstream model, so the
-        # model-name heuristic must not win here.
-        self.assertFalse(should_echo_reasoning(
+    def test_a_gateway_replays_reasoning_for_an_echo_family_model(self) -> None:
+        # Measured against OpenRouter (deepseek/deepseek-v4.1-flash-1017):
+        # replaying `reasoning_content` on a tool-call round adds the same
+        # prompt tokens as putting the text in `content` (+1131), and the
+        # model can answer from it — so a gateway must not be denied.
+        self.assertTrue(should_echo_reasoning(
             "deepseek/deepseek-v4.1-flash", "https://openrouter.ai/api/v1", "auto"))
 
-    def test_a_gateway_stays_stripped_even_for_a_echo_family_model(self) -> None:
-        for model in ("glm-5.3", "kimi-k2", "deepseek-chat"):
-            self.assertFalse(should_echo_reasoning(
+    def test_a_gateway_replays_reasoning_for_every_echo_family_model(self) -> None:
+        for model in ("z-ai/glm-5.3-flash", "moonshotai/kimi-k2",
+                      "xiaomi/mimo-v2.6-pro", "deepseek/deepseek-v4.1-flash"):
+            self.assertTrue(should_echo_reasoning(
                 model, "https://openrouter.ai/api/v1", "auto"), model)
 
-    def test_the_pinned_modes_still_win_over_the_gateway_rule(self) -> None:
+    def test_a_gateway_still_strips_for_non_thinking_models(self) -> None:
+        self.assertFalse(should_echo_reasoning(
+            "nvidia/nemotron-3.5-super-vl:free",
+            "https://openrouter.ai/api/v1", "auto"))
+
+    def test_the_pinned_modes_still_win_over_the_family_heuristic(self) -> None:
         self.assertTrue(should_echo_reasoning(
             "deepseek/deepseek-v4.1-flash", "https://openrouter.ai/api/v1", "always"))
         self.assertFalse(should_echo_reasoning(

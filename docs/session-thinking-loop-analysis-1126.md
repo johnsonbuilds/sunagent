@@ -43,7 +43,7 @@ DeepSeek 思考模型是按 **interleaved thinking（同一轮多步 tool-call �
 
 但这次运行走的是 `model.json` 里的 OpenRouter 端点（`https://openrouter.ai/api/v1` + `deepseek/deepseek-v4.1-flash-1017`），触发了以下链路：
 
-- `src/agent_runtime/reasoning_echo.py:40, 52-63` 将 `openrouter.ai` 硬编码进 `_GATEWAY_HOST_MARKERS`，`should_echo_reasoning()` 返回 **`False`**；
+- `src/agent_runtime/reasoning_echo.py:40, 52-63` 将 `openrouter.ai` 硬编码进 `_GATEWAY_HOST_MARKERS`，`should_echo_reasoning()` 返回 **`False`**（该硬编码已在 §三 的修复中删除：实测网关并非不接收回放，详见 §三 的复核表）；
 - `src/agent_runtime/providers/llm.py:290-296` 的 `_project_messages_for_wire()` 在 `echo=False` 时执行 `out.pop("reasoning_content", None)`；
 - **Trace 的 `prompt_tokens` 直接实证了模型根本没看到上一轮的思考**：
   - `it=12` 生成了 **4,242 completion tokens**（16,183 字符思考），但 `it=13` 的 `prompt_tokens` 只增加了 `34,617 - 33,751 = 866`（刚好等于 2,510 字符的 tool output + tool_call 参数）；
@@ -54,7 +54,7 @@ DeepSeek 思考模型是按 **interleaved thinking（同一轮多步 tool-call �
 **同仓 trace 对照实验验证（`workspace/traces/` 最近 30 次运行）**：
 
 - `deepseek-v4.1-flash-1017` @ **OpenRouter（`echo=False`）**：高频复现完全相同的循环——本 session 的 Turn 1（`run-40da7f273c84`）60 轮 / 40 万字符思考 / **31 次** `"Now I have/good picture"`；Turn 4（`run-561558aff0a0`）91 轮 / 46.7 万字符 / **34 次**；另一次会话 `run-c6bc9693c28b` 直接打满 **101 轮上限** / 39.2 万字符 / **21 次**；本次 `run-6100fb31cb26` 19 轮被中断 / **10 次**。
-- `main`（`deepseek-flash`）@ **`api.deepseek.com`（`echo=True`）**：最近 7 次运行（7~69 轮），**6/7 次出现 0 次**同类循环，唯一一次 69 轮长任务也仅出现 3 次，单轮 `max_rc` 显著更小。
+- `main`（`deepseek-flash`）@ **`api.deepseek.com`（`echo=True`）**：最近 7 次运行（7~69 轮），**6/7 次出现 0 次**同类循环，唯一一次 69 轮长任务也仅出现 3 次，单轮 `max_rc` 显著更小。（注：原生直连的 `echo=True` 是**必须**的——带 `tools` 的请求不回传 `reasoning_content` 会被直接 400；这条对照只能说明"回放生效的端点循环更少"，不能反推网关不接收回放。）
 
 ### 2. 放大器（Prompt & 执行习惯层）
 
@@ -65,17 +65,40 @@ DeepSeek 思考模型是按 **interleaved thinking（同一轮多步 tool-call �
 
 ## 三、Top 1 改进建议
 
-**Top 1：修通 OpenRouter 的跨工具调用思考链回传（在 `providers/llm.py` 保留并原样回传 `reasoning_details`，解除 `reasoning_echo.py` 对 OpenRouter 的一刀切禁用；并配 `prompt_tokens` 增量验证与非回放降级）。**
+**Top 1：解除 `reasoning_echo.py` 对 OpenRouter 的一刀切禁用，让思考模型家族在网关上照常回传 `reasoning_content`。**
 
 **为什么这是 Top 1（而不是只改 prompt）**：
 
 只改 prompt（比如加"别过度查证"）治标不治本——只要 `echo=False` 持续抹掉模型 100% 的工作记忆，DeepSeek 思考模型每次 tool call 后仍会失忆并从零重推，只是从循环 30 轮变成循环 10 轮。把跨工具调用的思考链续上，才能直接消除"每轮从零重推 → 顺手再查一个细节"的根因（对 OpenRouter 上所有思考模型如 DeepSeek / MiMo / GLM 同样生效）。
 
-**具体改法**：
+**实测复核（2026-11-27，脚本直连两端点）**：
 
-1. **协议层修复（`src/agent_runtime/providers/llm.py`）**：
-   - 之前 `reasoning_echo.py:34-38` 测出 OpenRouter 忽略回传，是因为代码只回了 DeepSeek 原生字段 `reasoning_content`；而 OpenRouter 的标准协议是在 assistant 消息上原样保留并回传 **`reasoning_details`** 数组（类似 `providers/llm.py:409` 目前为 Gemini 保留 `tool_calls` 里的 `extra_content.google.thought_signature` 的做法）。
-   - 当前 `_reasoning_text()`（`providers/llm.py:111-131`）在接收流/响应时提取完文本就把 `reasoning_details` 丢弃了。改为在消息结构中透传保存 `reasoning_details`，在 `_project_messages_for_wire()` 针对 OpenRouter 原样回传 `reasoning_details`（而不是 `pop` 掉后只留 `content=""`），并用 2 轮实测 `prompt_tokens` 增量确认 OpenRouter 上游确实读到了该思考块。
-2. **兜底策略（若特定 OpenRouter 上游仍不支持回传，或用户临时切到非回放端点）**：
-   - DeepSeek 思考模型优先走原生直连（`api.deepseek.com`，已验证 `echo=True` 且几乎无此循环）；
-   - 当 `echo_reasoning == False` 时，由 `TurnOpening` 自动追加一条轻量运行时提示（要求模型在 tool-call 轮次的 `content` 中用 1~2 句保留已确认结论与剩余唯一待办，作为跨轮工作记忆），并在 `TurnGuard` 增加"连续 N 轮纯只读工具 + 大段 reasoning + 0 文件修改"的收敛 nudge。
+原建议里"OpenRouter 只用 `reasoning_details` 才行"的判断是错的，触发条件是**请求必须带 `tools`**。用同一形状（`assistant(reasoning + tool_calls) → tool`）只改一个变量：
+
+| 端点 | `tools` | 回放字段 | prompt_tokens | 模型能否读到暗号 |
+|---|---|---|---|---|
+| OpenRouter | 带 | 无 | 373（基线） | 否 |
+| OpenRouter | 带 | `reasoning_content` | **2177（+1804）** | **是** |
+| OpenRouter | 带 | `reasoning_details` | 2177（+1804） | 是 |
+| OpenRouter | 无 | `reasoning_content` | 116（**+0**） | 否 |
+| DeepSeek 原生 | 带 | 无 | **HTTP 400**：`The reasoning_content in the thinking mode must be passed back to the API.` | — |
+| DeepSeek 原生 | 带 | `reasoning_content` | 1495（+1131） | 是 |
+| DeepSeek 原生 | 带 | `reasoning_details` | **HTTP 400** | — |
+
+三条结论：
+
+1. 与 DeepSeek 文档一致："请求带 `tools` 参数时，历史各轮的 `reasoning_content` 应回传并会被拼接进上下文；不带 `tools` 时即使回传也会被忽略。" agent loop 每个迭代都带 `tools`，所以回放在 loop 内有效。
+2. 原 `reasoning_echo.py` 里"6400 字符回放涨 0 token"的测量，是在**不带 `tools`** 的形状下做的，因此得出了"网关丢弃 reasoning"的错误结论，进而把 `openrouter.ai` 硬编码进了 `_GATEWAY_HOST_MARKERS`。
+3. `reasoning_details` 不是必需通道：OpenRouter 上它与 `reasoning_content` 等价；而 DeepSeek 原生端点**只认** `reasoning_content`（回 `reasoning_details` 直接 400）。因此修复应统一走 `reasoning_content`，而不是改成只回 `reasoning_details`。
+
+**已落地的改法**：
+
+1. `src/agent_runtime/reasoning_echo.py`：删除 `_GATEWAY_HOST_MARKERS` / `_endpoint_replays_reasoning()`，`auto` 只按思考模型家族（`deepseek/glm/mimo/kimi/...`）判定；`AGENT_RUNTIME_REASONING_ECHO=always|never` 仍可强制覆盖。`providers/llm.py` 与 context 预算层共用同一判定，因此预算记账同步变准（reasoning 真的上 wire 时才计费）。
+2. `tests/providers/test_llm.py`：把两条"网关剥离"用例改为"网关上思考模型回放 / 非思考模型仍剥离"，并断言强制模式仍优先。
+3. 全量测试通过（986 passed）。
+
+**仍存在的风险（本次未改）**：
+
+- 回放只是让模型记得自己的结论，不会自动让它停止探索；§二.2 的两个放大器（`coding-v2` 原则 3 触发的"再确认一次"、任务状态未外化到文件）仍在。预期循环显著变短，而不是必然归零。
+- `echo=True` 后长思考任务更容易触发 `llm_summary` 压缩，属于记账变准确的副作用。
+- 兜底策略（`TurnOpening` 的轻量工作记忆提示、`TurnGuard` 的收敛 nudge）暂未实现；只有在后续实测仍出现"大段 reasoning + 0 文件修改"的空转时才值得加。
