@@ -104,10 +104,6 @@ def _runtime_snapshot(runtime: "RuntimeConfig | None") -> dict[str, Any]:
         "retry_4xx": runtime.retry_4xx,
         "reasoning_effort": runtime.reasoning_effort,
         "reasoning_echo_mode": runtime.reasoning_echo_mode,
-        # The resolved answer, not just the knob: whether assistant reasoning
-        # actually rides the wire for this endpoint.  Post-mortems of a
-        # cross-tool "amnesia" loop need exactly this bit.
-        "reasoning_echo": runtime.should_echo(),
         "summary_model": runtime.summary_model,
         "workspace_root": runtime.workspace_root,
         "command_guard_mode": runtime.command_guard_mode,

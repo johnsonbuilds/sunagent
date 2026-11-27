@@ -13,7 +13,12 @@ from typing import Any
 from agent_runtime.harness import ContextGenome
 
 from agent_runtime.agent.context.compact import compact_observations
-from agent_runtime.agent.context.metrics import ViewBudget
+from agent_runtime.agent.context.metrics import (
+    _anchor_chars_per_token,
+    _count_reasoning,
+    _view_size,
+    total_chars,
+)
 from agent_runtime.agent.context.strategies import CONTEXT_STRATEGY_DEFINITIONS
 from agent_runtime.agent.context.summary import extract_summary
 
@@ -24,9 +29,10 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
                                  compact_messages: list[dict[str, Any]] | None = None,
                                  trace: Any = None, iteration: int | None = None,
                                  boundary: int = 0,
-                                 budget: ViewBudget | None = None,
+                                 usage_anchor: tuple[int, int, int] | None = None,
                                  force_budget: int | None = None,
                                  summarizer: Any = None,
+                                 count_reasoning: bool | None = None,
                                  usage_sink: Any = None,
                                  fallback_strategy: str = "compact_observations",
                                  **options: Any) -> list[dict[str, Any]]:
@@ -46,9 +52,8 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
     again).  It defaults to the deterministic compactor; pass a registered
     custom name to override without touching this adapter.
 
-    ``budget`` is the one valuation of this view (limit, unit, usage anchor and
-    whether reasoning rides the wire).  Omitted, it is read from the genome with
-    reasoning counted — the pre-existing behavior for direct callers.
+    Reasoning chars are budgeted only when the echo policy will replay them on
+    the wire.
     """
     from agent_runtime.agent.context.strategies import ContextStrategyRequest
 
@@ -59,14 +64,16 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
             f"unknown context strategy: {strategy!r}; "
             f"known: {sorted(CONTEXT_STRATEGY_DEFINITIONS)}")
 
-    if budget is None:
-        budget = ViewBudget.for_context(context)
+    count = _count_reasoning(count_reasoning)
+    unit = context.budget_unit
     # force_budget (context-window hard gate) must push below the size the
     # provider just rejected, so it wins whenever it is the tighter bound.
+    budget = context.context_budget
     if force_budget is not None:
-        budget = budget.with_limit(min(budget.limit, force_budget))
+        budget = min(budget, force_budget)
     working = compact_messages if compact_messages is not None else messages
-    if definition.budget_gated and budget.size(working) <= budget.limit:
+    if (definition.budget_gated
+            and _view_size(working, count, unit, usage_anchor) <= budget):
         return working
 
     # Wall time spent building the view: summarizer calls plus the deterministic
@@ -77,6 +84,9 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
         working=working,
         context=context,
         budget=budget,
+        unit=unit,
+        count_reasoning=count,
+        usage_anchor=usage_anchor,
         boundary=boundary,
         previous_summary=extract_summary(working),
         trace=trace,
@@ -89,7 +99,8 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
 
     if (force_budget is not None and result is not working
             and result is not messages
-            and budget.size(result) >= budget.size(working)):
+            and _view_size(result, count, unit, usage_anchor)
+            >= _view_size(working, count, unit, usage_anchor)):
         # Hard gate with no shrinkage: resending this view would be rejected
         # again, burning a retry.  Fall back to ``fallback_strategy``; if even
         # that cannot shrink, ``TurnHistory.shrink_view`` reports no-progress by
@@ -105,7 +116,10 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
             messages=messages,
             working=working,
             context=context,
-            budget=budget,
+            budget=force_budget,
+            unit=unit,
+            count_reasoning=count,
+            usage_anchor=usage_anchor,
             boundary=boundary,
             previous_summary=extract_summary(working),
             trace=trace,
@@ -114,29 +128,33 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
             summarizer=summarizer,
             usage_sink=usage_sink if usage_sink is not None else options.get("usage_sink"),
         )
-        # The deterministic compactor path is char-metered: ``char_limit``
-        # converts the token-unit force budget through the anchor ratio.  Custom
-        # fallback strategies receive the whole budget and do their own unit
+        # The deterministic compactor path is char-metered: convert an explicit
+        # token-unit force budget through the anchor ratio.  Custom fallback
+        # strategies receive the raw force budget and do their own unit
         # handling.
         if fallback_strategy == "compact_observations":
+            if unit == "tokens":
+                force_chars = max(1, int(force_budget
+                                         * _anchor_chars_per_token(usage_anchor)))
+            else:
+                force_chars = force_budget
             result = compact_observations(
-                messages, budget=budget.char_limit,
+                messages, budget=force_chars,
                 window_rounds=context.window_rounds,
                 keep_recent_rounds=context.keep_recent_rounds,
                 head_chars=context.head_chars,
-                exempt_tools=context.retrieval_exempt_tools,
-                echo_reasoning=budget.echo_reasoning)
+                exempt_tools=context.retrieval_exempt_tools)
         else:
             result = await fallback.handler(fallback_request)
 
     if trace is not None and result is not working and result is not messages:
         trace.emit(f"context.{strategy}", iteration,
                    duration_ms=round((time.monotonic() - started) * 1000, 3),
-                   original_chars=budget.chars(messages),
-                   request_chars=budget.chars(result),
+                   original_chars=total_chars(messages, count),
+                   request_chars=total_chars(result, count),
                    original_count=len(messages),
                    request_count=len(result),
-                   budget_unit=budget.unit, budget=budget.limit)
+                   budget_unit=unit, budget=budget)
         summary = extract_summary(result)
         if summary is not None:
             # The summary text lives on the trace (per-run, queryable) instead of

@@ -14,7 +14,10 @@ from typing import Any
 from agent_runtime.harness import ContextGenome
 
 from agent_runtime.agent.context.compact import compact_observations
-from agent_runtime.agent.context.metrics import ViewBudget
+from agent_runtime.agent.context.metrics import (
+    _anchor_chars_per_token,
+    _count_reasoning,
+)
 from agent_runtime.agent.context.summary import extract_summary, summarize_history
 from agent_runtime.agent.context.turn_fold import turn_fold_messages
 
@@ -26,16 +29,15 @@ STRATEGY_TURN_FOLD = "turn_fold"
 
 @dataclass(frozen=True)
 class ContextStrategyRequest:
-    """Everything a context strategy may need to build the request view.
-
-    ``budget`` carries the whole valuation (limit, unit, usage anchor, echo
-    policy): a handler never re-derives one of those on its own.
-    """
+    """Everything a context strategy may need to build the request view."""
 
     messages: list[dict[str, Any]]
     working: list[dict[str, Any]]
     context: ContextGenome
-    budget: ViewBudget
+    budget: int
+    unit: str
+    count_reasoning: bool
+    usage_anchor: tuple[int, int, int] | None
     boundary: int
     previous_summary: str | None
     trace: Any
@@ -64,33 +66,38 @@ async def _full_history_strategy(
 
 async def _compact_observations_strategy(
         request: ContextStrategyRequest) -> list[dict[str, Any]]:
-    # compact_observations is char-metered by construction; ``char_limit``
-    # converts a token-unit budget with the anchor-calibrated ratio (a
-    # threshold decision, so conversion noise is acceptable).
+    # compact_observations is char-metered by construction; under the
+    # tokens unit the budget is converted with the anchor-calibrated
+    # ratio (a threshold decision, so conversion noise is acceptable).
+    char_budget = request.budget
+    if request.unit == "tokens":
+        char_budget = max(
+            1, int(request.budget
+                   * _anchor_chars_per_token(request.usage_anchor)))
     return compact_observations(
-        request.messages, budget=request.budget.char_limit,
+        request.messages, budget=char_budget,
         window_rounds=request.context.window_rounds,
         keep_recent_rounds=request.context.keep_recent_rounds,
         head_chars=request.context.head_chars,
         exempt_tools=request.context.retrieval_exempt_tools,
-        echo_reasoning=request.budget.echo_reasoning)
+        count_reasoning=request.count_reasoning)
 
 
 async def _llm_summary_strategy(
         request: ContextStrategyRequest) -> list[dict[str, Any]]:
     return await summarize_history(
-        request.messages, budget=request.budget.limit,
+        request.messages, budget=request.budget,
         tail_rounds=request.context.summary_tail_rounds,
         user_preserve_budget=request.context.user_preserve_budget,
         summary_max_tokens=request.context.summary_max_tokens,
         summary_reasoning_effort=request.context.summary_reasoning_effort,
         boundary=request.boundary,
         previous_summary=request.previous_summary,
-        unit=request.budget.unit, usage_anchor=request.budget.anchor,
+        unit=request.unit, usage_anchor=request.usage_anchor,
         exempt_tools=request.context.retrieval_exempt_tools,
         prompt=request.prompt, trace=request.trace,
         iteration=request.iteration, llm=request.summarizer,
-        echo_reasoning=request.budget.echo_reasoning,
+        count_reasoning=request.count_reasoning,
         usage_sink=request.usage_sink)
 
 

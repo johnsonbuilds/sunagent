@@ -93,14 +93,9 @@ DeepSeek 思考模型是按 **interleaved thinking（同一轮多步 tool-call �
 
 **已落地的改法**：
 
-1. `src/agent_runtime/reasoning_echo.py`：删除 `_GATEWAY_HOST_MARKERS` / `_endpoint_replays_reasoning()`，`auto` 只按思考模型家族（`deepseek/glm/mimo/kimi/...`）判定；`AGENT_RUNTIME_REASONING_ECHO=always|never` 仍可强制覆盖。
-2. **调用链收敛（"一个布尔只解析一次"）**：此前同一个回放判定被解析 5 次（`llm.echo_reasoning`、`resolve_echo_reasoning` 的 4 级兜底、`metrics._count_reasoning` 回读 env），并在 8 个文件、12 个签名里传了 41 次。现在：
-   - `loop.py` 调一次 `resolve_echo_reasoning(llm, runtime)`（只保留 llm 真值 → runtime → env 脚本兜底三级），结果存进 `TurnHistory.echo_reasoning`；
-   - 预算侧只由 `TurnHistory` 构造一个 `ViewBudget`（limit / unit / usage anchor / echo 四项合一）传进 `apply_context_strategy`，`ContextStrategyRequest` 也只带这一个对象；
-   - `metrics._count_reasoning` 与所有 `count_reasoning` 参数删除，`agent/context` 不再 import `reasoning_echo`，组合根以下不再读 env；
-   - `trace.run.config` 新增 `reasoning_echo`（解析后的布尔），排查同类问题不必再手工重算。
-3. `tests/providers/test_llm.py`：把两条"网关剥离"用例改为"网关上思考模型回放 / 非思考模型仍剥离"，并断言强制模式仍优先；`tests/agent/test_context*.py` 改为显式传 `echo_reasoning`，不再靠 env 兜底"恰好通过"。
-4. 全量测试通过（991 passed）。
+1. `src/agent_runtime/reasoning_echo.py`：删除 `_GATEWAY_HOST_MARKERS` / `_endpoint_replays_reasoning()`，`auto` 只按思考模型家族（`deepseek/glm/mimo/kimi/...`）判定；`AGENT_RUNTIME_REASONING_ECHO=always|never` 仍可强制覆盖。`providers/llm.py` 与 context 预算层共用同一判定，因此预算记账同步变准（reasoning 真的上 wire 时才计费）。
+2. `tests/providers/test_llm.py`：把两条"网关剥离"用例改为"网关上思考模型回放 / 非思考模型仍剥离"，并断言强制模式仍优先。
+3. 全量测试通过（986 passed）。
 
 **仍存在的风险（本次未改）**：
 

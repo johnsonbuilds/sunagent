@@ -131,7 +131,7 @@
 | `AGENT_RUNTIME_PYTHON` | `tools/code.py:25` | 每次执行工具 |
 | `AGENT_RUNTIME_HOME` | `storage.py:43` | 每次取路径 |
 | `AGENT_RUNTIME_MODEL_CATALOG` | `model_catalog.py:109` | 启动期一次 |
-| `AGENT_RUNTIME_REASONING_ECHO` | `reasoning_echo.py:44` | 无 runtime 时的兼容兜底 |
+| `AGENT_RUNTIME_REASONING_ECHO` | `reasoning_echo.py:49` | 无 runtime 时的兼容兜底 |
 
 其中 `PYTHON` / `HOME` 与 `skills_dir` 同族（深层 per-call env 读），应纳入下一单排查范围；`MODEL_CATALOG` / `REASONING_ECHO` 见 §4.7 / §4.8。
 

@@ -32,7 +32,6 @@ from agent_runtime.harness import (
 
 from agent_runtime.agent.context.compact import compact_observations
 from agent_runtime.agent.context.metrics import (
-    ViewBudget,
     _anchor_chars_per_token,
     _view_size,
     request_view_size,
@@ -68,7 +67,6 @@ __all__ = [
     "STRATEGY_TURN_FOLD",
     "CONTEXT_STRATEGY_DEFINITIONS", "ContextStrategyDefinition",
     "ContextStrategyRequest", "SUMMARY_PREFIX", "SUMMARIZER_INSTRUCTION",
-    "ViewBudget",
     "request_view_size", "apply_context_strategy", "apply_memory_strategy",
     "compact_observations", "register_context_strategy",
     "summarize_history", "extract_summary", "total_chars",
