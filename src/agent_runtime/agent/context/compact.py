@@ -15,7 +15,7 @@ from agent_runtime.harness import (
     DEFAULT_WINDOW_ROUNDS,
 )
 
-from agent_runtime.agent.context.metrics import _count_reasoning, total_chars
+from agent_runtime.agent.context.metrics import total_chars
 
 
 def _round_starts(messages: list[dict[str, Any]]) -> list[int]:
@@ -92,7 +92,7 @@ def compact_observations(messages: list[dict[str, Any]], *,
                          keep_recent_rounds: int = DEFAULT_KEEP_RECENT_ROUNDS,
                          head_chars: int = DEFAULT_HEAD_CHARS,
                          exempt_tools: tuple[str, ...] = (),
-                         count_reasoning: bool | None = None,
+                         echo_reasoning: bool = True,
                          ) -> list[dict[str, Any]]:
     """Return a compacted copy of ``messages`` when it exceeds ``budget``.
 
@@ -107,11 +107,11 @@ def compact_observations(messages: list[dict[str, Any]], *,
        the budget the budget yields, not the context.
     3. If the budget is still exceeded, exempt observations fold too.
 
-    Reasoning chars count toward ``budget`` only when the echo policy will
-    actually replay them on the wire.  Below budget the original list is
-    returned unchanged.
+    Reasoning chars count toward ``budget`` only when ``echo_reasoning`` says
+    they will actually ride the wire (the caller passes the resolved policy).
+    Below budget the original list is returned unchanged.
     """
-    count = _count_reasoning(count_reasoning)
+    count = echo_reasoning
     if total_chars(messages, count) <= budget:
         return messages
     starts = _round_starts(messages)
