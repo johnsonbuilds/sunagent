@@ -19,7 +19,9 @@ def _cached_summarizer(summary_model: str | None) -> Any:
     """Per-model cached summarizer provider."""
     from agent_runtime.providers.llm import OpenAICompatibleLLM
 
-    return OpenAICompatibleLLM(model=summary_model)
+    # Summarizing is a ``tools=None``, reasoning-effort "none" call, so a
+    # replayed chain of thought would never be concatenated: pin it off.
+    return OpenAICompatibleLLM(model=summary_model, echo_reasoning=False)
 
 
 def default_summarizer(runtime: Any | None = None) -> Any:

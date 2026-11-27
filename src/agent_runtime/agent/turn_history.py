@@ -62,7 +62,7 @@ class TurnHistory:
 
     def __init__(self, messages: list[dict[str, Any]], *,
                  summarizer: Any = None,
-                 echo_reasoning: bool = True) -> None:
+                 echo_reasoning: bool) -> None:
         self.messages = messages
         self.view: list[dict[str, Any]] = list(messages)
         # Explicit summarizer (provider object or lazy factory); when omitted,

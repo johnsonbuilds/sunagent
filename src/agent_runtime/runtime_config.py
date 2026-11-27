@@ -28,6 +28,9 @@ logger = logging.getLogger(__name__)
 #: Guard policies accepted by :class:`execution.guard.CommandGuard`.
 GUARD_MODES = ("off", "blocklist", "allowlist")
 
+#: Default model when neither env nor the caller supplies one.
+DEFAULT_MODEL = "glm-5.3"
+
 #: Where ``skills/<name>/SKILL.md`` bundles are read from.
 ENV_SKILLS_DIR = "AGENT_RUNTIME_SKILLS_DIR"
 #: Default skills directory, relative to the process working directory.
@@ -76,7 +79,6 @@ class RuntimeConfig:
     base_url: str | None
     api_key: str | None = None
     temperature: float = 0.0
-    reasoning_echo_mode: str = "auto"
     reasoning_effort: str | None = None
     stream_usage: bool = True
     streaming: bool = True
@@ -100,10 +102,6 @@ class RuntimeConfig:
         Accepts every field name so call sites can forward explicit
         constructor args without re-reading ``os.environ``.
         """
-        from agent_runtime.reasoning_echo import (
-            DEFAULT_MODEL,
-            reasoning_echo_mode,
-        )
 
         def pick(name: str, env_value: Any) -> Any:
             value = overrides.get(name, None)
@@ -134,13 +132,6 @@ class RuntimeConfig:
             budget = raw_budget
             if isinstance(budget, int) and budget <= 0:
                 budget = None
-
-        mode_override = overrides.get("reasoning_echo_mode", None)
-        mode = (mode_override.strip().lower()
-                if isinstance(mode_override, str) and mode_override.strip()
-                else reasoning_echo_mode())
-        if mode not in ("auto", "always", "never"):
-            mode = "auto"
 
         temperature_override = overrides.get("temperature", None)
         if temperature_override is None:
@@ -197,7 +188,6 @@ class RuntimeConfig:
             base_url=pick("base_url", _env_optional_str("LLM_BASE_URL")),
             api_key=pick("api_key", _env_optional_str("LLM_API_KEY")),
             temperature=temperature,
-            reasoning_echo_mode=mode,
             reasoning_effort=effort,
             stream_usage=stream_usage,
             streaming=streaming,
@@ -218,42 +208,21 @@ class RuntimeConfig:
             harness=pick("harness", _env_optional_str("AGENT_RUNTIME_HARNESS")),
         )
 
-    def should_echo(self, model: str | None = None,
-                    base_url: str | None = None) -> bool:
-        """Wire-projection decision for this config's endpoint."""
-        from agent_runtime.reasoning_echo import should_echo_reasoning
 
-        return should_echo_reasoning(
-            self.model if model is None else model,
-            self.base_url if base_url is None else base_url,
-            self.reasoning_echo_mode)
+def resolve_echo_reasoning(llm: Any | None) -> bool:
+    """The adapter's replay decision, resolved exactly once.
 
-    @property
-    def echo_reasoning(self) -> bool:
-        """Whether assistant ``reasoning_content`` is replayed on the wire."""
-        return self.should_echo()
+    The provider owns the decision: a catalog entry may pin it
+    (``ModelEntry.echo_reasoning``), otherwise the adapter falls back to the
+    model-family default in :mod:`agent_runtime.reasoning_echo`.  There is no
+    runtime or env-level second opinion to reconcile, so the loop and the
+    trace can both read this value and stay consistent with the wire.
 
-
-def resolve_echo_reasoning(llm: Any | None,
-                           runtime: RuntimeConfig | None = None) -> bool:
-    """Whether assistant reasoning rides the wire, resolved exactly once.
-
-    Called by the loop when it builds the turn's ``TurnHistory``: the answer is
-    stored there and every budget decision reads it, so no layer below the
-    composition root re-derives it or re-reads the environment.
-
-    Preference: ``llm.echo_reasoning`` (the adapter's decision, bound to the
-    endpoint it actually calls) > ``runtime.echo_reasoning`` > the env-backed
-    default for scripts and direct callers.
+    Anything without the property — a test double or a script stub — counts as
+    "no replay"; a caller that needs the other behavior sets it explicitly.
     """
     candidate = getattr(llm, "echo_reasoning", None)
-    if isinstance(candidate, bool):
-        return candidate
-    if runtime is not None:
-        return runtime.echo_reasoning
-    from agent_runtime.reasoning_echo import reasoning_echo_enabled
-
-    return reasoning_echo_enabled()
+    return candidate if isinstance(candidate, bool) else False
 
 
 __all__ = ["RuntimeConfig", "resolve_echo_reasoning"]

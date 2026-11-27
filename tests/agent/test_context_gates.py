@@ -327,7 +327,8 @@ class HardGateRecoveryTests(unittest.IsolatedAsyncioTestCase):
                     raise ContextWindowExceededError("maximum context length")
                 return {"content": "ok", "tool_calls": []}
 
-        history = TurnHistory(build_rounds(10, tool_chars=5_000))
+        history = TurnHistory(
+            build_rounds(10, tool_chars=5_000), echo_reasoning=True)
 
         response = await chat_with_recovery(
             FlakyLLM(), history, None, 1, spec, runtime=_RUNTIME)
@@ -355,7 +356,8 @@ class HardGateRecoveryTests(unittest.IsolatedAsyncioTestCase):
                     raise ContextWindowExceededError("context window")
                 return {"content": "ok", "tool_calls": []}
 
-        history = TurnHistory(build_rounds(10, tool_chars=5_000))
+        history = TurnHistory(
+            build_rounds(10, tool_chars=5_000), echo_reasoning=True)
 
         response = await chat_with_recovery(
             OverflowTwiceLLM(), history, None, 1, spec, runtime=_RUNTIME)
@@ -374,7 +376,8 @@ class HardGateRecoveryTests(unittest.IsolatedAsyncioTestCase):
                 attempts.append(len(messages))
                 raise ContextWindowExceededError("context window")
 
-        history = TurnHistory(build_rounds(4, tool_chars=5_000))
+        history = TurnHistory(
+            build_rounds(4, tool_chars=5_000), echo_reasoning=True)
 
         with self.assertRaises(ContextWindowExceededError):
             await chat_with_recovery(OverflowLLM(), history, None, 1, spec,
@@ -388,7 +391,8 @@ class TurnHistoryAnchorTests(unittest.IsolatedAsyncioTestCase):
         conversation = Conversation()
         conversation.messages.extend(build_rounds(3, tool_chars=50))
         llm = FakeSummaryLLM()
-        history = TurnHistory(conversation.messages, summarizer=llm)
+        history = TurnHistory(
+            conversation.messages, summarizer=llm, echo_reasoning=True)
         history.record_usage(5_000)
         anchor = history.usage_anchor
         assert anchor is not None
@@ -555,7 +559,7 @@ class AnchorLifecycleTests(unittest.IsolatedAsyncioTestCase):
         # refresh drops it until the next billed response re-anchors.
         conversation = Conversation()
         conversation.messages.extend(build_rounds(3, tool_chars=5_000))
-        history = TurnHistory(conversation.messages)
+        history = TurnHistory(conversation.messages, echo_reasoning=True)
         history.record_usage(5_000)
         self.assertIsNotNone(history.usage_anchor)
         genome = ContextGenome(strategy="compact_observations",
@@ -567,7 +571,7 @@ class AnchorLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_anchor_kept_without_compaction(self) -> None:
         conversation = Conversation()
         conversation.messages.extend(build_rounds(1, tool_chars=10))
-        history = TurnHistory(conversation.messages)
+        history = TurnHistory(conversation.messages, echo_reasoning=True)
         history.record_usage(5_000)
         genome = ContextGenome(strategy="compact_observations",
                               context_budget=10 ** 9)
@@ -584,7 +588,7 @@ class AnchorLifecycleTests(unittest.IsolatedAsyncioTestCase):
             {"role": "assistant", "content": "final1"},
             {"role": "user", "content": "task2"},
         ]
-        history = TurnHistory(messages)
+        history = TurnHistory(messages, echo_reasoning=True)
         genome = ContextGenome(strategy="turn_fold")
         await history.refresh_view(genome)
         history.record_usage(100)
@@ -855,7 +859,8 @@ class BoundaryChaseTests(unittest.IsolatedAsyncioTestCase):
                 "role": "tool", "tool_call_id": f"call-{i}",
                 "content": "x" * chars,
             })
-        return TurnHistory(conversation.messages, summarizer=summarizer)
+        return TurnHistory(
+            conversation.messages, summarizer=summarizer, echo_reasoning=True)
 
     async def test_noop_refreshes_do_not_freeze_next_summary(self) -> None:
         class CountingLLM:

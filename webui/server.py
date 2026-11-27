@@ -30,7 +30,7 @@ from dotenv import load_dotenv
 from agent_runtime import storage
 from agent_runtime.agent import RunTrace, run_turn
 from agent_runtime.diagnosis import delete_bundle
-from agent_runtime.runtime_config import RuntimeConfig
+from agent_runtime.runtime_config import RuntimeConfig, resolve_echo_reasoning
 from agent_runtime.channels.webui import WebUIChannel
 from agent_runtime.events import EventEmitter
 from agent_runtime.metrics import afinalize_run
@@ -890,6 +890,9 @@ def _prepare_turn(session: Session, message: str, snapshot: TurnSnapshot,
                       "stream": snapshot.stream,
                       "max_iterations": snapshot.harness.control.max_iterations},
         tools=snapshot.tools.schemas,
+        # Same resolution the loop applies to TurnHistory, so run.config
+        # cannot drift from what the wire actually replays.
+        reasoning_echo=resolve_echo_reasoning(snapshot.llm),
     )
     events = EventEmitter(run_id=trace.run_id)
     channel = WebUIChannel(sink=_session_sink(session))

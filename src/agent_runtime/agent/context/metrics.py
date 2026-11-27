@@ -107,7 +107,9 @@ class ViewBudget:
         """Read the genome's budget knobs into one valuation.
 
         ``context`` is only duck-typed (``context_budget`` / ``budget_unit``),
-        so this module keeps no dependency on the harness layer.
+        so this module keeps no dependency on the harness layer.  The default
+        ``echo_reasoning=True`` deliberately counts every reasoning char:
+        callers that know the endpoint drops it pass ``False`` explicitly.
         """
         return cls(limit=context.context_budget, unit=context.budget_unit,
                    anchor=anchor, echo_reasoning=echo_reasoning)

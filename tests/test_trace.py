@@ -222,8 +222,27 @@ class RunRecordPolicyTests(unittest.IsolatedAsyncioTestCase):
 
             config = next(event.data for event in trace.events
                           if event.event_type == "run.config")
-            self.assertEqual(config["runtime"]["reasoning_echo_mode"], "auto")
             self.assertIs(config["runtime"]["reasoning_echo"], True)
+
+    async def test_explicit_reasoning_echo_wins_over_the_runtime_guess(self) -> None:
+        # integrations/harbor.py constructs the adapter with a model that can
+        # differ from runtime.model, so the recorded bit must come from the
+        # adapter's resolution, not be re-derived from the runtime.
+        from agent_runtime.runtime_config import RuntimeConfig
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "run.jsonl"
+            trace = self._trace(path, retain_events="control")
+            runtime = RuntimeConfig(model="deepseek/deepseek-v4.1-flash",
+                                    base_url="https://openrouter.ai/api/v1")
+            trace.record_config(model_params={"model": runtime.model},
+                                tools=[], runtime=runtime,
+                                reasoning_echo=False)
+            await trace.flush()
+
+            config = next(event.data for event in trace.events
+                          if event.event_type == "run.config")
+            self.assertIs(config["runtime"]["reasoning_echo"], False)
 
     async def test_streamed_chunks_are_dropped_and_counted(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

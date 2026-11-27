@@ -101,8 +101,7 @@ class AgentTurn:
         self.conversation.append({"role": "user", "content": self.user_message})
         history = TurnHistory(self.conversation.messages,
                               summarizer=self.summarizer,
-                              echo_reasoning=resolve_echo_reasoning(
-                                  self.llm, self.runtime))
+                              echo_reasoning=resolve_echo_reasoning(self.llm))
 
         try:
             for iteration in range(1, self.max_iterations + 1):

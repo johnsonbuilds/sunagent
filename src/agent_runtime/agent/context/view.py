@@ -47,8 +47,9 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
     custom name to override without touching this adapter.
 
     ``budget`` is the one valuation of this view (limit, unit, usage anchor and
-    whether reasoning rides the wire).  Omitted, it is read from the genome with
-    reasoning counted — the pre-existing behavior for direct callers.
+    whether reasoning rides the wire).  Omitted, it is built from the genome
+    with reasoning counted — direct callers that talk to a non-replaying
+    endpoint must pass their own ``ViewBudget`` instead.
     """
     from agent_runtime.agent.context.strategies import ContextStrategyRequest
 
@@ -63,10 +64,14 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
         budget = ViewBudget.for_context(context)
     # force_budget (context-window hard gate) must push below the size the
     # provider just rejected, so it wins whenever it is the tighter bound.
+    # Keep the raw target for the fallback: it may deliberately exceed the
+    # genome budget (``shrink_view`` targets 70% of the *measured* rejected
+    # size), and the hard gate must honour that measurement.
+    gate_budget = budget
     if force_budget is not None:
-        budget = budget.with_limit(min(budget.limit, force_budget))
+        gate_budget = budget.with_limit(min(budget.limit, force_budget))
     working = compact_messages if compact_messages is not None else messages
-    if definition.budget_gated and budget.size(working) <= budget.limit:
+    if definition.budget_gated and gate_budget.size(working) <= gate_budget.limit:
         return working
 
     # Wall time spent building the view: summarizer calls plus the deterministic
@@ -76,7 +81,7 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
         messages=messages,
         working=working,
         context=context,
-        budget=budget,
+        budget=gate_budget,
         boundary=boundary,
         previous_summary=extract_summary(working),
         trace=trace,
@@ -89,7 +94,7 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
 
     if (force_budget is not None and result is not working
             and result is not messages
-            and budget.size(result) >= budget.size(working)):
+            and gate_budget.size(result) >= gate_budget.size(working)):
         # Hard gate with no shrinkage: resending this view would be rejected
         # again, burning a retry.  Fall back to ``fallback_strategy``; if even
         # that cannot shrink, ``TurnHistory.shrink_view`` reports no-progress by
@@ -101,11 +106,16 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
             raise ValueError(
                 f"unknown fallback context strategy: {fallback_strategy!r}; "
                 f"known: {sorted(CONTEXT_STRATEGY_DEFINITIONS)}")
+        # The fallback works against the raw hard-gate target, not the tighter
+        # genome bound: the provider rejected a view bigger than the genome
+        # budget, and shrinking only to the genome bound can still leave the
+        # request above the measured rejection point.
+        fallback_budget = budget.with_limit(force_budget)
         fallback_request = ContextStrategyRequest(
             messages=messages,
             working=working,
             context=context,
-            budget=budget,
+            budget=fallback_budget,
             boundary=boundary,
             previous_summary=extract_summary(working),
             trace=trace,
@@ -120,7 +130,7 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
         # handling.
         if fallback_strategy == "compact_observations":
             result = compact_observations(
-                messages, budget=budget.char_limit,
+                messages, budget=fallback_budget.char_limit,
                 window_rounds=context.window_rounds,
                 keep_recent_rounds=context.keep_recent_rounds,
                 head_chars=context.head_chars,

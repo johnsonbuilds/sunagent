@@ -93,14 +93,18 @@ DeepSeek 思考模型是按 **interleaved thinking（同一轮多步 tool-call �
 
 **已落地的改法**：
 
-1. `src/agent_runtime/reasoning_echo.py`：删除 `_GATEWAY_HOST_MARKERS` / `_endpoint_replays_reasoning()`，`auto` 只按思考模型家族（`deepseek/glm/mimo/kimi/...`）判定；`AGENT_RUNTIME_REASONING_ECHO=always|never` 仍可强制覆盖。
-2. **调用链收敛（"一个布尔只解析一次"）**：此前同一个回放判定被解析 5 次（`llm.echo_reasoning`、`resolve_echo_reasoning` 的 4 级兜底、`metrics._count_reasoning` 回读 env），并在 8 个文件、12 个签名里传了 41 次。现在：
-   - `loop.py` 调一次 `resolve_echo_reasoning(llm, runtime)`（只保留 llm 真值 → runtime → env 脚本兜底三级），结果存进 `TurnHistory.echo_reasoning`；
+1. `src/agent_runtime/reasoning_echo.py`：删除 `_GATEWAY_HOST_MARKERS` / `_endpoint_replays_reasoning()`，模块收敛成一个纯函数 `derives_echo_reasoning(model, base_url)`，只按思考模型家族（`deepseek/glm/mimo/kimi/...`）给默认值。
+2. **单一真源：`ModelEntry.echo_reasoning`**。是否回放是模型/端点能力，不是部署条件：
+   - `model.json` 的 entry 可选 `echo_reasoning: true|false`；省略时走上面的纯函数默认；
+   - `OpenAICompatibleLLM(..., echo_reasoning=...)` 显式值优先，否则家族默认；生产里只有 webui 的 `resolve_turn` 会把 entry 的值传进来，Harbor / `run_agent.py` 没有 entry，直接走默认；
+   - `AGENT_RUNTIME_REASONING_ECHO`、`RuntimeConfig.reasoning_echo_mode` / `should_echo` / `echo_reasoning`、`reasoning_echo_mode()` / `reasoning_echo_enabled()` 全部删除；`resolve_echo_reasoning(llm)` 只剩"读 adapter 的 bool，缺失算无回放"。
+3. **调用链收敛（"一个布尔只解析一次"）**：此前同一个回放判定被解析 5 次（`llm.echo_reasoning`、`resolve_echo_reasoning` 的 4 级兜底、`metrics._count_reasoning` 回读 env），并在 8 个文件、12 个签名里传了 41 次。现在：
+   - `loop.py` 调一次 `resolve_echo_reasoning(llm)`，结果存进 `TurnHistory.echo_reasoning`（必填，无默认值）；
    - 预算侧只由 `TurnHistory` 构造一个 `ViewBudget`（limit / unit / usage anchor / echo 四项合一）传进 `apply_context_strategy`，`ContextStrategyRequest` 也只带这一个对象；
    - `metrics._count_reasoning` 与所有 `count_reasoning` 参数删除，`agent/context` 不再 import `reasoning_echo`，组合根以下不再读 env；
-   - `trace.run.config` 新增 `reasoning_echo`（解析后的布尔），排查同类问题不必再手工重算。
-3. `tests/providers/test_llm.py`：把两条"网关剥离"用例改为"网关上思考模型回放 / 非思考模型仍剥离"，并断言强制模式仍优先；`tests/agent/test_context*.py` 改为显式传 `echo_reasoning`，不再靠 env 兜底"恰好通过"。
-4. 全量测试通过（991 passed）。
+   - `trace.run.config` 只记录 `reasoning_echo`（解析后的布尔，webui/Harbor 传入与 loop 同源的 `resolve_echo_reasoning(llm)`），`reasoning_echo_mode` 键一并删除。
+4. `tests/providers/test_llm.py`：env 模式用例删除，改为"家族默认 + catalog pin 优先"；`tests/agent/test_context*.py` 显式传 `echo_reasoning`；`tests/agent/test_loop.py` 增加端到端用例，断言 loop 真的把 adapter 的决策传进预算。
+5. 全量测试通过（992 passed）。
 
 **仍存在的风险（本次未改）**：
 

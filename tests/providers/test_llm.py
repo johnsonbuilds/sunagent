@@ -1,10 +1,8 @@
 import json
-import os
 import sys
 import unittest
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
 
 import httpx
 from openai.types.chat.chat_completion_chunk import (
@@ -26,10 +24,7 @@ from agent_runtime.providers.llm import (
     _reasoning_text,
     _usage_dict,
 )
-from agent_runtime.reasoning_echo import (
-    reasoning_echo_mode,
-    should_echo_reasoning,
-)
+from agent_runtime.reasoning_echo import derives_echo_reasoning
 from agent_runtime.runtime_config import RuntimeConfig
 
 
@@ -62,75 +57,66 @@ class ProviderUsageTests(unittest.TestCase):
         self.assertEqual(_usage_dict(None)["prompt_tokens"], 0)
 
 
-class ReasoningEchoModeTests(unittest.TestCase):
-    def test_default_is_auto(self) -> None:
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("AGENT_RUNTIME_REASONING_ECHO", None)
-            self.assertEqual(reasoning_echo_mode(), "auto")
+class ReasoningEchoPolicyTests(unittest.TestCase):
+    """The family default is pure; a catalog pin is the only override."""
 
-    def test_values_are_case_insensitive(self) -> None:
-        for raw, expected in (("auto", "auto"), ("Always", "always"),
-                              ("NEVER", "never")):
-            with patch.dict(os.environ, {"AGENT_RUNTIME_REASONING_ECHO": raw}):
-                self.assertEqual(reasoning_echo_mode(), expected)
+    def _llm(self, model: str, base_url: str | None = None,
+             echo_reasoning: bool | None = None) -> OpenAICompatibleLLM:
+        return OpenAICompatibleLLM(api_key="test-key", base_url=base_url,
+                                   model=model,
+                                   echo_reasoning=echo_reasoning)
 
-    def test_unknown_value_falls_back_to_auto(self) -> None:
-        with patch.dict(os.environ, {"AGENT_RUNTIME_REASONING_ECHO": "sometimes"}):
-            self.assertEqual(reasoning_echo_mode(), "auto")
-
-
-class ShouldEchoReasoningTests(unittest.TestCase):
-    def test_always_and_never_pin_the_direction(self) -> None:
-        self.assertTrue(should_echo_reasoning("gpt-4o", None, "always"))
-        self.assertFalse(should_echo_reasoning("deepseek-v4", None, "never"))
-
-    def test_auto_detects_echo_families_by_model(self) -> None:
+    def test_family_default_detects_echo_families_by_model(self) -> None:
         for model in ("deepseek/deepseek-v4.1-flash", "glm-5.3",
                       "kimi-k2", "MiMo-7B", "ling-flash"):
-            self.assertTrue(should_echo_reasoning(model, "https://api.example.com/v1",
-                                                   "auto"), model)
+            self.assertTrue(
+                derives_echo_reasoning(model, "https://api.example.com/v1"),
+                model)
 
-    def test_auto_detects_echo_families_by_base_url(self) -> None:
-        self.assertTrue(should_echo_reasoning(
-            "custom-model", "https://api.moonshot.cn/v1", "auto"))
-        self.assertTrue(should_echo_reasoning(
-            "custom-model", "https://open.bigmodel.cn/api/paas/v4", "auto"))
+    def test_family_default_detects_echo_families_by_base_url(self) -> None:
+        self.assertTrue(derives_echo_reasoning(
+            "custom-model", "https://api.moonshot.cn/v1"))
+        self.assertTrue(derives_echo_reasoning(
+            "custom-model", "https://open.bigmodel.cn/api/paas/v4"))
 
-    def test_auto_strips_for_everyone_else(self) -> None:
-        self.assertFalse(should_echo_reasoning("gpt-4o",
-                                                "https://api.openai.com/v1", "auto"))
-        self.assertFalse(should_echo_reasoning("mistral-large", None, "auto"))
-
-    def test_reads_mode_from_env_when_not_pinned(self) -> None:
-        with patch.dict(os.environ, {"AGENT_RUNTIME_REASONING_ECHO": "never"}):
-            self.assertFalse(should_echo_reasoning("deepseek-v4", None))
-        with patch.dict(os.environ, {"AGENT_RUNTIME_REASONING_ECHO": "always"}):
-            self.assertTrue(should_echo_reasoning("gpt-4o", None))
+    def test_family_default_strips_for_everyone_else(self) -> None:
+        self.assertFalse(derives_echo_reasoning(
+            "gpt-4o", "https://api.openai.com/v1"))
+        self.assertFalse(derives_echo_reasoning("mistral-large", None))
 
     def test_a_gateway_replays_reasoning_for_an_echo_family_model(self) -> None:
         # Measured against OpenRouter (deepseek/deepseek-v4.1-flash-1017):
         # replaying `reasoning_content` on a tool-call round adds the same
         # prompt tokens as putting the text in `content` (+1131), and the
         # model can answer from it — so a gateway must not be denied.
-        self.assertTrue(should_echo_reasoning(
-            "deepseek/deepseek-v4.1-flash", "https://openrouter.ai/api/v1", "auto"))
+        self.assertTrue(derives_echo_reasoning(
+            "deepseek/deepseek-v4.1-flash", "https://openrouter.ai/api/v1"))
 
     def test_a_gateway_replays_reasoning_for_every_echo_family_model(self) -> None:
         for model in ("z-ai/glm-5.3-flash", "moonshotai/kimi-k2",
                       "xiaomi/mimo-v2.6-pro", "deepseek/deepseek-v4.1-flash"):
-            self.assertTrue(should_echo_reasoning(
-                model, "https://openrouter.ai/api/v1", "auto"), model)
+            self.assertTrue(derives_echo_reasoning(
+                model, "https://openrouter.ai/api/v1"), model)
 
     def test_a_gateway_still_strips_for_non_thinking_models(self) -> None:
-        self.assertFalse(should_echo_reasoning(
+        self.assertFalse(derives_echo_reasoning(
             "nvidia/nemotron-3.5-super-vl:free",
-            "https://openrouter.ai/api/v1", "auto"))
+            "https://openrouter.ai/api/v1"))
 
-    def test_the_pinned_modes_still_win_over_the_family_heuristic(self) -> None:
-        self.assertTrue(should_echo_reasoning(
-            "deepseek/deepseek-v4.1-flash", "https://openrouter.ai/api/v1", "always"))
-        self.assertFalse(should_echo_reasoning(
-            "deepseek-chat", "https://api.deepseek.com/v1", "never"))
+    def test_the_adapter_uses_the_family_default_when_unpinned(self) -> None:
+        self.assertTrue(self._llm(
+            "deepseek/deepseek-v4.1-flash",
+            "https://openrouter.ai/api/v1").echo_reasoning)
+        self.assertFalse(self._llm(
+            "gpt-4o", "https://api.openai.com/v1").echo_reasoning)
+
+    def test_a_catalog_pin_wins_over_the_family_default(self) -> None:
+        self.assertTrue(self._llm(
+            "gpt-4o", "https://api.openai.com/v1",
+            echo_reasoning=True).echo_reasoning)
+        self.assertFalse(self._llm(
+            "deepseek-chat", "https://api.deepseek.com/v1",
+            echo_reasoning=False).echo_reasoning)
 
 
 class ReasoningTextTests(unittest.TestCase):
@@ -474,13 +460,13 @@ class ProviderEgressTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("finish_reason", result)
 
     async def test_stream_projects_messages_for_the_wire(self) -> None:
-        # Echo mode is frozen into the config at construction time; the
-        # provider must not re-read AGENT_RUNTIME_REASONING_ECHO per call.
+        # A catalog pin of False suppresses replay; the adapter itself must
+        # not read any environment knob per call.
         self.llm = OpenAICompatibleLLM(
             config=RuntimeConfig(model="gpt-4o",
                                  base_url="https://api.example.com/v1",
-                                 api_key="test-key",
-                                 reasoning_echo_mode="never"))
+                                 api_key="test-key"),
+            echo_reasoning=False)
         self.llm.client = unittest.mock.MagicMock()
         self.llm.client.chat.completions = self.completions
         history = [

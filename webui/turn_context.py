@@ -39,7 +39,10 @@ def _summarizer_factory(runtime: RuntimeConfig) -> SummarizerFactory:
 
     def _build() -> ChatModel:
         model = runtime.summary_model or runtime.model
-        return OpenAICompatibleLLM(config=replace(runtime, model=model))
+        # Summarizing runs with ``tools=None`` and reasoning effort "none":
+        # nothing is replayed, so pin the irrelevant bit off.
+        return OpenAICompatibleLLM(config=replace(runtime, model=model),
+                                   echo_reasoning=False)
 
     return _build
 
@@ -69,7 +72,8 @@ def resolve_turn(*, catalog: ModelCatalog, model_id: str | None,
         model=entry.id,
         runtime=runtime,
         harness=harness,
-        llm=OpenAICompatibleLLM(config=runtime),
+        llm=OpenAICompatibleLLM(config=runtime,
+                                echo_reasoning=entry.echo_reasoning),
         tools=_turn_tools(harness, runtime),
         stream=runtime.streaming,
         summarizer_factory=_summarizer_factory(runtime),

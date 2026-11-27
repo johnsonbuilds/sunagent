@@ -149,7 +149,6 @@ Context strategies are `full_history`, `compact_observations` (deterministic fol
 | `AGENT_RUNTIME_HOME` | `<repo>/workspace` | sessions, traces, runtime state |
 | `AGENT_RUNTIME_WORKSPACE` | cwd | agent sandbox for file tools and scripts |
 | `AGENT_RUNTIME_STREAM` | `1` | set `0` to disable streaming |
-| `AGENT_RUNTIME_REASONING_ECHO` | `auto` | `auto`, `always`, or `never` |
 | `AGENT_RUNTIME_COMMAND_GUARD` | `blocklist` | `off`, `blocklist`, or `allowlist` |
 | `AGENT_RUNTIME_MEMORY` | off | set `1` for persistent memory |
 | `AGENT_RUNTIME_MEMORY_DIR` | `<home>/memory` | where persistent memory lives (keep it inside the sandbox) |

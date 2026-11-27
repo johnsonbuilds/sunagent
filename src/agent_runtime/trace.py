@@ -89,10 +89,22 @@ def env_whitelist() -> dict[str, str]:
             if name in os.environ}
 
 
-def _runtime_snapshot(runtime: "RuntimeConfig | None") -> dict[str, Any]:
-    """Runtime wiring minus credentials: enough to reproduce the run."""
+def _runtime_snapshot(runtime: "RuntimeConfig | None", *,
+                      reasoning_echo: bool | None = None) -> dict[str, Any]:
+    """Runtime wiring minus credentials: enough to reproduce the run.
+
+    ``reasoning_echo`` is the bit the caller read off the adapter it actually
+    runs (``resolve_echo_reasoning(llm)``); without it the snapshot can only
+    fall back to the model-family default for ``runtime``'s own model, which
+    differs when an adapter overrides the model (``integrations/harbor.py``).
+    """
     if runtime is None:
         return {}
+    if reasoning_echo is None:
+        from agent_runtime.reasoning_echo import derives_echo_reasoning
+
+        reasoning_echo = derives_echo_reasoning(runtime.model,
+                                                runtime.base_url)
     return {
         "model": runtime.model,
         "base_url": runtime.base_url,
@@ -103,11 +115,10 @@ def _runtime_snapshot(runtime: "RuntimeConfig | None") -> dict[str, Any]:
         "max_reasoning_chars": runtime.max_reasoning_chars,
         "retry_4xx": runtime.retry_4xx,
         "reasoning_effort": runtime.reasoning_effort,
-        "reasoning_echo_mode": runtime.reasoning_echo_mode,
-        # The resolved answer, not just the knob: whether assistant reasoning
+        # The resolved answer, not just a knob: whether assistant reasoning
         # actually rides the wire for this endpoint.  Post-mortems of a
         # cross-tool "amnesia" loop need exactly this bit.
-        "reasoning_echo": runtime.should_echo(),
+        "reasoning_echo": reasoning_echo,
         "summary_model": runtime.summary_model,
         "workspace_root": runtime.workspace_root,
         "command_guard_mode": runtime.command_guard_mode,
@@ -269,9 +280,15 @@ class RunTrace:
     def record_config(self, *, runtime: "RuntimeConfig | None" = None,
                       model_params: Mapping[str, Any] | None = None,
                       tools: Sequence[Mapping[str, Any]] | None = None,
-                      extra: Mapping[str, Any] | None = None
+                      extra: Mapping[str, Any] | None = None,
+                      reasoning_echo: bool | None = None
                       ) -> RunConfig:
-        """Emit ``run.config``: the conditions this run executed under."""
+        """Emit ``run.config``: the conditions this run executed under.
+
+        Pass ``reasoning_echo`` with the adapter's resolved decision so the
+        recorded bit matches what the wire really does; when omitted it is
+        re-derived from ``runtime``.
+        """
         config = RunConfig(
             run_id=self.run_id,
             origin=self.origin,
@@ -283,7 +300,7 @@ class RunTrace:
             run_index=self.run_index,
             model_params=dict(model_params or {}),
             tools=[dict(tool) for tool in tools or ()],
-            runtime=_runtime_snapshot(runtime),
+            runtime=_runtime_snapshot(runtime, reasoning_echo=reasoning_echo),
             env=env_whitelist(),
             git=git_state(),
         )

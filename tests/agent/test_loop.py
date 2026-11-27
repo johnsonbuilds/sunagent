@@ -18,6 +18,7 @@ from agent_runtime.agent.turn_factory import create_agent_turn, run_turn
 from agent_runtime.events import EventEmitter
 from agent_runtime.harness import (
     BudgetReminder,
+    ContextGenome,
     ControlGenome,
     HarnessSpec,
     LLM_RETRY_CATEGORIES,
@@ -1193,6 +1194,57 @@ class PlainAnswerFinishTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(answer, "done")
         self.assertEqual(len(llm.messages), 1)
+
+
+class ReasoningEchoBudgetTests(unittest.IsolatedAsyncioTestCase):
+    """The loop must hand the adapter's echo decision to the budget layer.
+
+    Regression for the cross-tool "amnesia" loop: when wire and budget each
+    derived the policy on their own, a gateway run could strip reasoning on
+    the wire while still charging for it (or vice versa).  These tests run
+    the real turn assembly, so a future divergence fails here.
+    """
+
+    @staticmethod
+    def _harness() -> HarnessSpec:
+        # Tiny char budget so 5k of reasoning decides the compaction gate.
+        return HarnessSpec(context=ContextGenome(
+            strategy="compact_observations",
+            budget_unit="chars",
+            context_budget=200,
+            window_rounds=0,
+            keep_recent_rounds=0))
+
+    async def _run(self, *, echo: bool) -> RunTrace:
+        llm = FakeLLM([
+            {"content": "", "reasoning_content": "r" * 5_000,
+             "tool_calls": [{"id": "1", "function": {
+                 "name": "weather", "arguments": '{"location":"Oslo"}'}}]},
+            {"content": "done", "tool_calls": []},
+        ])
+        llm.echo_reasoning = echo
+        trace = RunTrace(run_id=f"echo-{echo}")
+
+        answer = await run_turn("weather", llm, make_registry(),
+                                harness=self._harness(), trace=trace)
+
+        self.assertEqual(answer, "done")
+        return trace
+
+    @staticmethod
+    def _compacted(trace: RunTrace) -> bool:
+        return any(event.event_type.startswith("context.")
+                   for event in trace.events)
+
+    async def test_replayed_reasoning_counts_toward_the_budget(self) -> None:
+        trace = await self._run(echo=True)
+
+        self.assertTrue(self._compacted(trace))
+
+    async def test_stripped_reasoning_does_not_count_toward_the_budget(self) -> None:
+        trace = await self._run(echo=False)
+
+        self.assertFalse(self._compacted(trace))
 
 
 if __name__ == "__main__":

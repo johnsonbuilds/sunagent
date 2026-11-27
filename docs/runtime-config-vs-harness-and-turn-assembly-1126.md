@@ -131,9 +131,10 @@
 | `AGENT_RUNTIME_PYTHON` | `tools/code.py:25` | 每次执行工具 |
 | `AGENT_RUNTIME_HOME` | `storage.py:43` | 每次取路径 |
 | `AGENT_RUNTIME_MODEL_CATALOG` | `model_catalog.py:109` | 启动期一次 |
-| `AGENT_RUNTIME_REASONING_ECHO` | `reasoning_echo.py:44` | 无 runtime 时的兼容兜底 |
 
-其中 `PYTHON` / `HOME` 与 `skills_dir` 同族（深层 per-call env 读），应纳入下一单排查范围；`MODEL_CATALOG` / `REASONING_ECHO` 见 §4.7 / §4.8。
+其中 `PYTHON` / `HOME` 与 `skills_dir` 同族（深层 per-call env 读），应纳入下一单排查范围；`MODEL_CATALOG` 见 §4.7。
+
+> `AGENT_RUNTIME_REASONING_ECHO` 已删除：是否回放 reasoning 是模型/端点能力，不是部署条件。现在由 `ModelEntry.echo_reasoning` 显式钉住，缺省走 `reasoning_echo.derives_echo_reasoning()` 的纯函数家族默认；没有 runtime/env 第二来源。
 
 ### 4.3 `tool_error_max_retries`：删除双源（已实施）
 

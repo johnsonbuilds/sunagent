@@ -79,7 +79,8 @@ class ChatModel(Protocol):
         """Whether this endpoint replays ``reasoning_content`` on the wire.
 
         Optional for duck-typed fakes: callers must use
-        ``runtime_config.resolve_echo_reasoning`` with a runtime fallback.
+        ``runtime_config.resolve_echo_reasoning``, which treats a missing
+        property as "no replay".
         """
         ...
 

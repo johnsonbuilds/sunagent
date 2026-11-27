@@ -50,6 +50,22 @@ class CatalogFromDictTests(unittest.TestCase):
         self.assertEqual(fast.model_id, "fast-model")
         self.assertEqual(fast.base_url, "https://fast.example/v1")
 
+    def test_echo_reasoning_is_optional_and_parsed_when_pinned(self) -> None:
+        data = sample()
+        data["models"][1]["echo_reasoning"] = False
+
+        catalog = catalog_from_dict(data)
+
+        self.assertIsNone(catalog.require("main").echo_reasoning)
+        self.assertIs(catalog.require("fast").echo_reasoning, False)
+
+    def test_non_boolean_echo_reasoning_is_rejected(self) -> None:
+        data = sample()
+        data["models"][0]["echo_reasoning"] = "always"
+
+        with self.assertRaises(ModelCatalogError):
+            catalog_from_dict(data)
+
     def test_default_falls_back_to_the_first_entry(self) -> None:
         data = sample()
         del data["default"]

@@ -16,7 +16,7 @@ from harbor.models.agent.context import AgentContext
 
 from agent_runtime.agent import run_turn
 from agent_runtime.metrics import afinalize_run
-from agent_runtime.runtime_config import RuntimeConfig
+from agent_runtime.runtime_config import RuntimeConfig, resolve_echo_reasoning
 from agent_runtime.execution.harbor import HarborShellExecutor, HarborWorkspace
 from agent_runtime.harness import HarnessSpec, resolve_harness
 from agent_runtime.providers import OpenAICompatibleLLM
@@ -110,6 +110,10 @@ class HarborAgent(BaseAgent):
                           "stream": use_stream,
                           "max_iterations": harness.control.max_iterations},
             tools=tools.schemas,
+            # The adapter may override the model (see __init__), so resolve
+            # from the llm itself; re-deriving from runtime can record a
+            # different bit than the wire uses.
+            reasoning_echo=resolve_echo_reasoning(self.llm),
         )
         runtime_metadata["status"] = "running"
         sync_context()

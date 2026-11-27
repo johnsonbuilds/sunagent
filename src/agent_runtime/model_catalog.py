@@ -20,6 +20,8 @@ a plain JSON document::
 ``id`` is the handle the web UI stores on a session; ``model_id`` is the name
 the provider expects on the wire.  ``api_key`` accepts a literal secret or an
 ``${ENV_VAR}`` / ``env:ENV_VAR`` reference, expanded when the catalog loads.
+An optional ``echo_reasoning`` boolean pins whether assistant reasoning is
+replayed to this endpoint; omitted, the model-family default applies.
 
 The catalog is resolved once at the composition root and never exposed
 verbatim: :meth:`ModelCatalog.public` drops the endpoint and the secret so
@@ -52,13 +54,20 @@ class ModelCatalogError(RuntimeError):
 
 @dataclass(frozen=True)
 class ModelEntry:
-    """One selectable model and the endpoint that serves it."""
+    """One selectable model and the endpoint that serves it.
+
+    ``echo_reasoning`` pins whether this endpoint replays assistant
+    ``reasoning_content`` on the wire; ``None`` leaves it to the model-family
+    default in :mod:`agent_runtime.reasoning_echo`.  This entry is the single
+    source of truth for that decision — there is no env or runtime override.
+    """
 
     id: str
     label: str
     base_url: str | None
     api_key: str | None
     model_id: str
+    echo_reasoning: bool | None = None
 
     def public(self) -> dict[str, str]:
         """The browser-safe view: no endpoint, no secret."""
@@ -135,7 +144,8 @@ def _entry_from_dict(data: Any, index: int) -> ModelEntry:
     where = f"models[{index}]"
     if not isinstance(data, dict):
         raise ModelCatalogError(f"{where} must be an object")
-    allowed = {"id", "label", "base_url", "api_key", "model_id"}
+    allowed = {"id", "label", "base_url", "api_key", "model_id",
+               "echo_reasoning"}
     unknown = set(data) - allowed
     if unknown:
         raise ModelCatalogError(f"unknown {where} keys: {sorted(unknown)}")
@@ -144,12 +154,17 @@ def _entry_from_dict(data: Any, index: int) -> ModelEntry:
     label = data.get("label")
     if label is not None:
         label = _required_text(label, f"{where}.label")
+    echo_reasoning = data.get("echo_reasoning")
+    if echo_reasoning is not None and not isinstance(echo_reasoning, bool):
+        raise ModelCatalogError(
+            f"{where}.echo_reasoning must be a boolean")
     return ModelEntry(
         id=entry_id,
         label=label or entry_id,
         base_url=_required_text(data.get("base_url"), f"{where}.base_url"),
         api_key=_resolve_secret(data.get("api_key"), f"{where}.api_key"),
         model_id=model_id,
+        echo_reasoning=echo_reasoning,
     )
 
 

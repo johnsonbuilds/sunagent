@@ -268,7 +268,9 @@ def _project_messages_for_wire(messages: Sequence[dict[str, Any]],
 class OpenAICompatibleLLM:
     def __init__(self, api_key: str | None = None, base_url: str | None = None,
                   model: str | None = None, config: RuntimeConfig | None = None,
-                  temperature: float | None = None, **client_kwargs: Any) -> None:
+                  temperature: float | None = None,
+                  echo_reasoning: bool | None = None,
+                  **client_kwargs: Any) -> None:
         try:
             from openai import AsyncOpenAI
         except ImportError as exc:
@@ -290,6 +292,8 @@ class OpenAICompatibleLLM:
         self.model = self._config.model
         self.base_url = self._config.base_url
         self.temperature = self._config.temperature
+        # Catalog override; ``None`` falls back to the family default.
+        self._echo_reasoning = echo_reasoning
         self.client = AsyncOpenAI(api_key=self._config.api_key, base_url=self.base_url, **client_kwargs)
 
     @property
@@ -298,9 +302,18 @@ class OpenAICompatibleLLM:
 
     @property
     def echo_reasoning(self) -> bool:
-        # Instance endpoint + the echo mode frozen into the config at
-        # construction time: one env read at the composition root.
-        return self._config.should_echo(self.model, self.base_url)
+        """Whether assistant ``reasoning_content`` is replayed on the wire.
+
+        A catalog entry pins it (``ModelEntry.echo_reasoning``); without a
+        pin this is the pure model-family default.  Never env-backed: the
+        catalog entry is the single source of truth, so the budget layer and
+        the wire cannot disagree.
+        """
+        if self._echo_reasoning is not None:
+            return self._echo_reasoning
+        from agent_runtime.reasoning_echo import derives_echo_reasoning
+
+        return derives_echo_reasoning(self.model, self.base_url)
 
     async def chat(self, messages: Sequence[dict[str, Any]],
                    tools: list[dict[str, Any]] | None = None,
