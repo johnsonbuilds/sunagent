@@ -12,15 +12,15 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import rebuild_metrics
-from agent_runtime import metrics
+from agent_runtime import metrics, run_records
 
 
 def record(run_id: str, *, status: str = "completed",
-           finished_at: float = 1.0) -> metrics.RunMetrics:
-    return metrics.RunMetrics(
+           finished_at: float = 1.0) -> run_records.RunMetrics:
+    return run_records.RunMetrics(
         run_id=run_id, origin="webui", status=status,
         started_at=finished_at - 1.0, finished_at=finished_at,
-        tokens=metrics.TokenUsage(prompt=10, completion=5, cached=2),
+        tokens=run_records.TokenUsage(prompt=10, completion=5, cached=2),
     )
 
 

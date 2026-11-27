@@ -16,14 +16,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Sequence
 from uuid import uuid4
 
-from agent_runtime.metrics import (
+from agent_runtime.run_records import (
     DEFAULT_ORIGIN,
     ENV_WHITELIST,
     PAYLOAD_EVENT_TYPES,
     RunConfig,
     RunMetrics,
-    RunStats,
 )
+from agent_runtime.trace_stats import RunStats
 
 if TYPE_CHECKING:
     from agent_runtime.harness import HarnessSpec

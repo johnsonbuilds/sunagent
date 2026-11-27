@@ -8,12 +8,12 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
 
-from agent_runtime import metrics
+from agent_runtime import metrics, run_records, trace_stats
 
 
 class RunConfigTests(unittest.TestCase):
     def test_round_trips_every_field(self) -> None:
-        config = metrics.RunConfig(
+        config = run_records.RunConfig(
             run_id="run-1", origin="webui", harness_id="coding-v1",
             genes_hash="g8c1", model="deepseek-v4.1-flash",
             session_id="sess-1", task_id="task-1", run_index=2,
@@ -24,25 +24,25 @@ class RunConfigTests(unittest.TestCase):
             git={"commit": "1626ef1", "dirty": True, "status_count": 3},
         )
 
-        restored = metrics.RunConfig.from_dict(
+        restored = run_records.RunConfig.from_dict(
             json.loads(json.dumps(config.to_dict())))
 
         self.assertEqual(restored, config)
 
     def test_missing_and_unknown_keys_are_tolerated(self) -> None:
-        restored = metrics.RunConfig.from_dict(
+        restored = run_records.RunConfig.from_dict(
             {"run_id": "run-1", "future_key": 1, "tools": "not-a-list"})
 
         self.assertEqual(restored.run_id, "run-1")
-        self.assertEqual(restored.origin, metrics.DEFAULT_ORIGIN)
+        self.assertEqual(restored.origin, run_records.DEFAULT_ORIGIN)
         self.assertEqual(restored.tools, [])
         self.assertIsNone(restored.task_id)
         self.assertIsNone(restored.run_index)
 
 
 class RunMetricsTests(unittest.TestCase):
-    def _record(self) -> metrics.RunMetrics:
-        return metrics.RunMetrics(
+    def _record(self) -> run_records.RunMetrics:
+        return run_records.RunMetrics(
             run_id="run-1", origin="webui", harness_id="coding-v1",
             genes_hash="g8c1", model="deepseek-v4.1-flash",
             session_id="sess-1", task_id="task-1", run_index=2,
@@ -51,9 +51,9 @@ class RunMetricsTests(unittest.TestCase):
             tool_calls=24, tool_errors=2,
             error_kinds={"schema": 1, "not_found": 1},
             edited_files=["src/app/main.py"],
-            tokens=metrics.TokenUsage(prompt=412000, completion=18000,
+            tokens=run_records.TokenUsage(prompt=412000, completion=18000,
                                       cached=300000),
-            latency_ms=metrics.LatencyBreakdown(llm=150000.0, tool=21000.0,
+            latency_ms=run_records.LatencyBreakdown(llm=150000.0, tool=21000.0,
                                                 overhead=11300.0),
             ttft_ms=820.0, retries=1, compactions=1, trace_bytes=2400000,
             has_answer=True, summary_invalid=1, summary_attempts=3,
@@ -62,7 +62,7 @@ class RunMetricsTests(unittest.TestCase):
     def test_round_trips_every_field(self) -> None:
         record = self._record()
 
-        restored = metrics.RunMetrics.from_dict(
+        restored = run_records.RunMetrics.from_dict(
             json.loads(json.dumps(record.to_dict())))
 
         self.assertEqual(restored, record)
@@ -72,7 +72,7 @@ class RunMetricsTests(unittest.TestCase):
         self.assertEqual(restored.summary_attempts, 3)
 
     def test_a_record_without_artifact_evidence(self) -> None:
-        record = metrics.RunMetrics.from_dict(
+        record = run_records.RunMetrics.from_dict(
             {"run_id": "run-2", "status": "error",
              "error": {"stage": "llm", "code": "timeout"}})
 
@@ -81,32 +81,32 @@ class RunMetricsTests(unittest.TestCase):
         self.assertEqual(record.edited_files, [])
 
     def test_an_unknown_status_does_not_claim_success(self) -> None:
-        record = metrics.RunMetrics.from_dict(
+        record = run_records.RunMetrics.from_dict(
             {"run_id": "run-3", "status": "mystery"})
 
         self.assertEqual(record.status, "error")
 
     def test_an_incomplete_error_object_becomes_null(self) -> None:
-        record = metrics.RunMetrics.from_dict(
+        record = run_records.RunMetrics.from_dict(
             {"run_id": "run-4", "error": {"stage": ""}})
 
         self.assertIsNone(record.error)
 
     def test_counters_never_treat_a_boolean_as_one(self) -> None:
-        record = metrics.RunMetrics.from_dict(
+        record = run_records.RunMetrics.from_dict(
             {"run_id": "run-5", "iterations": True, "tool_calls": 3})
 
         self.assertEqual(record.iterations, 0)
         self.assertEqual(record.tool_calls, 3)
 
     def test_a_boolean_flag_only_accepts_a_real_boolean(self) -> None:
-        self.assertFalse(metrics.RunMetrics.from_dict(
+        self.assertFalse(run_records.RunMetrics.from_dict(
             {"has_answer": "false"}).has_answer)
-        self.assertTrue(metrics.RunMetrics.from_dict(
+        self.assertTrue(run_records.RunMetrics.from_dict(
             {"has_answer": True}).has_answer)
 
     def test_text_fields_are_trimmed_before_they_are_validated(self) -> None:
-        record = metrics.RunMetrics.from_dict(
+        record = run_records.RunMetrics.from_dict(
             {"run_id": " run-6 ", "status": " completed ",
              "edited_files": ["", "  ", " src/app/main.py "]})
 
@@ -116,7 +116,7 @@ class RunMetricsTests(unittest.TestCase):
         self.assertEqual(record.edited_files, ["src/app/main.py"])
 
     def test_non_finite_timings_are_clamped(self) -> None:
-        record = metrics.RunMetrics.from_dict(
+        record = run_records.RunMetrics.from_dict(
             {"run_id": "run-7", "duration_ms": float("inf"),
              "ttft_ms": float("nan"),
              "latency_ms": {"llm": float("nan")}})
@@ -126,7 +126,7 @@ class RunMetricsTests(unittest.TestCase):
         self.assertEqual(record.latency_ms.llm, 0.0)
 
     def test_a_hand_built_record_cannot_hold_a_non_finite_float(self) -> None:
-        record = metrics.RunMetrics(run_id="run-8", duration_ms=float("nan"),
+        record = run_records.RunMetrics(run_id="run-8", duration_ms=float("nan"),
                                     ttft_ms=float("inf"))
 
         self.assertEqual(record.duration_ms, 0.0)
@@ -138,8 +138,8 @@ class RunsIndexTests(unittest.TestCase):
     def test_append_creates_the_index_and_appends_one_line_per_run(self) -> None:
         with TemporaryDirectory() as root:
             path = Path(root) / "metrics" / "runs.jsonl"
-            first = metrics.RunMetrics(run_id="run-1", status="completed")
-            second = metrics.RunMetrics(run_id="run-2", status="error")
+            first = run_records.RunMetrics(run_id="run-1", status="completed")
+            second = run_records.RunMetrics(run_id="run-2", status="error")
 
             metrics.append_run_metrics(first, path=path)
             metrics.append_run_metrics(second.to_dict(), path=path)
@@ -172,7 +172,7 @@ class RunsIndexTests(unittest.TestCase):
     def test_the_index_never_holds_nan_or_infinity(self) -> None:
         with TemporaryDirectory() as root:
             path = Path(root) / "runs.jsonl"
-            metrics.append_run_metrics(metrics.RunMetrics(
+            metrics.append_run_metrics(run_records.RunMetrics(
                 run_id="run-1", duration_ms=float("nan"),
                 ttft_ms=float("inf")), path=path)
 
@@ -185,7 +185,7 @@ class RunsIndexTests(unittest.TestCase):
     def test_a_record_that_no_longer_serializes_is_swallowed(self) -> None:
         with TemporaryDirectory() as root:
             path = Path(root) / "runs.jsonl"
-            record = metrics.RunMetrics(run_id="run-1")
+            record = run_records.RunMetrics(run_id="run-1")
             # A field mutated after construction escapes the normalizing
             # ``__post_init__``; the ``finally`` path must still not raise.
             record.duration_ms = float("nan")
@@ -204,7 +204,7 @@ class RunsIndexTests(unittest.TestCase):
         with TemporaryDirectory() as root:
             path = Path(root) / "runs.jsonl"
             metrics.append_run_metrics(
-                metrics.RunMetrics(run_id="run-1", model="模型"), path=path)
+                run_records.RunMetrics(run_id="run-1", model="模型"), path=path)
 
             line = path.read_text(encoding="utf-8").strip()
             self.assertNotIn(", ", line)
@@ -230,7 +230,7 @@ class _FlushGate:
 
     def __init__(self, run_id: str, *, blocking_call: int) -> None:
         self.run_id = run_id
-        self.stats = metrics.RunStats()
+        self.stats = trace_stats.RunStats()
         self.blocking_call = blocking_call
         self.calls = 0
         self.entered = asyncio.Event()
@@ -312,7 +312,7 @@ class FinalizeRunTests(unittest.IsolatedAsyncioTestCase):
     def test_a_blocked_command_counts_as_a_policy_block(self) -> None:
         # Nothing emits ``policy.block``; a guard block surfaces as a
         # failed tool call, and VCR's "no block" condition reads it here.
-        stats = metrics.RunStats()
+        stats = trace_stats.RunStats()
         stats.observe("tool.end", 1,
                       {"status": "error", "error_kind": "command_blocked",
                        "exec_ms": 1.0})
@@ -377,7 +377,7 @@ class FinalizeRunTests(unittest.IsolatedAsyncioTestCase):
             task_id = None
             run_index = None
             harness = None
-            stats = metrics.RunStats()
+            stats = trace_stats.RunStats()
 
             def record_metrics(self, record):
                 return record

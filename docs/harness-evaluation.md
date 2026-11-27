@@ -536,7 +536,7 @@ cohort 时 `task` 为空，`runs` 换成 `cases`，每个 case 一张紧凑卡�
 
 | 任务 | 文件 | 验收 |
 |---|---|---|
-| 定义 `run.config` / `run.metrics` schema | `docs/evaluation.md`、`src/agent_runtime/metrics.py` | 字段有定义、有示例 |
+| 定义 `run.config` / `run.metrics` schema | `docs/evaluation.md`、`src/agent_runtime/run_records.py` | 字段有定义、有示例 |
 | 定义指标口径与诊断 Markdown 约定 | 同上 | 每个指标有分母/来源/判定；四个固定标题有示例 |
 | `Session` 增加 `origin` / `target` / `report_segment_id` / `bundle_hash` / `diagnosis_id` | `webui/sessions.py` | 诊断会话可索引；追问不覆盖报告；不写 `board_events` |
 | `SessionStore.create()` 随机后缀 + 序列化同步 | `webui/sessions.py` | 同秒并发不覆盖；`summary/to_record/_session_from_record` 带上新字段 |

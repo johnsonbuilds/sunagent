@@ -54,7 +54,7 @@ from agent_runtime import storage
 from agent_runtime import diagnosis as diagnosis_mod
 from agent_runtime.diagnosis import EVALUATION_HARNESS_ID
 from agent_runtime.evaluation import DEFAULT_RECORDS_DIR, load_records
-from agent_runtime.metrics import ORIGINS, RunMetrics
+from agent_runtime.run_records import ORIGINS, RunMetrics
 
 from .board import BoardStore
 from .sessions import Session, SessionStore

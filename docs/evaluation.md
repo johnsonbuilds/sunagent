@@ -1,8 +1,10 @@
 # 评测契约：run.config、run.metrics 与指标口径
 
 本文是评测链路的**契约文档**：观测埋点写什么、指标怎么算、诊断报告长什么样。
-代码实现见 `src/agent_runtime/metrics.py`（记录结构）、`src/agent_runtime/trace.py`
-（trace 写入）、`webui/evaluation.py`（聚合与 API，Phase 2 起）。
+代码实现见 `src/agent_runtime/run_records.py`（记录结构）、
+`src/agent_runtime/trace_stats.py`（实时计数）、`src/agent_runtime/trace.py`
+（trace 写入）、`src/agent_runtime/metrics.py`（索引落盘）、
+`webui/evaluation.py`（聚合与 API，Phase 2 起）。
 
 设计取舍与最终方案见 `docs/harness-evaluation.md`，本文只固定契约。
 
@@ -133,9 +135,9 @@ uv run python scripts/rebuild_metrics.py --write --keep-existing
 
 ## 5. `run.metrics`
 
-计数由 `RunStats` 在**事件发出时**累加（`metrics.RunStats.observe`），不是 run 结束后回扫 `trace.events`；因此 `retain_events=control`（WebUI/Harbor）丢弃 payload 事件不影响任何数字。`finalize_run()` 是唯一汇总入口：`agent.end` 给出 token 台账，`tool.end` 给出工具计数与产物证据，`llm.end` 给出延迟/首字/缓存 token，`context.llm_summary.*` 给出摘要尝试与无效次数。
+计数由 `RunStats` 在**事件发出时**累加（`trace_stats.RunStats.observe`），不是 run 结束后回扫 `trace.events`；因此 `retain_events=control`（WebUI/Harbor）丢弃 payload 事件不影响任何数字。`finalize_run()` 是唯一汇总入口：`agent.end` 给出 token 台账，`tool.end` 给出工具计数与产物证据，`llm.end` 给出延迟/首字/缓存 token，`context.llm_summary.*` 给出摘要尝试与无效次数。
 每次 run 一条事件（`event_type == "run.metrics"`），并原样 append 到
-`metrics/runs.jsonl`。结构由 `metrics.RunMetrics` 定义。
+`metrics/runs.jsonl`。结构由 `run_records.RunMetrics` 定义。
 
 | 字段 | 类型 | 含义 |
 |---|---|---|

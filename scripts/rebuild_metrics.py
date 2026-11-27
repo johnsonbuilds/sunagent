@@ -39,7 +39,8 @@ SOURCE_DIR = Path(__file__).resolve().parent.parent / "src"
 sys.path.insert(0, str(SOURCE_DIR))
 
 from agent_runtime import storage
-from agent_runtime.metrics import RunMetrics, read_run_metrics
+from agent_runtime.metrics import read_run_metrics
+from agent_runtime.run_records import RunMetrics
 
 
 def trace_metrics(path: Path) -> dict[str, Any] | None:

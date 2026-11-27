@@ -15,7 +15,8 @@ from starlette.testclient import TestClient
 
 from agent_runtime import diagnosis, storage
 from agent_runtime.harness import list_harnesses, resolve_harness
-from agent_runtime.metrics import RunMetrics, TokenUsage, append_run_metrics
+from agent_runtime.metrics import append_run_metrics
+from agent_runtime.run_records import RunMetrics, TokenUsage
 from webui import server
 from webui.board import BoardStore
 from webui.evaluation import EvaluationNotFound, EvaluationRequestError, EvaluationStore

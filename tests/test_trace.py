@@ -193,7 +193,8 @@ class RunRecordPolicyTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(config.harness_id, trace.harness.id)
             self.assertNotIn("api_key", json.dumps(config.to_dict()))
 
-            from agent_runtime.metrics import RunMetrics, finalize_run
+            from agent_runtime.metrics import finalize_run
+            from agent_runtime.run_records import RunMetrics
             record = finalize_run(trace, status="completed", answer="done")
             self.assertEqual(record.run_id, "run-1")
             await trace.flush()
