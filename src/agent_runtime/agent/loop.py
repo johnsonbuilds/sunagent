@@ -69,7 +69,7 @@ class AgentTurn:
         self.tool_runner = collaborators.tool_runner
         self.summarizer = collaborators.summarizer
         self.stream = collaborators.stream
-        self.max_iterations = collaborators.guard.max_iterations
+        self.max_iterations = collaborators.harness.control.max_iterations
         self.runtime: RuntimeConfig = collaborators.runtime
 
     async def run(self) -> str:

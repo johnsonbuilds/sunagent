@@ -1,6 +1,6 @@
 # RuntimeConfig ↔ harness 职责边界 与 turn 组装层参数收敛（2026-11-26）
 
-> 本文是 P0「RuntimeConfig 收口」之后的复盘问答记录。§4.3（删除 `tool_error_max_retries` 双源）、§4.10（`RuntimeConfig.skills_dir` 落地）与 §4.11（turn 组装层去平铺）已实施；其余条目仍是建议，供确认后单开一单实施。
+> 本文是 P0「RuntimeConfig 收口」之后的复盘问答记录。§4.3（删除 `tool_error_max_retries` 双源）、§4.10（`RuntimeConfig.skills_dir` 落地）、§4.11（turn 组装层去平铺）与 §4.12（删除 `max_iterations` 覆盖）已实施；其余条目仍是建议，供确认后单开一单实施。
 
 ---
 
@@ -32,7 +32,7 @@
 | 1 | `recovery.tool_error_max_retries`（harness）vs `RuntimeConfig.tool_error_max_retries`（env `AGENT_RUNTIME_TOOL_ERROR_MAX_RETRIES`） | **真正的双份同名字段**，env 覆盖 harness gene | 保留 gene 为唯一事实源；**删除 `RuntimeConfig` 字段与 env**（见 §4.3，已实施） |
 | 2 | `retry_4xx`（runtime）vs `recovery.llm_errors.invalid_request.max_retries`（harness） | `llm_recovery.py:199-202` 里 `retry_4xx` 把 400/404/422 从 `invalid_request` 改判成 `provider_error`，**直接让 harness 声明的 invalid_request 策略失效** | 这是最隐蔽的越权。该保留（网关把瞬时错误报成 4xx 是端点事实），但必须文档化 + trace 里可见（已在 `_runtime_snapshot` 里，✅） |
 | 3 | `reasoning_effort`（runtime，主模型）vs `context.summary_reasoning_effort`（harness，摘要模型） | 名字近似、语义不同域 | 保持现状即可；改名优先级低（见 §4.8） |
-| 4 | `control.max_iterations`（harness）vs `create_agent_turn(max_iterations=...)`（入参） | 三层引用：协作对象、`TurnGuard`、`AgentTurn.max_iterations`（factory 只解析一次，不会漂移） | 清洁性调整，非正确性问题（见 §4.4） |
+| 4 | `control.max_iterations`（harness）vs `create_agent_turn(max_iterations=...)`（入参） | 已删除覆盖入参；`harness.control.max_iterations` 是唯一来源 | 行为基因不应逃出 `genes_hash`（见 §4.12） |
 
 ### `max_reasoning_chars` 该不该进 `control`？
 
@@ -75,8 +75,8 @@
 ```
 入口（run_agent / webui / harbor）
   → RuntimeConfig.from_env(...)  +  resolve_harness(...)     ← 组合根，只有这里碰环境
-  → create_agent_turn(msg, llm, tools, *, runtime, harness, stream_override=None, max_iterations=None)
-       负责：所有"派生值"解析一次（max_iterations、stream、skills/memory 全部来自 runtime）
+  → create_agent_turn(msg, llm, tools, *, runtime, harness, stream_override=None)
+       负责：所有"派生值"解析一次（stream/skills/memory 全部来自 runtime；max_iterations 来自 harness.control）
   → TurnCollaborators = 纯对象图 {llm, tools, workspace, harness, conversation, trace, events,
                                  observations, guard, tool_runner, summarizer} + runtime + stream
   → AgentTurn：runtime 非 None（factory 已保证），删掉 4 处 `if self.runtime is not None else None`
@@ -85,7 +85,7 @@
 三条具体建议：
 
 1. **`TurnCollaborators` 去掉派生字段**。`max_iterations` / `skills_dir` 都不该是它的属性：
-   - `max_iterations`：`TurnGuard` 里已有一份（`turn_guard.py:60`），`loop.py:115,205` 改读 `self.guard.max_iterations` 即可，副本归零。
+   - `max_iterations`：已删除覆盖参数，`TurnGuard` 与 `AgentTurn` 都直接读 `harness.control.max_iterations`（见 §4.12）。
    - `skills_dir`：进 `RuntimeConfig` 后由 `open_turn` 自己取。
 
    剩下真正"跨 turn 可变、且不由 runtime/harness 决定"的只有 `stream`（测试/CLI 要强制关流），保留它作为**唯一显式 override**。
@@ -147,7 +147,7 @@
 
 ### 4.4 `max_iterations` "三层副本"表述过重
 
-`resolved_max_iterations` 在 `turn_factory.py:84-86` 只解析一次，随后按值传给 `TurnGuard`、`TurnCollaborators`、`AgentTurn`。它们不是三个独立事实源，只是同一个不可变 int 的三份引用，**不会漂移**。这是整洁性问题，不是正确性问题。另外让 loop 改读 `self.guard.max_iterations` 会让 loop 依赖 guard 的策略状态，耦合方向不理想；优先级应放低。
+`resolved_max_iterations` 在 factory 只解析一次，随后按值传给 `TurnGuard`、`TurnCollaborators`、`AgentTurn`。它们不是三个独立事实源，只是同一个不可变 int 的三份引用，**不会漂移**。更根本的问题是覆盖参数本身让行为逃出了 `genes_hash`；**2026-11-27 已删除该参数，harness 成为唯一来源（见 §4.12）**。
 
 ### 4.5 删除 `runtime=None` 分支的测试影响被低估
 
@@ -183,7 +183,7 @@ RuntimeConfig.skills_dir（默认 ./skills，可被环境覆盖）
 
 1. ✅ `RuntimeConfig.skills_dir` 落地（默认 `./skills`，单一真相源，无回退）；`AGENT_RUNTIME_PYTHON` / `AGENT_RUNTIME_HOME` 本次未动（见 §4.10）。
 2. evaluation 增加 runtime fingerprint（避免 runtime 变化被误归因给 harness）。
-3. ✅ turn 组装层去平铺 + 测试迁移清单（见 §4.11）。
+3. ✅ turn 组装层去平铺 + 测试迁移清单（见 §4.11）；`max_iterations` 覆盖参数已删除（见 §4.12）。
 4. （更晚，可选）`tool_error_max_retries` 改名、summarizer 重试基因化。
 
 ### 4.10 `RuntimeConfig.skills_dir` 落地（已实施，2026-11-26）
@@ -197,8 +197,16 @@ RuntimeConfig.skills_dir（默认 ./skills，可被环境覆盖）
 ### 4.11 turn 组装层去平铺（已实施，2026-11-26）
 
 - `TurnCollaborators` 删除派生字段 `max_iterations` / `skills_dir`，`runtime` 改为非 Optional。
-- `AgentTurn.runtime` 改为 `RuntimeConfig`（factory 已保证非 None）；`AgentTurn.max_iterations` 直接读 `collaborators.guard.max_iterations`。
+- `AgentTurn.runtime` 改为 `RuntimeConfig`（factory 已保证非 None）；`AgentTurn.max_iterations` 直接读 `collaborators.harness.control.max_iterations`。
 - `open_turn(*, conversation, harness, workspace, trace, runtime=None)`：内部直接取 `runtime.skills_dir` / `runtime.memory_enabled` / `runtime.memory_dir`，loop 里原来的 6 行三元表达式变为一次传 runtime。`runtime=None` 仅保留给直接调用的库测试，兜底一次 `RuntimeConfig.from_env()`。
 - LLM 深层 helper 收紧为非 Optional：`use_streaming`、`_stream_idle_timeout`、`_reasoning_budget_chars`、`_retry_4xx_enabled` 不再自带 `from_env()`；`consume_stream` / `chat_with_recovery` / `llm_error_category` / `recovery_plan` 都要求调用方注入 runtime。
 - `stream` 仍是唯一的显式 override；本次**不修改** `run_turn(stream=False)` 的默认值，避免让一批测试悄悄变成流式。
 - 测试迁移：`test_context_gates`、`test_tool_call_extras`、`test_llm_error_classification`、`test_loop` 改为显式传 `RuntimeConfig`；原先"无 runtime 时读 env"的用例改写为"env → RuntimeConfig → 分类"的可控路径。
+
+### 4.12 删除 `max_iterations` 覆盖（已实施，2026-11-27）
+
+- `create_agent_turn` / `run_turn` 删除 `max_iterations` 参数；factory 不再解析 `resolved_max_iterations`。
+- `TurnGuard.__init__` 删除 `max_iterations` 参数，直接读 `harness.control.max_iterations`。
+- `AgentTurn.max_iterations` 直接读 `collaborators.harness.control.max_iterations`，不再从 guard 取配置。
+- 理由：该参数在实际代码里只有测试使用，却允许行为在 `genes_hash` 之外变化，破坏 benchmark 归因。测试改为构造带目标 `control.max_iterations` 的 harness。
+- 测试注意：`HarnessSpec` / `ControlGenome` 是 frozen dataclass；用 `HarnessSpec(control=ControlGenome(max_iterations=N))` 或 `from_dict({"control": {"max_iterations": N}})` 新建。`dataclasses.replace(harness, control=...)` 会带上旧 `genes_hash`，必须同时传 `genes_hash=""`。

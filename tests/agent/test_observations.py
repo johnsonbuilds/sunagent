@@ -9,11 +9,14 @@ sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
 from agent_runtime.agent.turn_factory import run_turn
 from agent_runtime.agent.observations import ObservationFormatter, format_tool_result
 from agent_runtime.execution.local import LocalWorkspace
+from agent_runtime.harness import ControlGenome, HarnessSpec
 from agent_runtime.tools.files import read_output
 from agent_runtime.tools.tools import ToolRegistry, ToolSpec
 
 
 SHELL_SCHEMA = {"type": "object", "properties": {}}
+
+_HARNESS_3 = HarnessSpec(control=ControlGenome(max_iterations=3))
 
 
 async def _echo_handler() -> str:
@@ -149,7 +152,7 @@ class LoopObservationIntegrationTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             answer = await run_turn("go", llm,
                                     _registry_with(huge, LocalWorkspace(directory)),
-                                    max_iterations=3)
+                                    harness=_HARNESS_3)
             observation_message = llm.messages[1][-1]
             observation = observation_message["content"]
 
@@ -173,7 +176,7 @@ class LoopObservationIntegrationTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             workspace = LocalWorkspace(directory)
             await run_turn("go", llm, _registry_with(huge),
-                           workspace=workspace, max_iterations=3)
+                           workspace=workspace, harness=_HARNESS_3)
             message = llm.messages[1][-1]
 
             self.assertEqual(message["metadata"]["spill_path"],
@@ -191,7 +194,8 @@ class LoopObservationIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 "name": "produce", "arguments": "{}"}}]},
             {"content": "ok", "tool_calls": []},
         ])
-        answer = await run_turn("go", llm, _registry_with(small), max_iterations=3)
+        answer = await run_turn("go", llm, _registry_with(small),
+                                harness=_HARNESS_3)
         self.assertEqual(answer, "ok")
         message = llm.messages[1][-1]
         self.assertEqual(message["content"], "Singapore")
@@ -211,7 +215,7 @@ class LoopObservationIntegrationTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             await run_turn("go", llm,
                            _registry_with(midsize, LocalWorkspace(directory)),
-                           max_iterations=3)
+                           harness=_HARNESS_3)
             message = llm.messages[1][-1]
 
             self.assertEqual(message["content"], "z" * 2_000)

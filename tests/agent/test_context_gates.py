@@ -896,6 +896,7 @@ class ContextWindowHardGateLoopTests(unittest.IsolatedAsyncioTestCase):
         registry = ToolRegistry([ToolSpec(
             "run_command", "", {"type": "object", "properties": {}}, noop)])
         harness = from_dict({
+            "control": {"max_iterations": 5},
             "memory": {"strategy": "compact_observations",
                        "context_budget": 10 ** 9},
             "recovery": {"llm_errors": {
@@ -907,7 +908,7 @@ class ContextWindowHardGateLoopTests(unittest.IsolatedAsyncioTestCase):
         trace = RunTrace(run_id="hard-gate")
         answer = await run_turn("go", OverflowOnceLLM(), registry,
                                 harness=harness, conversation=conversation,
-                                trace=trace, max_iterations=5)
+                                trace=trace)
         self.assertEqual(answer, "done")
         # One rejected request, one compacted resend — never a replay.
         self.assertEqual(len(seen_chars), 2)

@@ -46,7 +46,6 @@ def create_agent_turn(
     user_message: str,
     llm: ChatModel,
     tools: ToolExecutor,
-    max_iterations: int | None = None,
     *,
     harness: HarnessSpec | None = None,
     conversation: Conversation | None = None,
@@ -82,9 +81,6 @@ def create_agent_turn(
                              else Conversation())
     resolved_workspace = (workspace if workspace is not None
                           else tools.workspace)
-    resolved_max_iterations = (
-        max_iterations if max_iterations is not None
-        else resolved_harness.control.max_iterations)
     observations = ObservationFormatter(
         resolved_workspace,
         max_chars=resolved_harness.control.max_observation_chars,
@@ -94,8 +90,7 @@ def create_agent_turn(
     guard = TurnGuard(
         harness=resolved_harness,
         trace=resolved_trace,
-        events=resolved_events,
-        max_iterations=resolved_max_iterations)
+        events=resolved_events)
     tool_runner = ToolRunner(
         tools=tools,
         harness=resolved_harness,
@@ -127,7 +122,6 @@ async def run_turn(
     user_message: str,
     llm: ChatModel,
     tools: ToolExecutor,
-    max_iterations: int | None = None,
     *,
     harness: HarnessSpec | None = None,
     conversation: Conversation | None = None,
@@ -140,14 +134,13 @@ async def run_turn(
 ) -> str:
     """Create and run one agent turn under the given harness.
 
-    ``max_iterations`` explicitly overrides ``harness.control``; the
-    harness is otherwise the source of truth for how the agent behaves.
+    The harness is the single source of truth for behavior, including
+    ``control.max_iterations``.
     """
     turn = create_agent_turn(
         user_message,
         llm,
         tools,
-        max_iterations,
         harness=harness,
         conversation=conversation,
         stream=stream,

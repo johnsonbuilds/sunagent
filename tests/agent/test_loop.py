@@ -444,8 +444,10 @@ class AgentLoopErrorHandlingTests(unittest.IsolatedAsyncioTestCase):
         ])
 
         conversation = Conversation()
-        answer = await run_turn("weather", llm, make_registry(),
-                                max_iterations=1, conversation=conversation)
+        answer = await run_turn(
+            "weather", llm, make_registry(),
+            harness=HarnessSpec(control=ControlGenome(max_iterations=1)),
+            conversation=conversation)
 
         self.assertIn("summarising turn was cut off at the output limit", answer)
         self.assertIn("the work above stands as delivered", answer)
@@ -811,7 +813,9 @@ class HarnessIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_iteration_limit_notice_comes_from_harness(self) -> None:
         notice = "CUSTOM STOP NOTICE."
-        harness = HarnessSpec(prompt=PromptGenome(iteration_limit_notice=notice))
+        harness = HarnessSpec(
+            prompt=PromptGenome(iteration_limit_notice=notice),
+            control=ControlGenome(max_iterations=2))
         llm = FakeLLM([
             {"content": "", "tool_calls": [{"id": "1", "function": {
                 "name": "weather", "arguments": '{"location":"Oslo"}'}}]},
@@ -820,8 +824,7 @@ class HarnessIntegrationTests(unittest.IsolatedAsyncioTestCase):
             {"content": "summarized", "tool_calls": []},
         ])
 
-        answer = await run_turn("weather", llm, make_registry(), harness=harness,
-                                max_iterations=2)
+        answer = await run_turn("weather", llm, make_registry(), harness=harness)
 
         self.assertEqual(answer, "summarized")
         self.assertEqual(llm.messages[2][-1]["role"], "user")

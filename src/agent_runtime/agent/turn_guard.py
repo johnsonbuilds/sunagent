@@ -43,12 +43,13 @@ class TurnGuard:
     """
 
     def __init__(self, *, harness: HarnessSpec,
-                 trace: RunTrace, events: EventEmitter,
-                 max_iterations: int) -> None:
+                 trace: RunTrace, events: EventEmitter) -> None:
         self.harness = harness
         self.trace = trace
         self.events = events
-        self.max_iterations = max_iterations
+        # Iteration budget is a harness control gene; there is no per-turn
+        # override, so behavior cannot escape ``genes_hash``.
+        self.max_iterations = harness.control.max_iterations
         # The harness recovery gene is the single source of truth for the
         # same-error fuse; there is no runtime/environment override.
         self.error_budget = SameToolErrorBudget(

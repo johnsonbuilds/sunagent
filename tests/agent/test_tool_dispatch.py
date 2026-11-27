@@ -133,9 +133,9 @@ def _run_one_turn_async(directory: str,
     registry = create_default_registry(
         workspace=LocalWorkspace(directory),
         enabled=["write_file", "read_file", "edit_file", "apply_patch"])
-    harness = from_dict({})
+    harness = from_dict({"control": {"max_iterations": 3}})
     return run_turn("hi", FakeLLM(tool_calls), registry,
-                    harness=harness, max_iterations=3,
+                    harness=harness,
                     trace=RunTrace(run_id="t"))
 
 
