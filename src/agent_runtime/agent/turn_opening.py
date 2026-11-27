@@ -9,12 +9,11 @@ one-shot concern, so it lives here instead of on the loop.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from agent_runtime.agent.turn_history import Conversation, ensure_system_prompt
 from agent_runtime.execution.base import Workspace
 from agent_runtime.harness import HarnessSpec
 from agent_runtime.memory import render_memory_block
+from agent_runtime.runtime_config import RuntimeConfig
 from agent_runtime.skills import (
     render_skills_block,
     resolve_skills,
@@ -24,25 +23,25 @@ from agent_runtime.trace import RunTrace
 
 
 def open_turn(*, conversation: Conversation, harness: HarnessSpec,
-              workspace: Workspace, skills_dir: str | Path,
-              trace: RunTrace,
-              memory_enabled: bool | None = None,
-              memory_dir: str | Path | None = None) -> None:
+              workspace: Workspace, trace: RunTrace,
+              runtime: RuntimeConfig | None = None) -> None:
     """Inject the system prompt / skills / memory blocks when absent.
 
-    ``skills_dir`` comes from ``RuntimeConfig.skills_dir`` (the single source
-    of truth); ``memory_enabled`` / ``memory_dir`` also come from the
-    caller's ``RuntimeConfig``.
+    Every path/switch comes from ``RuntimeConfig``: ``skills_dir``,
+    ``memory_enabled`` and ``memory_dir`` are read once from the resolved
+    config instead of being re-derived here.  ``runtime=None`` is only the
+    direct-call fallback; the turn factory always injects one.
 
     ``ensure_system_prompt`` is idempotent: on a conversation that already
     has a system message it is a no-op, so the ``skills.loaded`` and
     ``memory.recall`` events are only emitted when the blocks were really
     inserted (and will therefore reach the model).
     """
-    skills = resolve_skills(list(harness.skills), skills_dir=skills_dir)
+    config = runtime if runtime is not None else RuntimeConfig.from_env()
+    skills = resolve_skills(list(harness.skills), skills_dir=config.skills_dir)
     skills_block = render_skills_block(skills)
-    memory_view = render_memory_block(workspace, enabled=memory_enabled,
-                                      memory_dir=memory_dir)
+    memory_view = render_memory_block(workspace, enabled=config.memory_enabled,
+                                      memory_dir=config.memory_dir)
     inserted = ensure_system_prompt(conversation, harness.prompt.system,
                                     skills_block, memory_view.block)
     if not inserted:

@@ -32,19 +32,19 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _stream_idle_timeout(runtime: RuntimeConfig | None = None) -> float | None:
-    """Idle timeout; ``None`` resolves the environment via ``RuntimeConfig``."""
-    return (runtime or RuntimeConfig.from_env()).stream_idle_timeout
+def _stream_idle_timeout(runtime: RuntimeConfig) -> float | None:
+    """Idle timeout from the injected runtime config."""
+    return runtime.stream_idle_timeout
 
 
-def _reasoning_budget_chars(runtime: RuntimeConfig | None = None) -> int | None:
+def _reasoning_budget_chars(runtime: RuntimeConfig) -> int | None:
     """Max accumulated reasoning chars before a thinking-only turn is cut.
 
     Guards against reasoning models that spiral into unbounded chain of
     thought without ever emitting content or tool calls.  0 or a negative
     value disables the guard.
     """
-    return (runtime or RuntimeConfig.from_env()).max_reasoning_chars
+    return runtime.max_reasoning_chars
 
 
 class StreamIdleTimeout(RuntimeError):
@@ -99,7 +99,7 @@ async def consume_stream(llm: ChatModel, messages: list[dict[str, Any]],
                           iteration: int, *,
                           trace: RunTrace | None = None,
                           events: EventEmitter | None = None,
-                          runtime: RuntimeConfig | None = None) -> dict[str, Any]:
+                          runtime: RuntimeConfig) -> dict[str, Any]:
     """Assemble one response from provider streaming chunks."""
     content: list[str] = []
     reasoning: list[str] = []

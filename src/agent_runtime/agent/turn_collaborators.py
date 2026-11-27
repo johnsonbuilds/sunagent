@@ -46,9 +46,7 @@ class TurnCollaborators:
     tool_runner: ToolRunner
     summarizer: Any
     stream: bool
-    max_iterations: int
-    skills_dir: str
-    runtime: RuntimeConfig | None = None
+    runtime: RuntimeConfig
 
 
 __all__ = ["TurnCollaborators"]

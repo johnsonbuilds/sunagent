@@ -68,13 +68,9 @@ def _request_chars(messages: list[dict[str, Any]]) -> int:
     return total
 
 
-def use_streaming(runtime: RuntimeConfig | None = None) -> bool:
-    """Whether the runtime should consume LLM streaming (AGENT_RUNTIME_STREAM).
-
-    Passing ``None`` is the legacy shape used by callers with no config to
-    thread.
-    """
-    return (runtime or RuntimeConfig.from_env()).streaming
+def use_streaming(runtime: RuntimeConfig) -> bool:
+    """Whether this runtime consumes LLM streaming (``runtime.streaming``)."""
+    return runtime.streaming
 
 
 class ChatModel(Protocol):
@@ -100,7 +96,7 @@ async def _chat_response(llm: ChatModel, history: TurnHistory,
                          stream: bool = False,
                          trace: RunTrace | None = None,
                          events: EventEmitter | None = None,
-                         runtime: RuntimeConfig | None = None,
+                         runtime: RuntimeConfig,
                          attempt: int = 1) -> dict[str, Any]:
     """Consume either runtime streaming or a single runtime response.
 
@@ -217,7 +213,7 @@ async def chat_with_recovery(llm: ChatModel, history: TurnHistory,
                              trace: RunTrace | None = None,
                              events: EventEmitter | None = None,
                              allow_nudge: bool = True,
-                             runtime: RuntimeConfig | None = None,
+                             runtime: RuntimeConfig,
                              ) -> dict[str, Any] | None:
     """One chat request, recovered per the plan :func:`recovery_plan` resolves.
 

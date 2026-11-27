@@ -21,6 +21,9 @@ from agent_runtime.agent.runtime_message import runtime_user_message
 from agent_runtime.agent.turn_history import Conversation, TurnHistory
 from agent_runtime.harness import HarnessSpec, ContextGenome, from_dict
 from agent_runtime.providers.llm import ContextWindowExceededError
+from agent_runtime.runtime_config import RuntimeConfig
+
+_RUNTIME = RuntimeConfig(model="m", base_url=None)
 
 
 def build_rounds(rounds: int, tool_chars: int = 100,
@@ -289,7 +292,7 @@ class HardGateRecoveryTests(unittest.IsolatedAsyncioTestCase):
         history = TurnHistory(build_rounds(10, tool_chars=5_000))
 
         response = await chat_with_recovery(
-            FlakyLLM(), history, None, 1, spec)
+            FlakyLLM(), history, None, 1, spec, runtime=_RUNTIME)
         self.assertEqual(response["content"], "ok")
         self.assertEqual(len(sizes), 2)
         self.assertLess(sizes[1], sizes[0])  # resent a compacted view
@@ -317,7 +320,7 @@ class HardGateRecoveryTests(unittest.IsolatedAsyncioTestCase):
         history = TurnHistory(build_rounds(10, tool_chars=5_000))
 
         response = await chat_with_recovery(
-            OverflowTwiceLLM(), history, None, 1, spec)
+            OverflowTwiceLLM(), history, None, 1, spec, runtime=_RUNTIME)
         self.assertEqual(response["content"], "ok")
         self.assertEqual(len(sizes), 3)
         self.assertLess(sizes[1], sizes[0])
@@ -336,7 +339,8 @@ class HardGateRecoveryTests(unittest.IsolatedAsyncioTestCase):
         history = TurnHistory(build_rounds(4, tool_chars=5_000))
 
         with self.assertRaises(ContextWindowExceededError):
-            await chat_with_recovery(OverflowLLM(), history, None, 1, spec)
+            await chat_with_recovery(OverflowLLM(), history, None, 1, spec,
+                                     runtime=_RUNTIME)
         # No shrink, no resend: one attempt, not one per allowed retry.
         self.assertEqual(len(attempts), 1)
 
@@ -480,7 +484,8 @@ class StreamUsageTests(unittest.IsolatedAsyncioTestCase):
             def stream(self, messages, tools=None):
                 return fake_stream(messages, tools)
 
-        response = await consume_stream(FakeStreamLLM(), [], None, 1)
+        response = await consume_stream(FakeStreamLLM(), [], None, 1,
+                                        runtime=_RUNTIME)
         self.assertEqual(response["usage"]["prompt_tokens"], 123)
         self.assertEqual(response["usage"]["completion_tokens"], 4)
 

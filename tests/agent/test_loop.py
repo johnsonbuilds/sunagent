@@ -1090,7 +1090,7 @@ class StreamingConfigTests(unittest.TestCase):
     def test_use_streaming_defaults_to_on(self) -> None:
         previous = environ.pop("AGENT_RUNTIME_STREAM", None)
         try:
-            self.assertTrue(use_streaming())
+            self.assertTrue(use_streaming(RuntimeConfig.from_env()))
         finally:
             if previous is not None:
                 environ["AGENT_RUNTIME_STREAM"] = previous
@@ -1101,7 +1101,7 @@ class StreamingConfigTests(unittest.TestCase):
             for raw, expected in [("0", False), ("false", False), ("off", False),
                                   ("1", True), ("yes", True)]:
                 environ["AGENT_RUNTIME_STREAM"] = raw
-                self.assertIs(use_streaming(), expected)
+                self.assertIs(use_streaming(RuntimeConfig.from_env()), expected)
         finally:
             if previous is None:
                 environ.pop("AGENT_RUNTIME_STREAM", None)
@@ -1150,23 +1150,6 @@ class AgentTurnClassTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(answer, "summarized")
         self.assertEqual(len(llm.messages), 2)
-
-    async def test_skills_dir_defaults_to_runtime(self) -> None:
-        llm = FakeLLM([{"content": "hi", "tool_calls": []}])
-        runtime = RuntimeConfig(model="m", base_url=None,
-                                skills_dir="/from-runtime")
-
-        turn = create_agent_turn("hello", llm, make_registry(), runtime=runtime)
-
-        self.assertEqual(turn.skills_dir, "/from-runtime")
-
-    async def test_skills_dir_defaults_to_cwd_skills(self) -> None:
-        llm = FakeLLM([{"content": "hi", "tool_calls": []}])
-        runtime = RuntimeConfig(model="m", base_url=None)
-
-        turn = create_agent_turn("hello", llm, make_registry(), runtime=runtime)
-
-        self.assertEqual(turn.skills_dir, "skills")
 
 
 class PlainAnswerFinishTests(unittest.IsolatedAsyncioTestCase):

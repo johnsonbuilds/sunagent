@@ -69,9 +69,8 @@ class AgentTurn:
         self.tool_runner = collaborators.tool_runner
         self.summarizer = collaborators.summarizer
         self.stream = collaborators.stream
-        self.max_iterations = collaborators.max_iterations
-        self.skills_dir = collaborators.skills_dir
-        self.runtime: RuntimeConfig | None = collaborators.runtime
+        self.max_iterations = collaborators.guard.max_iterations
+        self.runtime: RuntimeConfig = collaborators.runtime
 
     async def run(self) -> str:
         """Execute the turn and always flush the trace."""
@@ -98,12 +97,8 @@ class AgentTurn:
 
         events.emit("agent.started", message=self.user_message)
         open_turn(conversation=self.conversation, harness=harness,
-                  workspace=self.workspace, skills_dir=self.skills_dir,
-                  trace=trace,
-                  memory_enabled=(self.runtime.memory_enabled
-                                  if self.runtime is not None else None),
-                  memory_dir=(self.runtime.memory_dir
-                              if self.runtime is not None else None))
+                  workspace=self.workspace, trace=trace,
+                  runtime=self.runtime)
         self.conversation.append({"role": "user", "content": self.user_message})
         history = TurnHistory(self.conversation.messages,
                               summarizer=self.summarizer,

@@ -26,6 +26,7 @@ from agent_runtime.agent.tool_dispatch import (
     validate_tool_call,
 )
 from agent_runtime.execution.local import LocalWorkspace
+from agent_runtime.runtime_config import RuntimeConfig
 from agent_runtime.tools.tools import builtin_tool_specs
 
 SIGNATURE = {"google": {"thought_signature": "SIG-opaque-value"}}
@@ -101,7 +102,9 @@ class StreamedExtrasTests(unittest.IsolatedAsyncioTestCase):
         deltas = [_stream_delta("call_a", "a.txt", signature=SIGNATURE),
                   _stream_delta("call_b", "b.txt")]
 
-        response = await consume_stream(_FakeStreamLLM(deltas), [], None, 1)
+        response = await consume_stream(
+            _FakeStreamLLM(deltas), [], None, 1,
+            runtime=RuntimeConfig(model="m", base_url=None))
 
         calls = response["tool_calls"]
         self.assertEqual(calls[0]["extra_content"], SIGNATURE)

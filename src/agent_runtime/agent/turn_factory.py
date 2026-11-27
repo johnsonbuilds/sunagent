@@ -119,8 +119,6 @@ def create_agent_turn(
         tool_runner=tool_runner,
         summarizer=resolved_factory,
         stream=stream,
-        max_iterations=resolved_max_iterations,
-        skills_dir=resolved_runtime.skills_dir,
         runtime=resolved_runtime,
     ))
 

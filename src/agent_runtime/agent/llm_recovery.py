@@ -179,13 +179,13 @@ def _status_code(exc: BaseException) -> int | None:
     return code
 
 
-def _retry_4xx_enabled(runtime: RuntimeConfig | None = None) -> bool:
+def _retry_4xx_enabled(runtime: RuntimeConfig) -> bool:
     """Opt-out for gateways that report transient failures as 4xx."""
-    return (runtime or RuntimeConfig.from_env()).retry_4xx
+    return runtime.retry_4xx
 
 
 def llm_error_category(exc: BaseException,
-                        runtime: RuntimeConfig | None = None) -> str | None:
+                       runtime: RuntimeConfig) -> str | None:
     """Map an LLM-call failure to its ``recovery.llm_errors`` category.
 
     Returns ``None`` when the failure has no replay policy at all (a
@@ -203,7 +203,7 @@ def llm_error_category(exc: BaseException,
 
 
 def recovery_plan(exc: BaseException,
-                   runtime: RuntimeConfig | None = None) -> RecoveryPlan:
+                  runtime: RuntimeConfig) -> RecoveryPlan:
     """Resolve one LLM failure to the single place that acts on it.
 
     An error that declared its own strategy keeps it; otherwise the category

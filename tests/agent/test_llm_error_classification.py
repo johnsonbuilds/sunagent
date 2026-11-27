@@ -54,6 +54,8 @@ from agent_runtime.trace import RunTrace
 # the system prompt without touching what these tests assert.
 environ["AGENT_RUNTIME_MEMORY"] = "0"
 
+_RUNTIME = RuntimeConfig(model="m", base_url=None)
+
 
 class ProviderError(Exception):
     """Stands in for openai.APIStatusError: status plus a provider body."""
@@ -115,15 +117,17 @@ class ClassificationTests(unittest.TestCase):
     def test_deterministic_statuses_are_invalid_request(self) -> None:
         for status in (400, 404, 422):
             with self.subTest(status=status):
-                self.assertEqual(llm_error_category(ProviderError(status)),
+                self.assertEqual(llm_error_category(ProviderError(status),
+                                                     _RUNTIME),
                                  "invalid_request")
 
     def test_transient_failures_stay_provider_error(self) -> None:
         for status in (401, 403, 408, 429, 500, 502, 503):
             with self.subTest(status=status):
-                self.assertEqual(llm_error_category(ProviderError(status)),
+                self.assertEqual(llm_error_category(ProviderError(status),
+                                                     _RUNTIME),
                                  "provider_error")
-        self.assertEqual(llm_error_category(ValueError("dns hiccup")),
+        self.assertEqual(llm_error_category(ValueError("dns hiccup"), _RUNTIME),
                          "provider_error")
 
     def test_a_non_integer_status_code_is_ignored(self) -> None:
@@ -131,13 +135,13 @@ class ClassificationTests(unittest.TestCase):
             with self.subTest(status=bogus):
                 error = ProviderError(400)
                 error.status_code = bogus
-                self.assertEqual(llm_error_category(error), "provider_error")
+                self.assertEqual(llm_error_category(error, _RUNTIME), "provider_error")
 
     def test_context_window_keeps_precedence_over_the_status(self) -> None:
         error = ContextWindowExceededError("400 - context_length_exceeded")
         error.status_code = 400
 
-        self.assertEqual(llm_error_category(error), "context_window")
+        self.assertEqual(llm_error_category(error, _RUNTIME), "context_window")
 
     def test_the_escape_hatch_restores_provider_error(self) -> None:
         config = RuntimeConfig(model="m", base_url=None, retry_4xx=True)
@@ -149,15 +153,19 @@ class ClassificationTests(unittest.TestCase):
                                 RuntimeConfig(model="m", base_url=None)),
             "invalid_request")
 
-    def test_the_env_escape_hatch_applies_without_a_runtime_config(self) -> None:
+    def test_the_env_escape_hatch_flows_through_runtime_config(self) -> None:
         previous = environ.get("AGENT_RUNTIME_RETRY_4XX")
         try:
             environ["AGENT_RUNTIME_RETRY_4XX"] = "1"
-            self.assertEqual(llm_error_category(ProviderError(400)),
-                             "provider_error")
+            self.assertEqual(
+                llm_error_category(ProviderError(400),
+                                   RuntimeConfig.from_env()),
+                "provider_error")
             environ["AGENT_RUNTIME_RETRY_4XX"] = "0"
-            self.assertEqual(llm_error_category(ProviderError(400)),
-                             "invalid_request")
+            self.assertEqual(
+                llm_error_category(ProviderError(400),
+                                   RuntimeConfig.from_env()),
+                "invalid_request")
         finally:
             if previous is None:
                 environ.pop("AGENT_RUNTIME_RETRY_4XX", None)
@@ -199,13 +207,13 @@ class RecoveryPlanTests(unittest.TestCase):
         ]
         for error, category in cases:
             with self.subTest(error=type(error).__name__, category=category):
-                plan = recovery_plan(error)
+                plan = recovery_plan(error, _RUNTIME)
                 self.assertEqual(plan.strategy, REPLAY)
                 self.assertEqual(plan.category, category)
 
     def test_a_rejection_is_replay_so_the_harness_can_still_fail_fast(self) -> None:
         """"Do not retry" is a policy (max_retries 0), not a strategy."""
-        plan = recovery_plan(ProviderError(400))
+        plan = recovery_plan(ProviderError(400), _RUNTIME)
 
         self.assertEqual(plan.strategy, REPLAY)
         self.assertEqual(
@@ -216,7 +224,7 @@ class RecoveryPlanTests(unittest.TestCase):
         error = ContextWindowExceededError("400 - context_length_exceeded")
         error.status_code = 400
 
-        plan = recovery_plan(error)
+        plan = recovery_plan(error, _RUNTIME)
 
         self.assertEqual(plan.strategy, REFRESH)
         self.assertEqual(plan.category, "context_window")
@@ -224,10 +232,10 @@ class RecoveryPlanTests(unittest.TestCase):
     def test_a_thinking_only_turn_is_nudged_with_no_policy(self) -> None:
         for error in (ReasoningBudgetExceeded(600, 500), ReasoningTruncated(600)):
             with self.subTest(error=type(error).__name__):
-                plan = recovery_plan(error)
+                plan = recovery_plan(error, _RUNTIME)
                 self.assertEqual(plan.strategy, NUDGE)
                 self.assertIsNone(plan.category)
-                self.assertIsNone(llm_error_category(error))
+                self.assertIsNone(llm_error_category(error, _RUNTIME))
                 self.assertEqual(error.reasoning_chars, 600)
 
     def test_the_two_thinking_only_turns_state_their_own_cause(self) -> None:
@@ -272,7 +280,7 @@ class RecoveryPlanTests(unittest.TestCase):
             self.assertNotIn("',)", text)
             self.assertNotIn("0 chars", text)
         # It is still the same failure, so the strategy does not change.
-        self.assertEqual(recovery_plan(hidden).strategy, NUDGE)
+        self.assertEqual(recovery_plan(hidden, _RUNTIME).strategy, NUDGE)
 
 
 class GenomeTests(unittest.TestCase):

@@ -1,6 +1,6 @@
 # RuntimeConfig ↔ harness 职责边界 与 turn 组装层参数收敛（2026-11-26）
 
-> 本文是 P0「RuntimeConfig 收口」之后的复盘问答记录。§4.3（删除 `tool_error_max_retries` 双源）与 §4.10（`RuntimeConfig.skills_dir` 落地）已实施；其余条目仍是建议，供确认后单开一单实施。
+> 本文是 P0「RuntimeConfig 收口」之后的复盘问答记录。§4.3（删除 `tool_error_max_retries` 双源）、§4.10（`RuntimeConfig.skills_dir` 落地）与 §4.11（turn 组装层去平铺）已实施；其余条目仍是建议，供确认后单开一单实施。
 
 ---
 
@@ -157,7 +157,7 @@
 - `tests/agent/test_context_gates.py:291,319,339,483`：`chat_with_recovery` / `consume_stream` 不传 runtime。
 - `tests/agent/test_tool_call_extras.py:104`：`consume_stream` 不传 runtime。
 
-所以"签名收紧为非 Optional、删兜底分支"必须附测试迁移清单，或保留 `runtime=None` 作为公开兼容入口（内部解析一次 env），否则会变成大范围测试改动。
+所以"签名收紧为非 Optional、删兜底分支"必须附测试迁移清单，或保留 `runtime=None` 作为公开兼容入口（内部解析一次 env），否则会变成大范围测试改动。**2026-11-26 已按迁移清单完成：深层 helper 收紧、测试显式传 runtime，详见 §4.11。**
 
 ### 4.6 `skills_dir` 迁移：RuntimeConfig 单一真相源，无回退链
 
@@ -183,7 +183,7 @@ RuntimeConfig.skills_dir（默认 ./skills，可被环境覆盖）
 
 1. ✅ `RuntimeConfig.skills_dir` 落地（默认 `./skills`，单一真相源，无回退）；`AGENT_RUNTIME_PYTHON` / `AGENT_RUNTIME_HOME` 本次未动（见 §4.10）。
 2. evaluation 增加 runtime fingerprint（避免 runtime 变化被误归因给 harness）。
-3. turn 组装层去平铺 + 测试迁移清单（或保留 `runtime=None` 兼容）。
+3. ✅ turn 组装层去平铺 + 测试迁移清单（见 §4.11）。
 4. （更晚，可选）`tool_error_max_retries` 改名、summarizer 重试基因化。
 
 ### 4.10 `RuntimeConfig.skills_dir` 落地（已实施，2026-11-26）
@@ -193,3 +193,12 @@ RuntimeConfig.skills_dir（默认 ./skills，可被环境覆盖）
 - `default_skills_dir()` 只返回 `./skills`；`resolve_skills()` 删除了不再使用的 `harness` 参数。
 - `run.config` 的 runtime snapshot 与 `ENV_WHITELIST` 均加入 `skills_dir` / `AGENT_RUNTIME_SKILLS_DIR`，保证可复现。
 - **未纳入本单**：`AGENT_RUNTIME_PYTHON`（只在 `execute_code` 的 Python 解释器选择处使用，`LANGUAGE_SPECS` 是模块级表，收口需把解释器参数穿过 tool spec）与 `AGENT_RUNTIME_HOME`（存储根路径，按调用解析以便测试改环境）。二者留作独立小重构。
+
+### 4.11 turn 组装层去平铺（已实施，2026-11-26）
+
+- `TurnCollaborators` 删除派生字段 `max_iterations` / `skills_dir`，`runtime` 改为非 Optional。
+- `AgentTurn.runtime` 改为 `RuntimeConfig`（factory 已保证非 None）；`AgentTurn.max_iterations` 直接读 `collaborators.guard.max_iterations`。
+- `open_turn(*, conversation, harness, workspace, trace, runtime=None)`：内部直接取 `runtime.skills_dir` / `runtime.memory_enabled` / `runtime.memory_dir`，loop 里原来的 6 行三元表达式变为一次传 runtime。`runtime=None` 仅保留给直接调用的库测试，兜底一次 `RuntimeConfig.from_env()`。
+- LLM 深层 helper 收紧为非 Optional：`use_streaming`、`_stream_idle_timeout`、`_reasoning_budget_chars`、`_retry_4xx_enabled` 不再自带 `from_env()`；`consume_stream` / `chat_with_recovery` / `llm_error_category` / `recovery_plan` 都要求调用方注入 runtime。
+- `stream` 仍是唯一的显式 override；本次**不修改** `run_turn(stream=False)` 的默认值，避免让一批测试悄悄变成流式。
+- 测试迁移：`test_context_gates`、`test_tool_call_extras`、`test_llm_error_classification`、`test_loop` 改为显式传 `RuntimeConfig`；原先"无 runtime 时读 env"的用例改写为"env → RuntimeConfig → 分类"的可控路径。
