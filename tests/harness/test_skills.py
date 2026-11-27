@@ -17,6 +17,7 @@ from agent_runtime.harness import HarnessError, from_dict
 from agent_runtime.runtime_config import RuntimeConfig
 from agent_runtime.skills import (
     MAX_SKILL_CHARS,
+    Skill,
     default_skills_dir,
     render_skills_block,
     resolve_skills,
@@ -62,7 +63,7 @@ class SkillLoadingTests(unittest.TestCase):
         self.assertEqual(skill.version, "v3")
         self.assertEqual(skill.content, "close with a final answer")
         self.assertEqual(skill.source, str(path))
-        self.assertFalse(skill.truncated)
+        self.assertEqual(skill.directory, (root / "coder").as_posix())
 
     def test_default_dir_is_cwd_skills(self) -> None:
         # RuntimeConfig.skills_dir is the single source of truth for a turn;
@@ -74,13 +75,30 @@ class SkillLoadingTests(unittest.TestCase):
         self.assertEqual(resolve_skills([]), [])
         self.assertEqual(render_skills_block([]), "")
 
-    def test_render_is_plain_text_without_tags(self) -> None:
+    def test_render_declares_boundaries_version_and_directory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            _write_skill(Path(directory), "a", "first body")
-            _write_skill(Path(directory), "b", "second body")
-            skills = resolve_skills(["a", "b"], skills_dir=Path(directory))
-            self.assertEqual(render_skills_block(skills),
-                             "first body\n\nsecond body")
+            root = Path(directory)
+            _write_skill(root, "a", "first body", version="v2")
+            _write_skill(root, "b", "second body")
+            skills = resolve_skills(["a", "b"], skills_dir=root)
+            rendered = render_skills_block(skills)
+            expected_a = (root / "a").as_posix()
+        self.assertTrue(rendered.startswith("<domain_playbooks>\nPrecedence:"))
+        self.assertTrue(rendered.endswith("</domain_playbooks>"))
+        self.assertIn(f'<playbook name="a" version="v2" '
+                      f'directory="{expected_a}">', rendered)
+        self.assertIn("first body", rendered)
+        self.assertIn("second body", rendered)
+        self.assertLess(rendered.index("first body"),
+                        rendered.index("second body"))
+        self.assertIn("later entries override earlier ones", rendered)
+
+    def test_relative_directory_stays_relative(self) -> None:
+        skill = Skill(name="coder", version="v1", content="body",
+                      content_hash="", source="skills/coder/SKILL.md")
+        self.assertEqual(skill.directory, "skills/coder")
+        self.assertIn('directory="skills/coder"',
+                      render_skills_block([skill]))
 
     def test_unknown_skill_raises_harness_error(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -98,14 +116,32 @@ class SkillLoadingTests(unittest.TestCase):
             with self.assertRaises(HarnessError):
                 resolve_skills(["coder"], skills_dir=Path(directory))
 
-    def test_long_body_truncates_with_marker(self) -> None:
+    def test_long_body_raises_instead_of_truncating(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            _write_skill(Path(directory), "big", "x" * (MAX_SKILL_CHARS + 10))
-            (skill,) = resolve_skills(["big"], skills_dir=Path(directory))
-            self.assertTrue(skill.truncated)
-            self.assertIn("truncated", skill.content)
-            meta = skills_trace_meta([skill])
-            self.assertEqual(meta["skills_truncated"], {"big": True})
+            root = Path(directory)
+            _write_skill(root, "big", "x" * (MAX_SKILL_CHARS + 10))
+            with self.assertRaises(HarnessError) as caught:
+                resolve_skills(["big"], skills_dir=root)
+        message = str(caught.exception)
+        self.assertIn("over the", message)
+        self.assertIn("references", message)
+
+    def test_missing_version_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            skill_dir = Path(directory) / "coder"
+            skill_dir.mkdir()
+            (skill_dir / "SKILL.md").write_text(
+                "---\nname: coder\n---\n\nbody\n", encoding="utf-8")
+            with self.assertRaises(HarnessError) as caught:
+                resolve_skills(["coder"], skills_dir=Path(directory))
+        self.assertIn("version", str(caught.exception))
+
+    def test_trace_meta_records_versions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            _write_skill(Path(directory), "a", "hello", version="v7")
+            skills = resolve_skills(["a"], skills_dir=Path(directory))
+        meta = skills_trace_meta(skills)
+        self.assertEqual(meta["skills_versions"], {"a": "v7"})
 
     def test_content_hash_stable_and_sensitive(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -175,10 +211,13 @@ class SkillTurnTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(answer, "done")
         system = llm.seen[0][0]
         self.assertEqual(system["role"], "system")
-        self.assertEqual(system["content"], body)
+        self.assertIn("<domain_playbooks>", system["content"])
+        self.assertIn('<playbook name="coder" version="v1"', system["content"])
+        self.assertIn(body, system["content"])
         loaded = [e for e in trace.events if e.event_type == "skills.loaded"]
         self.assertEqual(len(loaded), 1)
         self.assertEqual(loaded[0].data["skills"], ["coder"])
+        self.assertEqual(loaded[0].data["skills_versions"], {"coder": "v1"})
         self.assertTrue(loaded[0].data["skills_content_hash"])
 
     async def test_empty_skills_emit_no_event(self) -> None:
