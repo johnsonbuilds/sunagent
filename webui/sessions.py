@@ -182,6 +182,8 @@ class Session:
         return {"id": self.id, "title": self.title,
                 "created_at": self.created_at, "updated_at": self.updated_at,
                 "segments": self.segments, "messages": self.messages,
+                "summary": self.conversation.summary,
+                "summary_boundary": self.conversation.summary_boundary,
                 "model": self.model, "harness": self.harness,
                 "origin": self.origin, "target": self.target,
                 "report_segment_id": self.report_segment_id,
@@ -485,6 +487,15 @@ def _session_from_record(record: dict[str, Any]) -> Session | None:
                             if isinstance(message, dict)]
         session.conversation = Conversation()
         session.conversation.messages = list(session.messages)
+        # Resume the cross-turn snapshot only while it still covers this
+        # transcript; a truncated/forked record falls back to a fresh summary.
+        summary = record.get("summary")
+        boundary = record.get("summary_boundary")
+        if (isinstance(summary, str)
+                and isinstance(boundary, int)
+                and 0 < boundary <= len(session.conversation.messages)):
+            session.conversation.summary = summary
+            session.conversation.summary_boundary = boundary
     return session
 
 

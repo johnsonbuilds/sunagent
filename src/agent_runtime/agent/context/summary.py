@@ -118,6 +118,28 @@ def extract_summary(view: list[dict[str, Any]] | None) -> str | None:
     return None
 
 
+def _tail_start(starts: list[int], tail_rounds: int) -> int:
+    """Index where the verbatim tail begins, clamped to the first round."""
+    if tail_rounds <= 0:
+        return starts[0]
+    return starts[max(0, len(starts) - tail_rounds)]
+
+
+def coverage_boundary(messages: list[dict[str, Any]], *,
+                      tail_rounds: int = DEFAULT_SUMMARY_TAIL_ROUNDS) -> int:
+    """Index of the first message the latest snapshot does *not* cover yet.
+
+    The summarizer reads ``[leading, tail_start)``; the tail is kept verbatim
+    instead.  So the covered prefix ends at the tail start, not at
+    ``len(messages)``: persisting ``len(messages)`` would silently drop the
+    old tail once it slides out of the window.
+    """
+    starts = _round_starts(messages)
+    if len(starts) < 2:
+        return len(messages)
+    return _tail_start(starts, tail_rounds)
+
+
 def _resolve_summarizer(llm: Any) -> Any:
     """Resolve an injected summarizer object or lazy factory."""
     if llm is None:
@@ -281,7 +303,7 @@ async def summarize_history(messages: list[dict[str, Any]], *,
     # the incremental boundary.
     leading = [message for message in messages[:starts[0]]
                if not _is_summary_message(message)]
-    tail_start = starts[-tail_rounds]
+    tail_start = _tail_start(starts, tail_rounds)
     tail = messages[tail_start:]
 
     # ``segment`` is the incremental summarizer input; ``preserve_pool`` spans
@@ -431,5 +453,5 @@ async def summarize_history(messages: list[dict[str, Any]], *,
 
 __all__ = [
     "SUMMARY_PREFIX", "SUMMARIZER_INSTRUCTION",
-    "extract_summary", "summarize_history",
+    "coverage_boundary", "extract_summary", "summarize_history",
 ]

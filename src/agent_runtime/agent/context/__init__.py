@@ -51,6 +51,7 @@ from agent_runtime.agent.context.strategies import (
 from agent_runtime.agent.context.summary import (
     SUMMARY_PREFIX,
     SUMMARIZER_INSTRUCTION,
+    coverage_boundary,
     extract_summary,
     summarize_history,
 )
@@ -71,5 +72,5 @@ __all__ = [
     "ViewBudget",
     "request_view_size", "apply_context_strategy", "apply_memory_strategy",
     "compact_observations", "register_context_strategy",
-    "summarize_history", "extract_summary", "total_chars",
+    "summarize_history", "extract_summary", "coverage_boundary", "total_chars",
 ]

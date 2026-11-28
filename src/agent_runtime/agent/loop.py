@@ -99,7 +99,7 @@ class AgentTurn:
                   workspace=self.workspace, trace=trace,
                   runtime=self.runtime)
         self.conversation.append({"role": "user", "content": self.user_message})
-        history = TurnHistory(self.conversation.messages,
+        history = TurnHistory(self.conversation,
                               summarizer=self.summarizer,
                               echo_reasoning=resolve_echo_reasoning(self.llm))
 

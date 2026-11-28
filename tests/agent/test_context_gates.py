@@ -70,6 +70,16 @@ def valid_summary(marker: str = "SNAP") -> str:
     )
 
 
+def make_history(messages: list[dict[str, Any]], *,
+                 summarizer: Any = None,
+                 echo_reasoning: bool = True) -> TurnHistory:
+    """A TurnHistory over a fresh conversation seeded with ``messages``."""
+    conversation = Conversation()
+    conversation.messages.extend(messages)
+    return TurnHistory(conversation, summarizer=summarizer,
+                       echo_reasoning=echo_reasoning)
+
+
 class FakeSummaryLLM:
     def __init__(self, summary: str | None = None,
                  *, error: Exception | None = None) -> None:
@@ -327,8 +337,7 @@ class HardGateRecoveryTests(unittest.IsolatedAsyncioTestCase):
                     raise ContextWindowExceededError("maximum context length")
                 return {"content": "ok", "tool_calls": []}
 
-        history = TurnHistory(
-            build_rounds(10, tool_chars=5_000), echo_reasoning=True)
+        history = make_history(build_rounds(10, tool_chars=5_000))
 
         response = await chat_with_recovery(
             FlakyLLM(), history, None, 1, spec, runtime=_RUNTIME)
@@ -356,8 +365,7 @@ class HardGateRecoveryTests(unittest.IsolatedAsyncioTestCase):
                     raise ContextWindowExceededError("context window")
                 return {"content": "ok", "tool_calls": []}
 
-        history = TurnHistory(
-            build_rounds(10, tool_chars=5_000), echo_reasoning=True)
+        history = make_history(build_rounds(10, tool_chars=5_000))
 
         response = await chat_with_recovery(
             OverflowTwiceLLM(), history, None, 1, spec, runtime=_RUNTIME)
@@ -376,8 +384,7 @@ class HardGateRecoveryTests(unittest.IsolatedAsyncioTestCase):
                 attempts.append(len(messages))
                 raise ContextWindowExceededError("context window")
 
-        history = TurnHistory(
-            build_rounds(4, tool_chars=5_000), echo_reasoning=True)
+        history = make_history(build_rounds(4, tool_chars=5_000))
 
         with self.assertRaises(ContextWindowExceededError):
             await chat_with_recovery(OverflowLLM(), history, None, 1, spec,
@@ -391,8 +398,8 @@ class TurnHistoryAnchorTests(unittest.IsolatedAsyncioTestCase):
         conversation = Conversation()
         conversation.messages.extend(build_rounds(3, tool_chars=50))
         llm = FakeSummaryLLM()
-        history = TurnHistory(
-            conversation.messages, summarizer=llm, echo_reasoning=True)
+        history = TurnHistory(conversation, summarizer=llm,
+                              echo_reasoning=True)
         history.record_usage(5_000)
         anchor = history.usage_anchor
         assert anchor is not None
@@ -559,7 +566,7 @@ class AnchorLifecycleTests(unittest.IsolatedAsyncioTestCase):
         # refresh drops it until the next billed response re-anchors.
         conversation = Conversation()
         conversation.messages.extend(build_rounds(3, tool_chars=5_000))
-        history = TurnHistory(conversation.messages, echo_reasoning=True)
+        history = TurnHistory(conversation, echo_reasoning=True)
         history.record_usage(5_000)
         self.assertIsNotNone(history.usage_anchor)
         genome = ContextGenome(strategy="compact_observations",
@@ -571,7 +578,7 @@ class AnchorLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_anchor_kept_without_compaction(self) -> None:
         conversation = Conversation()
         conversation.messages.extend(build_rounds(1, tool_chars=10))
-        history = TurnHistory(conversation.messages, echo_reasoning=True)
+        history = TurnHistory(conversation, echo_reasoning=True)
         history.record_usage(5_000)
         genome = ContextGenome(strategy="compact_observations",
                               context_budget=10 ** 9)
@@ -588,7 +595,7 @@ class AnchorLifecycleTests(unittest.IsolatedAsyncioTestCase):
             {"role": "assistant", "content": "final1"},
             {"role": "user", "content": "task2"},
         ]
-        history = TurnHistory(messages, echo_reasoning=True)
+        history = make_history(messages)
         genome = ContextGenome(strategy="turn_fold")
         await history.refresh_view(genome)
         history.record_usage(100)
@@ -859,8 +866,8 @@ class BoundaryChaseTests(unittest.IsolatedAsyncioTestCase):
                 "role": "tool", "tool_call_id": f"call-{i}",
                 "content": "x" * chars,
             })
-        return TurnHistory(
-            conversation.messages, summarizer=summarizer, echo_reasoning=True)
+        return TurnHistory(conversation, summarizer=summarizer,
+                           echo_reasoning=True)
 
     async def test_noop_refreshes_do_not_freeze_next_summary(self) -> None:
         class CountingLLM:
@@ -906,6 +913,106 @@ class BoundaryChaseTests(unittest.IsolatedAsyncioTestCase):
                              for m in history.view)
         self.assertIn(f"SNAP-{llm.calls}", view_text)
         self.assertNotIn("SNAP-1", view_text)
+
+
+class CrossTurnSummaryTests(unittest.IsolatedAsyncioTestCase):
+    """The snapshot and its coverage boundary survive a new turn.
+
+    Without the seed a fresh ``TurnHistory`` restarts at boundary 0 and
+    re-summarizes the whole transcript every turn.  With it, the next turn
+    reads only the new segment plus the previous snapshot, and a turn that
+    adds nothing new makes no summarizer call at all.
+    """
+
+    class _CountingLLM:
+        """Distinct snapshot per call, so each one counts as a new snapshot."""
+
+        def __init__(self) -> None:
+            self.calls = 0
+            self.last_messages: list[dict[str, Any]] = []
+
+        async def chat(self, messages: list[dict[str, Any]],
+                       tools: list[dict[str, Any]] | None = None,
+                       **kwargs: Any) -> dict[str, Any]:
+            self.calls += 1
+            self.last_messages = list(messages)
+            return {"content": valid_summary(f"SNAP-{self.calls}"),
+                    "tool_calls": []}
+
+    def _conversation(self, rounds: int, tag: str, start: int = 0) -> Conversation:
+        conversation = Conversation()
+        conversation.messages.extend(build_rounds(1, tool_chars=10))
+        for index in range(start, start + rounds):
+            conversation.messages.append({
+                "role": "assistant", "content": "",
+                "tool_calls": [{
+                    "id": f"{tag}-{index}", "type": "function",
+                    "function": {"name": "run_command", "arguments": "{}"},
+                }],
+            })
+            conversation.messages.append({
+                "role": "tool", "tool_call_id": f"{tag}-{index}",
+                "content": f"MARK-{tag}-{index}-" + "x" * 3_000,
+            })
+        return conversation
+
+    async def test_second_turn_is_incremental_and_covers_old_tail(self) -> None:
+        genome = ContextGenome(strategy="llm_summary", context_budget=1,
+                               summary_tail_rounds=2)
+        conversation = self._conversation(6, "A")
+        llm = self._CountingLLM()
+        history = TurnHistory(conversation, summarizer=llm,
+                              echo_reasoning=True)
+        await history.refresh_view(genome)
+        self.assertEqual(llm.calls, 1)
+        self.assertIsNotNone(conversation.summary)
+        boundary = conversation.summary_boundary
+        self.assertGreater(boundary, 0)
+        # The boundary is the tail start, not len(messages): the tail was
+        # never read by the summarizer, so it must stay in the next segment.
+        self.assertLess(boundary, len(conversation.messages))
+
+        conversation.append({"role": "user", "content": "continue"})
+        conversation.messages.extend(self._conversation(4, "B", start=100)
+                                     .messages[2:])
+        next_turn = TurnHistory(conversation, summarizer=llm,
+                                echo_reasoning=True)
+        self.assertEqual(next_turn.summary_boundary, boundary)
+        await next_turn.refresh_view(genome)
+        self.assertEqual(llm.calls, 2)
+        # Incremental: only the new segment, not the whole transcript.
+        self.assertLess(len(llm.last_messages),
+                        len(conversation.messages))
+        fed = " ".join(str(m.get("content", ""))
+                       for m in llm.last_messages)
+        self.assertIn("MARK-A-4", fed)
+        self.assertIn("MARK-A-5", fed)
+
+        # A turn that adds no new rounds reuses the snapshot with no call.
+        conversation.append({"role": "user", "content": "status?"})
+        later = TurnHistory(conversation, summarizer=llm,
+                            echo_reasoning=True)
+        await later.refresh_view(genome)
+        self.assertEqual(llm.calls, 2)
+        self.assertIn("SNAP", " ".join(str(m.get("content", ""))
+                                      for m in later.view))
+
+    async def test_truncated_boundary_is_ignored(self) -> None:
+        # A fork/revert can leave a persisted boundary past the end; the
+        # seed must fall back to a full first compaction instead of freezing.
+        conversation = Conversation()
+        conversation.messages.extend(build_rounds(4, tool_chars=100))
+        conversation.summary = valid_summary("STALE")
+        conversation.summary_boundary = 10_000
+        llm = FakeSummaryLLM()
+        history = TurnHistory(conversation, summarizer=llm,
+                              echo_reasoning=True)
+        self.assertEqual(history.summary_boundary, 0)
+        await history.refresh_view(ContextGenome(
+            strategy="llm_summary", context_budget=1, summary_tail_rounds=2))
+        self.assertEqual(llm.call_count, 1)
+        self.assertNotIn("STALE", " ".join(str(m.get("content", ""))
+                                          for m in llm.last_messages))
 
 
 class ContextWindowHardGateLoopTests(unittest.IsolatedAsyncioTestCase):

@@ -1,12 +1,12 @@
 """The turn-local conversation: full history plus its request view.
 
-``messages`` is the single source of truth shared across turns; ``view`` is the
-(possibly compacted) projection actually sent to the model. Both are appended
-through one entry point, so they cannot drift apart.
+``conversation.messages`` is the single source of truth shared across turns;
+``view`` is the (possibly compacted) projection actually sent to the model.
+Both are appended through one entry point, so they cannot drift apart.
 
 Two cross-compaction anchors live here as projection metadata (never on the
-wire): ``_summary_boundary`` (``messages`` length when the latest snapshot was
-produced) and ``_usage_anchor`` (measured prompt tokens + view size from the
+wire): ``_summary_boundary`` (the first message the latest snapshot does not
+cover yet) and ``_usage_anchor`` (measured prompt tokens + view size from the
 last billed response).
 """
 
@@ -17,6 +17,7 @@ from typing import Any
 
 from agent_runtime.agent.context import (
     ViewBudget,
+    coverage_boundary,
     extract_summary,
     total_chars,
     apply_context_strategy,
@@ -52,6 +53,12 @@ class Conversation:
 
     def __init__(self) -> None:
         self.messages: list[dict[str, Any]] = []
+        # Cross-turn compaction state: the latest snapshot text (without
+        # ``SUMMARY_PREFIX``) and the index up to which it covers ``messages``.
+        # Kept beside the transcript, never inside it, so the full history
+        # stays the source of truth and the snapshot is never re-summarized.
+        self.summary: str | None = None
+        self.summary_boundary: int = 0
 
     def append(self, message: dict[str, Any]) -> None:
         self.messages.append(message)
@@ -60,18 +67,29 @@ class Conversation:
 class TurnHistory:
     """Full history (source of truth) plus its request-view projection."""
 
-    def __init__(self, messages: list[dict[str, Any]], *,
+    def __init__(self, conversation: Conversation, *,
                  summarizer: Any = None,
                  echo_reasoning: bool) -> None:
-        self.messages = messages
-        self.view: list[dict[str, Any]] = list(messages)
+        self.conversation = conversation
+        self.view: list[dict[str, Any]] = list(conversation.messages)
         # Explicit summarizer (provider object or lazy factory); when omitted,
         # the context layer's context-local default applies.
         self.summarizer = summarizer
         # Resolved once by the composition root (loop/turn factory) from the
         # provider's own endpoint: the budget layer never re-derives it.
         self.echo_reasoning = echo_reasoning
-        self._summary_boundary: int = 0
+        # Cross-turn compaction state.  A new turn starts from the full
+        # history, so without this seed the previous snapshot would be rebuilt
+        # from scratch every turn; ``summary_boundary`` is where that snapshot
+        # stopped covering the history.  Clamp a persisted boundary that a
+        # fork/revert truncated, or the segment would be empty and freeze the
+        # snapshot.
+        boundary = conversation.summary_boundary
+        summary = conversation.summary
+        if not 0 < boundary <= len(conversation.messages):
+            boundary, summary = 0, None
+        self._summary_boundary: int = boundary
+        self._previous_summary: str | None = summary
         self._usage_anchor: tuple[int, int, int] | None = None
         # Turn-level billed-token ledger.  Summarizer sub-calls feed only their
         # own counters: their request never travels on ``view``, so they must
@@ -82,14 +100,19 @@ class TurnHistory:
         self._summarizer_prompt_tokens: int = 0
         self._summarizer_completion_tokens: int = 0
 
+    @property
+    def messages(self) -> list[dict[str, Any]]:
+        """The conversation's live transcript (the single source of truth)."""
+        return self.conversation.messages
+
     def append(self, message: dict[str, Any]) -> None:
         """Append one message to the history and the request view."""
-        self.messages.append(message)
+        self.conversation.append(message)
         self.view.append(message)
 
     @property
     def summary_boundary(self) -> int:
-        """``messages`` index one past the last summarized message."""
+        """Index of the first message the latest snapshot does not cover."""
         return self._summary_boundary
 
     def _budget(self, context: ContextGenome,
@@ -156,6 +179,7 @@ class TurnHistory:
             self.messages, context, compact_messages=self.view,
             trace=trace, iteration=iteration,
             boundary=self._summary_boundary,
+            previous_summary=self._previous_summary,
             budget=self._budget(context, self._usage_anchor),
             force_budget=force_budget,
             summarizer=self.summarizer,
@@ -165,14 +189,21 @@ class TurnHistory:
                 # The anchor measured the old tool-heavy mix, not the new
                 # summary-heavy one; a stale ratio drifts worse than none.
                 self._usage_anchor = None
-            old_summary = extract_summary(self.view)
+            old_summary = self._previous_summary
             self.view = new_view
             new_summary = extract_summary(new_view)
             # Advance only on a genuinely new snapshot: advancing on no-op
             # refreshes would chase ``len(messages)``, leaving later
             # compactions an empty segment and freezing the snapshot.
             if new_summary is not None and new_summary != old_summary:
-                self._summary_boundary = len(self.messages)
+                # The snapshot covers everything the summarizer read, i.e. up
+                # to the verbatim tail.  Persisting ``len(messages)`` would
+                # drop the old tail once it slides out of the window.
+                self._summary_boundary = coverage_boundary(
+                    self.messages, tail_rounds=context.summary_tail_rounds)
+                self._previous_summary = new_summary
+                self.conversation.summary = new_summary
+                self.conversation.summary_boundary = self._summary_boundary
 
     async def shrink_view(self, context: ContextGenome, *,
                           trace: Any = None,

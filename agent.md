@@ -27,3 +27,11 @@ Tool error messages state only verified facts, never guess intent.
 - Do not prescribe the next tool (`use write_file ...`, `verify with
   find_files`, `use edit_file instead`). Routing decisions belong to
   the model and the harness prompt, not to error text.
+
+## 4. Channels
+
+- The **Web UI** (`webui/`) is the primary, actively maintained channel:
+  product features, session persistence, and UX work land there first.
+- The **CLI** (`run_agent.py` and its terminal renderer) is a debugging and
+  benchmark convenience, not a maintenance priority. Keep it working, but do
+  not add features there first and do not block Web UI work on CLI parity.

@@ -28,6 +28,7 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
                                  force_budget: int | None = None,
                                  summarizer: Any = None,
                                  usage_sink: Any = None,
+                                 previous_summary: str | None = None,
                                  fallback_strategy: str = "compact_observations",
                                  **options: Any) -> list[dict[str, Any]]:
     """Build the request view of ``messages`` under the memory genome.
@@ -50,6 +51,10 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
     whether reasoning rides the wire).  Omitted, it is built from the genome
     with reasoning counted — direct callers that talk to a non-replaying
     endpoint must pass their own ``ViewBudget`` instead.
+
+    ``previous_summary`` is the cross-turn snapshot text.  The working view may
+    not carry it (a new turn starts from the full history), so callers that
+    persist it pass it explicitly; otherwise it is read from ``working``.
     """
     from agent_runtime.agent.context.strategies import ContextStrategyRequest
 
@@ -77,13 +82,16 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
     # Wall time spent building the view: summarizer calls plus the deterministic
     # compactor.  ``run.metrics`` sums it from this event.
     started = time.monotonic()
+    resolved_previous_summary = (
+        previous_summary if previous_summary is not None
+        else extract_summary(working))
     request = ContextStrategyRequest(
         messages=messages,
         working=working,
         context=context,
         budget=gate_budget,
         boundary=boundary,
-        previous_summary=extract_summary(working),
+        previous_summary=resolved_previous_summary,
         trace=trace,
         iteration=iteration,
         prompt=options.get("prompt"),
@@ -117,7 +125,7 @@ async def apply_context_strategy(messages: list[dict[str, Any]], context: Contex
             context=context,
             budget=fallback_budget,
             boundary=boundary,
-            previous_summary=extract_summary(working),
+            previous_summary=resolved_previous_summary,
             trace=trace,
             iteration=iteration,
             prompt=options.get("prompt"),
