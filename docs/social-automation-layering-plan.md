@@ -19,6 +19,10 @@
 一句话判据：**"X 改版了要不要改代码？"** 要 → tool；不要 → skill。
 **"这条结论半年后还成立吗？"** 成立 → memory；不成立 → skill。
 
+第二个关键决定：**`browser` 的契约是 `steps=[...]` 批量，不是"一个 action 一次 LLM 往返"**。
+实测发一条 GM 单 action 要 ~9 次往返，批量只要 1 次；"找 20 个客户并评论"从 ~100+ 次降到 ~5 次。
+详见 §3.1。
+
 现状问题（本次要解决的）：所有知识都在 `workspace/memory/browser_automation.md`，
 而操作逻辑散落在 `.scripts/cdp.js` + 十几个一次性 `x_*.js` / `li_*.js` 里。
 后果有两个：① 每次任务重写一遍脚本；② memory 里的选择器一旦过期，我**看不出它是错的**，
@@ -73,9 +77,10 @@
         └───────────────────┬─────────────────────────┘
                             │ 调用
         ┌───────────────────▼─────────────────────────┐
-        │ tool: browser（单工具多 action）             │  稳定：CDP 原语 + 生命周期 + 限速
-        │  ensure/open/dump/click/type/press/wait/    │
-        │  screenshot/eval/cookies_*/close/status     │
+        │ tool: browser（单工具 + steps 批量）         │  稳定：CDP 原语 + 生命周期 + 限速
+        │  steps=[ensure/open/dump/click/type/assert/  │
+        │         wait/press/screenshot/close]         │
+        │  一次调用跑完一整串，遇错即停                 │
         └───────────────────┬─────────────────────────┘
                             │
         ┌───────────────────▼─────────────────────────┐
@@ -92,42 +97,72 @@
 1. **tool 里不出现任何站点选择器**。`browser` 只认 CSS selector 参数，不知道什么是"发帖按钮"。
 2. **skill 里不出现任何 CDP 细节**。playbook 只说"点 `[data-testid=tweetButtonInline]`"，
    不说怎么发事件。
-3. **写操作必须"先读后写"**：playbook 强制要求写之前 `dump` 校验目标（对方 handle / 原文），
-   这是防"发错人"的唯一可靠手段。
-4. **所有动作落审计日志**，事后可复盘"我到底点了什么"。
+3. **写操作必须"先读后写"**：playbook 强制要求写之前 `assert` 校验目标（对方 handle / 原文），
+   这是防"发错人"的唯一可靠手段。规则写在 skill 里，执行保障在 tool 的 `assert` action。
+4. **一次 LLM 调用 = 一串步骤**：`browser(steps=[...])` 声明式批量，不是"一个 action 一次往返"。
+   实测：发一条 GM 从 ~9 次往返降到 1 次。
+5. **所有动作落审计日志**，事后可复盘"我到底点了什么"。
 
 ---
 
 ## 3. L1：`browser` tool 详细设计
 
-### 3.1 为什么是"单工具多 action"而不是 12 个工具
+### 3.1 为什么是"单工具 + steps 批量"而不是 12 个工具
 
 - 12 个工具会挤占 schema 预算，且每个都要写"何时用我"的描述（`test_registry.py` 里
   `ToolRoutingGuidanceTests` 就在管这件事）。
 - 这些 action 共享同一个会话状态（page_id、限速、超时），拆开就要靠全局变量传递。
 - 单工具 + `action` 枚举，模型侧只需学一个工具。
 
-代价：参数校验要自己写（`action` 与其它字段的联合校验），错误信息要更明确。可接受。
+**但"一次调用只做一个 action"是错的**，这是实测教训：
+
+| 任务 | 单 action 契约 | 手写脚本实测 |
+|---|---|---|
+| 发一条 GM | ~9 次 LLM 往返 | 1 次（`x_post.js` 内部 17 处 CDP 调用点 + 40 次轮询） |
+| 找 20 个客户并评论 | ~100+ 次 | ~5 次 |
+
+所以契约是 **`browser(steps=[...])`**：一次 LLM 调用提交一串声明式步骤，
+tool 内部串行执行、遇错即停、返回每步结果。单 action 退化成 1 元素数组。
+
+代价：参数校验要自己写（`steps` 内每步的 `action` 与其它字段联合校验），
+错误信息要指明"第几步失败"。可接受。
+
+**为什么不是"让模型生成 JS 代码"**：`steps` 是声明式 JSON，没有注入面，
+不需要 `allow_eval`；而生成 JS 会把站点知识藏进字符串，改版时无从下手（见 §3.7）。
 
 ### 3.2 文件与模块
 
 ```
 src/agent_runtime/browser/__init__.py
 src/agent_runtime/browser/session.py      # BrowserSession：进程管理 + CDP 连接 + 限速 + 审计
+src/agent_runtime/browser/steps.py        # 步骤校验 + 串行执行器（run_steps）
 src/agent_runtime/browser/cdp.py          # 极简 CDP 客户端（asyncio + websockets）
 src/agent_runtime/browser/errors.py       # BrowserError + 错误码枚举
 src/agent_runtime/tools/browser.py        # browser_spec() + async handler（薄壳）
 tests/tools/test_browser.py               # 单测（fake transport，不连真 Chrome）
+tests/browser/test_steps.py               # 步骤校验/遇错即停/结果对齐
 tests/browser/test_session.py             # 生命周期/限速/审计单测
 tests/integration/test_browser_live.py    # 真 Chrome 集成测试，SUN_CDP_LIVE=1 才跑
 ```
 
-`tools/browser.py` 只做"参数 → session 方法"的映射，与 `files.py` 是 `Workspace` 薄壳
+`tools/browser.py` 只做"参数 → `run_steps`"的映射，与 `files.py` 是 `Workspace` 薄壳
 同一风格（见 `files.py` 模块 docstring 的自我定位）。
 
 ### 3.3 接口契约
 
-`browser(action, ...)`，`action` 必填。所有 action 都接受可选 `page_id`（缺省用当前活动页）。
+```json
+{"steps": [ {"action": "...", ...}, ... ],
+ "page_id": "optional-default-page",
+ "stop_on_error": true}
+```
+
+- `steps` 必填，1..50 个元素；超过 50 直接 `BAD_ARGS`，防止一次调用跑飞。
+- 顺序执行，**遇错即停**（`stop_on_error` 默认 true）。
+- 返回 `{ok, results:[...], failed_at, elapsed_ms}`；`results[i]` 与 `steps[i]` 一一对应，
+  失败步之后不再执行，`results` 长度 = `failed_at + 1`。
+- 每步可带自己的 `page_id` 覆盖顶层值。
+
+单步 action 一览（`steps[i].action`）：
 
 | action | 主要参数 | 返回 | 说明 |
 |---|---|---|---|
@@ -139,11 +174,32 @@ tests/integration/test_browser_live.py    # 真 Chrome 集成测试，SUN_CDP_LI
 | `type` | `selector, text, submit=false` | `{ok, value_after}` | 聚焦 → `Input.insertText`；`submit` 才按 Enter |
 | `press` | `key, selector?` | `{ok}` | 单键（`Escape` / `Enter` / `Tab`） |
 | `wait` | `selector, timeout_ms=15000` | `{found, elapsed_ms}` | 轮询，不抛异常，返回布尔 |
+| `assert` | `selector, text_equals?, text_contains?, absent?` | `{ok, actual}` | **写前校验专用**，不满足则整串停，见 3.3.2 |
 | `screenshot` | `path?` | `{path}` | 默认落 `.outputs/shot-<ts>.png`，走现有 spill 目录 |
 | `eval` | `expression` | `{value}` | **默认禁用**，需 `allow_eval=true` 配置，见 3.7 |
 | `cookies_export` | `path` | `{count, path}` | `Network.getAllCookies` → JSON（权限 600） |
 | `cookies_import` | `path` | `{count}` | `Network.setCookies`，跨机迁移登录态用 |
 | `close` | `page_id?` | `{closed}` | 无 `page_id` 则关整个浏览器 |
+
+#### 3.3.0 典型调用：发一条 GM（1 次 LLM 往返）
+
+```json
+{"steps": [
+  {"action": "ensure"},
+  {"action": "open", "url": "https://x.com/home"},
+  {"action": "wait", "selector": "[data-testid='tweetTextarea_0']"},
+  {"action": "assert", "selector": "[data-testid='tweetTextarea_0']", "text_equals": ""},
+  {"action": "type", "selector": "[data-testid='tweetTextarea_0']", "text": "GM"},
+  {"action": "assert", "selector": "[data-testid='tweetTextarea_0']", "text_equals": "GM"},
+  {"action": "click", "selector": "[data-testid='tweetButtonInline']"},
+  {"action": "wait", "selector": "[data-testid='toast']", "timeout_ms": 20000},
+  {"action": "dump", "selector": "[data-testid='toast']"}
+]}
+→ {"ok": true, "failed_at": null, "results": [ ... 9 项 ... ]}
+```
+
+注意第 4 步和第 6 步的 `assert`：**写前校验编辑器为空、写后校验内容完全一致**。
+这是把"发错内容"这个不可逆错误挡在点击之前，也是 §2 原则 3 的落地形式。
 
 #### 3.3.1 `dump` 的两种形态（这是"找客户"的关键）
 
@@ -167,6 +223,24 @@ tests/integration/test_browser_live.py    # 真 Chrome 集成测试，SUN_CDP_LI
 
 `@attr` 后缀表示取属性而非文本。这一条把"读 10 个搜索结果"从"塞 30KB HTML 进 context"
 变成"塞 10 行 JSON"，是能不能做规模化的分水岭。
+
+#### 3.3.2 `assert` 为什么必须是独立 action
+
+`click`/`type` 的返回值只能告诉你"动作发出去了"，不能告诉你"目标对不对"。
+社交场景里最贵的错误是**发错人**，而它只能靠"读回来比对"发现。
+
+`assert` 的语义：
+
+| 参数 | 含义 |
+|---|---|
+| `text_equals` | 元素 `innerText.trim()` 完全相等（用于校验编辑器内容） |
+| `text_contains` | 包含子串（用于校验页面出现了对方 handle） |
+| `absent: true` | 元素**不存在**才算通过（用于校验弹窗已关闭、草稿已清空） |
+
+不满足 → 抛 `ASSERT_FAILED`，整串停，`failed_at` 指向该步，`results` 里带 `actual`。
+
+playbook 里强制要求：**任何写操作（`click` 提交类按钮 / `type` 到别人页面）之前
+必须有一条 `assert` 校验目标**。规则写进 skill，执行保障在 tool。
 
 ### 3.4 会话与登录态
 
@@ -199,24 +273,27 @@ chrome --headless=new \
 - **健康检查**：`GET /json/version` 探活；进程存在但端口不通 → 杀掉重启（一次）。
 - **收尾**：`close` 显式关；进程退出时 `atexit` 兜底 kill 自己启动的 pid（只 kill 自己启动的，
   不碰用户手动开的 Chrome）。
-- **超时**：每个 action 默认 30s，`wait` 单独 15s；CDP 单条命令 45s 硬超时。
+- **超时**：单步默认 30s，`wait` 单独 15s；CDP 单条命令 45s 硬超时；
+  **整串 `steps` 总预算 180s**，超时则中断并返回已完成部分（`failed_at` 指向当前步）。
 
 ### 3.6 错误码
 
-`BrowserError(code, message, suggestion)`，`code` 取值：
+`BrowserError(code, message, suggestion, step_index)`，`code` 取值：
 
 | code | 触发 | 模型该做什么 |
 |---|---|---|
 | `BROWSER_UNAVAILABLE` | 起不来 / 端口不通 | 检查 chrome 是否安装、端口占用 |
 | `NAV_FAILED` | 导航超时 / DNS / 证书 | 换 URL 或重试一次 |
 | `SELECTOR_NOT_FOUND` | `click`/`type` 目标不存在 | **先 `dump` 看页面真实结构**，别猜 |
+| `ASSERT_FAILED` | `assert` 不满足 | **停手**，dump 看实际内容，报告给人 |
 | `TIMEOUT` | 命令超时 | 重试一次，仍失败则报告 |
 | `LOGIN_REQUIRED` | 命中登录墙 | 停下来问人，不要尝试登录 |
 | `EVAL_DISABLED` | 未开 `allow_eval` | 用 `dump`/`click` 组合替代 |
-| `BAD_ARGS` | action 与参数不匹配 | 修正参数 |
+| `BAD_ARGS` | action 与参数不匹配 / steps 超长 | 修正参数 |
 
 `SELECTOR_NOT_FOUND` 的 `suggestion` 必须写"先 dump"，这是把"猜选择器"这个最常见的
-失败模式直接掐掉。
+失败模式直接掐掉。`ASSERT_FAILED` 的 `suggestion` 必须写"停手报告"，
+因为它的语义就是"目标不对，继续做会出错"。
 
 ### 3.7 `eval` 的安全定位
 
@@ -224,6 +301,9 @@ chrome --headless=new \
 所以它**不构成新的权限边界**。仍然默认关闭，理由不是安全，而是**可维护性**：
 一旦 playbook 依赖 `eval` 里的复杂 JS，站点改版时改的就是"藏在字符串里的代码"，
 比改 CSS selector 难得多。默认关闭能逼着 playbook 用 selector 表达意图。
+
+`steps` 契约进一步降低了 `eval` 的必要性：批量执行不再需要"写一段 JS 循环"，
+声明式数组就够了。预期 `eval` 只在调试时临时开启。
 
 ### 3.8 依赖决策
 
@@ -241,36 +321,73 @@ Python 侧需要一个 WebSocket 客户端。三个选项：
 ### 3.9 代码骨架
 
 ```python
+# src/agent_runtime/browser/steps.py
+MAX_STEPS = 50
+
+async def run_steps(session: "BrowserSession", steps: list[dict],
+                    *, stop_on_error: bool = True) -> dict:
+    """Execute steps in order; stop at the first failure and report where."""
+    if not 1 <= len(steps) <= MAX_STEPS:
+        raise BrowserError("BAD_ARGS", f"steps must be 1..{MAX_STEPS}, got {len(steps)}")
+    results, failed_at = [], None
+    started = time.monotonic()
+    for i, step in enumerate(steps):
+        try:
+            results.append(await session.dispatch(step))
+        except BrowserError as exc:
+            exc.step_index = i
+            results.append({"ok": False, "error": exc.as_dict()})
+            failed_at = i
+            if stop_on_error:
+                break
+    return {"ok": failed_at is None, "results": results,
+            "failed_at": failed_at,
+            "elapsed_ms": int((time.monotonic() - started) * 1000)}
+```
+
+```python
 # src/agent_runtime/tools/browser.py
 from functools import partial
 from typing import Any
 from agent_runtime.browser.session import BrowserSession
+from agent_runtime.browser.steps import run_steps
 from agent_runtime.tools.spec import ToolSpec
 
-async def browser(action: str, *, session: BrowserSession, **kwargs: Any) -> dict[str, Any]:
-    """Dispatch one browser action; all real work lives in BrowserSession."""
-    return await session.dispatch(action, **kwargs)
+async def browser(steps: list[dict], *, session: BrowserSession,
+                  page_id: str | None = None,
+                  stop_on_error: bool = True) -> dict[str, Any]:
+    """Run a batch of browser steps; all real work lives in BrowserSession."""
+    return await run_steps(session, steps, stop_on_error=stop_on_error)
 
 def browser_spec(session: BrowserSession) -> ToolSpec:
     return ToolSpec(
         "browser",
-        "Drive a real Chrome over CDP: open pages, read their text or structured "
-        "lists, click, type, screenshot. Site-specific selectors and step order "
-        "live in the platform playbook, not here. Best suited for reading a page "
-        "into structured rows and for replaying a known click/type sequence.",
+        "Drive a real Chrome over CDP by submitting a batch of declarative steps "
+        "(open/dump/click/type/assert/wait/screenshot). Steps run in order and stop "
+        "at the first failure, so one call can complete a whole flow. Site-specific "
+        "selectors and step order live in the platform playbook, not here. Best "
+        "suited for reading a page into structured rows and for replaying a known "
+        "click/type sequence.",
         {"type": "object",
          "properties": {
-             "action": {"type": "string", "enum": [...]},
-             "selector": {"type": "string"},
-             "text": {"type": "string"},
-             "url": {"type": "string"},
-             "items": {"type": "object"},
+             "steps": {"type": "array", "minItems": 1, "maxItems": 50,
+                       "items": {"type": "object",
+                                 "properties": {
+                                     "action": {"type": "string", "enum": [...]},
+                                     "selector": {"type": "string"},
+                                     "text": {"type": "string"},
+                                     "url": {"type": "string"},
+                                     "items": {"type": "object"},
+                                     "page_id": {"type": "string"},
+                                     "timeout_ms": {"type": "integer", "default": 30000},
+                                     "headed": {"type": "boolean", "default": False},
+                                     "max_chars": {"type": "integer", "default": 8000},
+                                 },
+                                 "required": ["action"]}},
              "page_id": {"type": "string"},
-             "timeout_ms": {"type": "integer", "default": 30000},
-             "headed": {"type": "boolean", "default": False},
-             "max_chars": {"type": "integer", "default": 8000},
+             "stop_on_error": {"type": "boolean", "default": True},
          },
-         "required": ["action"]},
+         "required": ["steps"]},
         partial(browser, session=session))
 ```
 
@@ -282,11 +399,12 @@ def browser_spec(session: BrowserSession) -> ToolSpec:
 - **限速**：`BrowserSession` 维护 `per-domain last_action_ts`，同一域名两次写操作
   （`click`/`type`/`press`）最小间隔默认 3s，可配。超限则 `await` 补足，不报错。
   理由：这是**策略**，不是知识；放 skill 里我可能"忘了遵守"，放 tool 里是硬约束。
+  **批量 `steps` 不绕过限速**——限速在 `dispatch` 内部，逐步骤生效。
 - **审计**：每个 action 追加一行到 `workspace/social/actions.jsonl`：
-  `{ts, action, selector, url, page_id, ok, error_code}`。**不记录 `text` 内容**
+  `{ts, action, selector, url, page_id, ok, error_code, step_index}`。**不记录 `text` 内容**
   （可能含私信内容），只记长度。事后可复盘"我点了什么、点在哪一页"。
-
----
+- **批量调用的额外收益**：一次 `steps` 调用在审计里共享同一个 `batch_id`，
+  复盘时能看出"这 9 步是同一次决策"。
 
 ## 4. L2：playbook skill 详细设计
 
@@ -423,8 +541,8 @@ workspace/social/actions.jsonl       # 审计：browser tool 自动写
 
 | 里程碑 | 内容 | 验收标准 | 估时 |
 |---|---|---|---|
-| **M0** | `browser` tool 骨架：`ensure/open/dump/close/status` + 单测 | `test_browser.py` 绿；`browser status` 能起停 Chrome | 0.5d |
-| **M1** | 写原语：`click/type/press/wait/screenshot` + 限速 + 审计 | 用 tool 复现"发 GM → 校验 → 删除"全流程 | 0.5d |
+| **M0** | `browser` tool 骨架：`steps` 执行器 + `ensure/open/dump/close/status` + 单测 | `test_browser.py` / `test_steps.py` 绿；`browser status` 能起停 Chrome；一次 `steps` 调用跑完 3 步 | 0.5d |
+| **M1** | 写原语：`click/type/press/wait/assert/screenshot` + 限速 + 审计 + `batch_id` | 用**一次** `steps` 调用复现"发 GM → `assert` 校验 → 删除"全流程 | 0.5d |
 | **M2** | 两个 playbook + `social-v1.yaml` + `check_playbooks.py` | `skills.loaded` 事件出现两个 playbook；自检全绿 | 0.5d |
 | **M3** | `social_log` + 数据文件 | 同一 handle 二次 `seen` 返回 true | 0.5d |
 | **M4** | **只读任务先跑**：X/LinkedIn 各搜 20 个目标 → 落盘 → 打分 | 产出 `contacts.jsonl` 40 行，零写操作 | 0.5d |
@@ -439,6 +557,8 @@ workspace/social/actions.jsonl       # 审计：browser tool 自动写
 - **单测不连真 Chrome**：`BrowserSession` 依赖注入 `transport`（有 `send(method, params)`
   和 `evaluate(expr)` 两个方法）。测试用 `FakeTransport` 返回预置响应，覆盖：
   action 路由、参数联合校验、错误码映射、限速等待、审计写入、`dump items` 抽取逻辑。
+- **`steps` 执行器单测**（`tests/browser/test_steps.py`）：`1..50` 边界、`results` 与 `steps` 一一对齐、
+  遇错即停时 `failed_at` 正确且后续步骤未执行、`stop_on_error=false` 时继续跑、每步 `page_id` 覆盖生效。
 - **集成测试**：`tests/integration/test_browser_live.py`，`SUN_CDP_LIVE=1` 才跑，
   默认 skip。内容：起 Chrome → 打开 `about:blank` → `dump` → `close`。
 - **回归脚本**：`scripts/social_smoke.py` —— 发一条 `GM` → 校验出现 → 删除 → 校验消失。
@@ -460,6 +580,8 @@ workspace/social/actions.jsonl       # 审计：browser tool 自动写
    详见后续独立文档。
 5. **不做的事**：不破解验证码、不做批量关注/群发、不伪造指纹。
 6. **`eval` 默认关闭**（理由见 §3.7）。
+7. **`steps` 批量不等于"放手"**：一次调用最多 50 步，且**写操作步骤必须自带前置 `assert`**。批量只省往返，
+   不降低校验要求；`stop_on_error` 默认 true，任何一步失败整串停，绝不"跳过继续"。
 
 ---
 
@@ -470,3 +592,6 @@ workspace/social/actions.jsonl       # 审计：browser tool 自动写
 3. **数据层**：`jsonl` 够用，还是直接上 sqlite（为后续打分/排序）？
 4. **写操作授权粒度**：每次写都要你确认，还是"当轮任务内授权、跨轮失效"？
    （我倾向后者：一轮任务里说"去评论这 5 个人"就授权这 5 次，下一轮重新授权。）
+5. **`steps` 上限**：50 步够不够？（"找 20 个客户并逐个评论"可能超；备选是允许模型分 2–3 次调用，
+   或把"对列表逐项执行"做成 `steps` 里的 `foreach` 语法。我倾向先卡 50，实测后再定。）
+6. **`assert` 失败后的行为**：整串停（当前设计）还是"跳过该步继续"？我倾向整串停——写错人的代价远大于重跑。

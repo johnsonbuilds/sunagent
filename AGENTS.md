@@ -2,22 +2,17 @@
 
 This repository is maintained by both humans and AI coding agents.
 
-All coding agents Should follow below rules and principles.
+All coding agents Should follow below principles.
 
-## 1. Rules
-
-must comply with:
-
-- do not modify exist harnesses yaml, always derive new version if need.
-- Prefer self-documenting code. Write comments only when the “why” cannot be clearly expressed by the code itself. Keep them short and accurate.
-
-## 2. Coding Principles
+## 1. Coding Principles
 
 - Prioritize modular design with high cohesion and low coupling, ensure scalability and extensibility for future growth, and maintain high maintainability with strong observability
 - Avoid over-engineering. Choose the simplest design that works, and only introduce abstraction when there is a clear, recurring need.
 - If a parameter is always equal to an attribute of an owner the function already depends on, keep only the owner and never pass that attribute as well.
+- Prefer self-documenting code. Write comments only when the “why” cannot be clearly expressed by the code itself. Keep them short and accurate.
+- harnesses YAML file: Unless the user explicitly asks to modify the current file, always derive a new version by default.
 
-## 3. Tool Feedback Principle
+## 2. Tool Feedback Principle
 
 Tool error messages state only verified facts, never guess intent.
 
@@ -29,7 +24,7 @@ Tool error messages state only verified facts, never guess intent.
   find_files`, `use edit_file instead`). Routing decisions belong to
   the model and the harness prompt, not to error text.
 
-## 4. Channels
+## 3. Channels
 
 - The **Web UI** (`webui/`) is the primary, actively maintained channel:
   product features, session persistence, and UX work land there first.
