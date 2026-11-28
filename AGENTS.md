@@ -15,6 +15,7 @@ must comply with:
 
 - Prioritize modular design with high cohesion and low coupling, ensure scalability and extensibility for future growth, and maintain high maintainability with strong observability
 - Avoid over-engineering. Choose the simplest design that works, and only introduce abstraction when there is a clear, recurring need.
+- If a parameter is always equal to an attribute of an owner the function already depends on, keep only the owner and never pass that attribute as well.
 
 ## 3. Tool Feedback Principle
 

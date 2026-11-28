@@ -280,7 +280,7 @@ uv run pytest tests/webui -q       # evaluation store, API, and index budgets
 
 ## Contributing
 
-This repository is maintained by humans and AI coding agents. Coding rules and principles live in [`agent.md`](agent.md).
+This repository is maintained by humans and AI coding agents. Coding rules and principles live in [`AGENTS.md`](AGENTS.md).
 
 ## License
 
